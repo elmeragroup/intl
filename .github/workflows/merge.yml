@@ -11,8 +11,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Every job runs dependency code on every PR and push, so the token is read-only. A future release
-# or docs deploy job declares its own permissions, which replace this default for that job.
+# Every job runs dependency code on every PR and push, so the token is read-only. The release jobs
+# declare their own permissions, which replace this default for that job.
 permissions:
   contents: read
 
@@ -104,3 +104,22 @@ jobs:
             apps/*/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
+
+  # Canary or stable publication of the checked commit (CONTRIBUTING.md#releases). npm's trusted
+  # publishing validates the calling workflow's filename for a workflow_call, so the npm entries name
+  # merge.yml. The called workflow cannot hold more than this grant.
+  release:
+    needs: [checks, e2e]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/publish-release.yml
+
+  version:
+    needs: [checks, e2e]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/version-packages.yml

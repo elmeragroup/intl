@@ -2,12 +2,16 @@
   "$schema": "https://unpkg.com/@changesets/config@4.0.0/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [["@elmeragroup/intl", "@elmeragroup/intl-tools"]],
   "linked": [],
   "access": "public",
   "baseBranch": "origin/main",
   "updateInternalDependencies": "patch",
-  "ignore": [],
+  "ignore": ["@elmeragroup/intl-e2e"],
   "privatePackages": false,
-  "format": "oxfmt"
+  "format": "oxfmt",
+  "snapshot": {
+    "useCalculatedVersion": true,
+    "prereleaseTemplate": "{tag}.{datetime}"
+  }
 }

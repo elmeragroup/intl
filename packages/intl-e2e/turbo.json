@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Builds each fixture on the linked packages, then on the packed ones (scripts/e2e.ts), running the Playwright
+    // gates after each.
+    // Uncached: the builds are what is under test. The script sets INTL_FIXTURE_RUNTIME per build and server.
+    "e2e": {
+      "cache": false,
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["PLAYWRIGHT_BROWSERS_PATH", "CI", "INTL_FIXTURE_RUNTIME", "INTL_FIXTURE_SERVER"]
+    }
+  }
+}

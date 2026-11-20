@@ -1,0 +1,36 @@
+{
+  "name": "@elmeragroup/intl-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Next.js and TanStack Start fixture apps for @elmeragroup/intl, built on the workspace-linked packages and on the packed ones, with the Playwright gates over each. No app or package depends on it, so its framework devDependencies stay out of the apps' pruned installs.",
+  "type": "module",
+  "sideEffects": true,
+  "scripts": {
+    "clean": "git clean -xdf .turbo node_modules test-results playwright-report fixtures/*/node_modules fixtures/*/.next* fixtures/*/.output* fixtures/*/.nitro fixtures/*/.tanstack",
+    "ci:checks": "pnpm type-check",
+    "e2e": "node scripts/e2e.ts",
+    "type-check": "tsrs --noEmit -p fixtures/next && tsrs --noEmit -p fixtures/start && tsrs --noEmit"
+  },
+  "devDependencies": {
+    "@elmeragroup/intl": "workspace:*",
+    "@elmeragroup/intl-tools": "workspace:*",
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@mdx-js/loader": "catalog:",
+    "@next/mdx": "catalog:",
+    "@playwright/test": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:react19",
+    "@types/react-dom": "catalog:react19",
+    "@vitejs/plugin-react": "catalog:",
+    "intl-messageformat": "catalog:",
+    "next": "catalog:",
+    "nitro": "catalog:",
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

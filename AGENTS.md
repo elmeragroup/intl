@@ -18,7 +18,9 @@ behavior.
 - `apps/*` holds deployable apps, such as a future docs site shipped as a container image
   (see [Docs site](#docs-site)). Private.
 - `tooling/typescript` contains the shared TypeScript configuration.
-- `scripts` contains workspace scripts, such as the PR title check.
+- `scripts` contains workspace scripts: the PR title check and the release script
+  (`scripts/release.ts`, run by `.github/workflows/publish-release.yml` and
+  `version-packages.yml`, and by maintainers for `promote`).
 
 Keep the dependency direction `intl-e2e`, `apps/*` → `intl-tools` → `intl`. The runtime never
 imports the tools; the tools reach the runtime's serializer, catalog codec and formatter through its
@@ -36,7 +38,10 @@ The workspace type-checks with `tsrs`, a Rust port of the TypeScript 7 compiler 
 TypeScript 7.1. `typescript` stays installed for tsdown and the frameworks' own type generation.
 Type-aware Oxlint runs on tsrs too: the lint scripts set
 `OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint`, so run Oxlint through `pnpm lint` or with that
-variable set. Development needs macOS or Linux.
+variable set. Type-aware rules read both packages' `dist`, and the `elmera-intl` plugin (the
+`elmera-intl/extractable` rule, loaded from `packages/intl-tools/src/oxlint.ts` and applied to the e2e
+fixtures) imports the runtime's `dist`, so `pnpm lint` builds both packages first; `pnpm lint:oxlint`
+runs Oxlint alone. Development needs macOS or Linux.
 
 Run commands from the repository root unless stated otherwise.
 
@@ -119,9 +124,16 @@ Each kind of test lives with its owner:
 
 ## Public behavior and releases
 
-The two public packages version together, as one `fixed` group in `.changeset/config.json`. They stay
-`private` until a release workflow publishes them; that workflow and npm's trusted-publisher setup
-follow `@elmeragroup/internal`'s. Every runtime export
+The two public packages version together, as one `fixed` group in `.changeset/config.json`, and
+publish to npm from `main` through trusted publishing: canaries of pending changesets, and stable
+versions through the Version Packages PR ([CONTRIBUTING.md](CONTRIBUTING.md#releases)). Each ships
+its `LICENSE` and a `NOTICE` with the licenses of the third-party code in its `dist`, declarations
+included: the runtime's covers next-intl's relative-time rules and intl-messageformat and its
+`@formatjs` dependencies bundled into the formatter; the tools' covers the `@oxlint/plugins`,
+`type-fest` and `@types/json-schema` declarations inlined into `dist/oxlint.d.ts`. Code copied or
+bundled from another project gets an entry there (check the `//#region` paths in `dist` after a
+dependency or bundling change), or beside the files when only tests carry it
+(`test/conformance/LICENSE-next-intl`). Every runtime export
 is listed in ADR 0002's public-surface table and checked against the built package; change both
 together. `/internal/*` exists for the tools and carries no semver promise. Keep module
 initialization side-effect free (`"sideEffects": false`), so consumers can drop unused exports.

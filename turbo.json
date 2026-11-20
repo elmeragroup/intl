@@ -4,8 +4,12 @@
   "ui": "stream",
   "globalEnv": ["NODE_ENV"],
   "tasks": {
-    "//#lint": {
-      "dependsOn": ["^build"]
+    // Type-aware rules read both packages' dist, and the elmera-intl plugin imports the runtime's dist; the root
+    // package depends on neither, so ^build would not order them. Uncached: Oxlint reads every package's files
+    // (the e2e fixtures among them), and turbo documents a task's default inputs only as its package's own files.
+    "//#lint:oxlint": {
+      "cache": false,
+      "dependsOn": ["@elmeragroup/intl#build", "@elmeragroup/intl-tools#build"]
     },
     "//#type-check:scripts": {
       "inputs": ["scripts/**", "tooling/typescript/**"]
@@ -50,7 +54,7 @@
       "cache": false
     },
     "ci:checks": {
-      "dependsOn": ["^build", "//#lint", "//#type-check:scripts"]
+      "dependsOn": ["^build", "//#lint:oxlint", "//#type-check:scripts"]
     }
   }
 }

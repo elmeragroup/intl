@@ -1,0 +1,25 @@
+{
+  "extends": "@elmeragroup/typescript-config/react-library.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    // Tests import the package by name, as an app would; map it to source so no build is needed first.
+    "paths": {
+      "@elmeragroup/intl/core": ["./src/core.ts"],
+      "@elmeragroup/intl/internal/message": ["./src/message.ts"],
+      "@elmeragroup/intl/internal/icu": ["./src/icu.ts"],
+      "@elmeragroup/intl/internal/formatter": ["./src/formatter.ts"],
+      "@elmeragroup/intl/internal/catalog": ["./src/catalog.ts"],
+      "@elmeragroup/intl/react": ["./src/react.tsx"],
+      "@elmeragroup/intl/internal/react-client": ["./src/react.tsx"],
+      "@elmeragroup/intl/server": ["./src/server.ts"],
+      // The tests' catalogs come from intl-tools' compiler (vitest.config.ts aliases it the same way).
+      "#compile": ["../intl-tools/src/compile.ts"]
+    }
+  },
+  "include": ["src", "test", "bench", "vitest.config.ts", "tsdown.config.ts"],
+  "exclude": ["dist", "node_modules"]
+}

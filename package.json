@@ -11,14 +11,16 @@
     "dev": "turbo watch dev --continue",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "lint": "OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint . --deny-warnings --report-unused-disable-directives-severity=error",
-    "lint:fix": "OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --fix .",
+    "lint": "turbo run build --filter=./packages/intl --filter=./packages/intl-tools --output-logs=errors-only && pnpm lint:oxlint",
+    "lint:fix": "pnpm lint --fix",
+    "lint:oxlint": "OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint . --deny-warnings --report-unused-disable-directives-severity=error",
     "tcw": "turbo run tcw",
     "test": "turbo run test:run",
     "test:watch": "turbo run test",
     "test:e2e": "turbo run e2e",
     "type-check": "turbo run type-check",
-    "type-check:scripts": "tsrs --noEmit -p scripts/tsconfig.json"
+    "type-check:scripts": "tsrs --noEmit -p scripts/tsconfig.json",
+    "release:version": "changeset version && pnpm install --lockfile-only"
   },
   "devDependencies": {
     "@changesets/cli": "catalog:",

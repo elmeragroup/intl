@@ -1,0 +1,115 @@
+{
+  "name": "@elmeragroup/intl-tools",
+  "version": "0.0.0",
+  "description": "Build-time tools for @elmeragroup/intl: the deny-by-default extractor, the elmera-intl CLI, PO catalogs and their compiler and loaders, lint and the Vitest catalog check.",
+  "keywords": [
+    "i18n",
+    "intl",
+    "extraction",
+    "po",
+    "gettext",
+    "vite-plugin",
+    "next",
+    "oxlint"
+  ],
+  "homepage": "https://github.com/elmeragroup/intl/tree/main/packages/intl-tools#readme",
+  "bugs": {
+    "url": "https://github.com/elmeragroup/intl/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elmeragroup/intl.git",
+    "directory": "packages/intl-tools"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "bin",
+    "dist",
+    "po.d.ts",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "bin": {
+    "elmera-intl": "./bin/elmera-intl.js"
+  },
+  "exports": {
+    "./oxlint": {
+      "types": "./dist/oxlint.d.ts",
+      "import": "./dist/oxlint.js"
+    },
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "import": "./dist/vitest.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "default": "./dist/next.js"
+    },
+    "./compile": {
+      "types": "./dist/compile.d.ts",
+      "import": "./dist/compile.js"
+    },
+    "./po": {
+      "types": "./po.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "dev": "tsdown --watch --no-clean",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --watch",
+    "type-check": "tsrs --noEmit"
+  },
+  "dependencies": {
+    "@elmeragroup/intl": "workspace:*",
+    "@jridgewell/trace-mapping": "catalog:",
+    "intl-messageformat": "catalog:",
+    "oxc-parser": "catalog:",
+    "oxc-transform": "catalog:",
+    "po-parser": "catalog:"
+  },
+  "peerDependencies": {
+    "next": ">=16.4.0",
+    "vite": ">=6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@oxlint/plugins": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:react19",
+    "@types/react-dom": "catalog:react19",
+    "next": "catalog:",
+    "oxlint": "catalog:",
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19",
+    "tsdown": "catalog:",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": "^24.14.0 || >=25.5.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

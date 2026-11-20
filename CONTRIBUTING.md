@@ -118,6 +118,184 @@ additive, a rename or a removal. `/internal/*` subpaths carry no semver promise.
 
 Edit an existing changeset only to correct what it says shipped, never to move a gate.
 
+<a id="releases"></a>
+
+## Releases
+
+A push to `main` runs **Merge**. When its `checks` and `e2e` jobs pass, it calls two workflows for
+the checked commit. Pull requests never publish.
+
+- **Publish Release** (`publish-release.yml`, in the `npm` environment) runs `scripts/release.ts`,
+  which picks the channel from the checked commit, in this order:
+  - **stable**: the commit raised the packages' version over `HEAD^` (semver order). Only the merged
+    Version Packages PR does that. The job publishes that version and creates the GitHub release
+    `v<version>` at the commit, with links to both packages' changelogs at that tag. It refuses, and
+    fails the job, in two cases:
+    - **Changesets still plan a bump.** The release PR was merged while behind `main`, so its version
+      can be too low, such as a patch that contains a breaking change. Nothing is published. The
+      Version Packages job on the same push regenerates the release PR from the pending changesets;
+      merge that PR to release.
+    - **The commit lowers the version**, as a revert of a version commit does. npm never takes a
+      version twice, and the revert also restores the released changesets, so the next release
+      would plan the same version again. To undo a release, revert its code in an ordinary PR with
+      a changeset, never the version commit. After a reverted version commit has landed, release
+      forward in one commit: revert the revert (it restores the released version and drops the
+      restored changesets) and add a changeset for the fix. The stable job refuses that commit as
+      a stale release, and the Version Packages PR it regenerates releases the next version.
+      Until then, merges publish canaries planned from the lowered version. This includes a
+      revert of the first version commit back to `0.0.0`: only the commit that adds the packages,
+      whose parent has neither manifest, skips the comparison.
+  - **canary**: the pending changesets bump the fixed group, and the commit is still `main`'s head
+    (`git ls-remote`). `changeset version --snapshot canary` writes `x.y.z-canary.<UTC datetime>`
+    into the job's checkout (`x.y.z` is the planned version; nothing is committed), and the script
+    checks that both packages carry that one canary version. A run for a commit that is no longer
+    the head skips with a log line, so a delayed run or a rerun cannot move `canary` back to older
+    code; a failed lookup fails the job. A changeset of only `none` entries bumps nothing.
+  - **none**: every other commit, such as a docs change after a stable release.
+- **Version Packages** (`version-packages.yml`) opens or updates the `changeset-release/main` PR with
+  the next stable version, the changelogs and the lockfile. Only the run for `main`'s current head
+  updates it. When no changeset bumps a version any more (the last pending change was reverted), it
+  closes that PR with a comment instead, because the action itself leaves it open. Review the PR and
+  squash merge it to release. When `main` moves, wait for this job to regenerate the PR rather than
+  using "Update branch": merging `main` into it brings in changesets the PR's version did not count,
+  and the stable job then refuses it.
+
+**Approve the Version Packages PR's checks.** The PR is created and updated with `GITHUB_TOKEN`, so
+GitHub creates its `pull_request` runs (**Merge** and **PR title**) in an approval-required state. A
+maintainer with write access selects "Approve workflows to run" on the PR after each update. A
+`workflow_dispatch` run would not help: its checks do not appear on the PR and do not satisfy
+required checks
+([GitHub docs](https://docs.github.com/en/actions/concepts/security/github_token)).
+
+Both channels upload both packages under the staging dist-tag `pending` first (`@elmeragroup/intl`
+before `@elmeragroup/intl-tools`, which pins its exact version), then move `canary` or `latest` to
+both with `npm dist-tag add`. A channel tag therefore never points at half a pair. `latest` only
+moves forward: a stable run whose version is not newer than npm's current `latest` leaves it, and a
+stable always displaces a prerelease. `canary` relies on the head check instead, because a canary's
+order is its datetime: after a changeset is reverted, the next canary can plan a lower version and
+still be the newest code. npm gives `latest` to a package's first upload whatever its `--tag`
+([npm/cli#8490](https://github.com/npm/cli/issues/8490)), so a canary job fails with
+`canary-took-latest` if its canary took `latest`; see [Repository setup](#repository-setup). `pnpm publish` and
+`npm dist-tag` authenticate through npm trusted publishing (the job's OIDC token, no stored npm
+token), and `PNPM_CONFIG_PROVENANCE=true` makes every upload carry provenance or fail.
+
+**Recovery.**
+
+- **A stable run failed.** Rerun it from its Actions page. A rerun keeps the commit, so it picks
+  `stable` again. `changeset publish` skips a version npm already has, and the promotion and the
+  GitHub release are repeatable, so the rerun finishes what is missing. Rerunning an older stable run
+  cannot move `latest` back.
+- **A canary run failed.** A rerun publishes only while its commit is still `main`'s head, and then
+  under a new datetime. Once `main` has moved, a canary rerun skips, so it cannot repair anything; the
+  next merge with a pending bump publishes the next canary. A canary version left under `pending` by a
+  failed run stays on npm, unused and untagged by any channel.
+- **The two packages' channel tags are split**, because a promotion failed after moving one of them.
+  `npm dist-tag add` overwrites whatever CI wrote meanwhile, so make the repair exclusive with CI:
+  1. `gh workflow disable merge.yml --repo elmeragroup/intl`. Disabling stops new runs but does not
+     cancel runs already queued or in progress
+     ([disable and enable workflows](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)).
+  2. Wait until `gh run list --repo elmeragroup/intl --all --workflow merge.yml --branch main`
+     shows no queued or in-progress run (`--all` includes the disabled workflow).
+  3. From a session logged in to npm and to `gh`, with publish rights on both packages, run
+     `node scripts/release.ts promote <version> <canary|latest>`. It refuses while a Merge run on
+     `main` has not completed, checks that both packages have `<version>` on npm, reads both tags
+     and decides for the pair before writing either. A tag moves only forward (`canary` by snapshot
+     datetime, `latest` by semver), and a tag already at `<version>` stays. If the tags differ and
+     one is ahead of `<version>`, it refuses and names the version that aligns both, when both
+     packages have it. npm may prompt for a one-time password.
+  4. `gh workflow enable merge.yml --repo elmeragroup/intl`. Never merge, or bypass branch
+     protection, while it is disabled: the required checks cannot report, so PRs cannot merge
+     ([step 3](#repository-setup)). A push that landed anyway gets no run, and dispatching
+     `merge.yml` does not replace it, because the release jobs run only on `push`. A canary is then
+     skipped until the next merge; a Version Packages commit would never get its stable run.
+- **The GitHub release cannot be created.** If the release step fails and `main` then changes a
+  workflow file, every rerun fails. GitHub requires workflow-write authorization to create a
+  release whose target commit adds or modifies files under `.github/workflows/` relative to the
+  default branch
+  ([Create a release](https://docs.github.com/en/rest/releases/releases#create-a-release)), and the
+  job's `GITHUB_TOKEN` has no `workflows` permission
+  ([`permissions`](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions)).
+  When `gh release create` fails, the job prints the exact commands with the same tag, commit and
+  notes. A maintainer with write access to workflows runs them:
+  `gh api repos/elmeragroup/intl/git/refs -f ref=refs/tags/v<version> -f sha=<built commit> && gh release create v<version> --verify-tag --title v<version> --notes <notes> --repo elmeragroup/intl`.
+  GitHub attaches a release to an existing tag and ignores `--target`, so the tag is created first,
+  which fails if it exists, and `--verify-tag` attaches the release only to that tag. After every
+  create, and for a release that already exists, the job checks that the tag marks the built
+  commit, and fails otherwise.
+- **A draft release, or a tag at another commit.** If a draft release `v<version>` exists, or the tag
+  `v<version>` points at a commit other than the built one, the stable job fails rather than reporting
+  success. Check which commit the tag should mark, publish or delete the draft, delete or move the
+  wrong tag, then rerun.
+
+Compared with `@elmeragroup/internal`'s release, this one leaves out recorded release archives,
+retries from a recorded archive, source-commit metadata and a canary for every commit. Internal needs
+the archives to republish exactly what a run verified; here a rerun rebuilds from the checked commit,
+which picks the same channel.
+
+<a id="repository-setup"></a>
+
+### Repository setup
+
+Done once by an owner. No npm token is stored anywhere.
+
+1. Create the GitHub environment `npm`, with a deployment branch rule that allows only `main`.
+2. Allow GitHub Actions to create pull requests (Settings, Actions, General) for the Version Packages
+   PR.
+3. In `main`'s branch protection (or ruleset), require status checks to pass (`checks`, `e2e` and
+   the PR title check) and check **Require branches to be up to date before merging**. Then "the
+   branch must be up to date with the base branch before merging", and without required status
+   checks "collaborators can merge the branch at any time, regardless of whether it is up to date"
+   ([about protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)).
+   A Version Packages PR made stale by a new commit on `main` cannot merge until the Version Packages
+   job regenerates it from `main` (the pinned `changesets/action` resets `changeset-release/main` to
+   the pushed commit and reruns `pnpm release:version`). The stable job's refusal stays as the backstop.
+4. **Create both package names from a maintainer session.** npm can add a trusted publisher only to
+   a package that exists ([`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust): "Package
+   must exist"), and staged publishing can create a new package from a local session
+   ([changelog](https://github.blog/changelog/2026-10-02-npm-staged-publishing-now-supports-creating-new-packages/)).
+   Logged in to npm (npm 11.15.0 or later), run `pnpm build`, then in `packages/intl` and in
+   `packages/intl-tools` run `pnpm pack` and `npm stage publish <tarball>` (`npm stage publish
+   [<package-spec>]` "has parity with `npm publish`", which takes a tarball; the manifest's
+   `publishConfig.access` makes it public). npm creates the name with a public placeholder version
+   `0.0.0-stage`; the staged `0.0.0` stays private until a maintainer approves it
+   ([staged publishing](https://docs.npmjs.com/staged-publishing)). Leave it staged for now: npm's
+   docs say a reject "removes the selected staged versions without publishing them" but not whether
+   the placeholder, and with it the package, survives.
+
+   Then run `npm view @elmeragroup/intl dist-tags` and the same for `@elmeragroup/intl-tools`. npm
+   gives `latest` to a package's first upload whatever its `--tag`, and `latest` cannot be deleted
+   ([npm/cli#8490](https://github.com/npm/cli/issues/8490);
+   [`npm dist-tag`](https://docs.npmjs.com/cli/v11/commands/npm-dist-tag): "Publishing a package sets
+   the latest tag to the published version unless the --tag option is used"). npm's docs do not say
+   whether the placeholder takes it. If both print `latest: 0.0.0-stage`, the names are seeded and
+   the first canary cannot take `latest`. If not, the first canary takes `latest` on its package's
+   first upload. The canary job then fails once with `canary-took-latest` after publishing and tagging
+   both packages; plain installs get that canary until the first stable release, which always
+   displaces a prerelease `latest`. No action is needed beyond releasing the first stable.
+
+5. On npmjs.com, add a trusted publisher to `@elmeragroup/intl` and to `@elmeragroup/intl-tools`:
+   repository `elmeragroup/intl`, workflow `merge.yml`, environment `npm`, with **Allow npm publish**
+   and **Allow npm dist-tag** checked (dist-tag is off by default;
+   [trusted publishers](https://docs.npmjs.com/trusted-publishers)). For a `workflow_call`, npm
+   validates the calling workflow's filename, so the entry names `merge.yml`, not
+   `publish-release.yml`. An entry that has not completed a publish within 2 days of its creation
+   expires; delete it and create a new one, so add each entry shortly before the merge that publishes.
+6. Set each package's publishing access to "Require two-factor authentication and disallow bypass
+   2fa tokens", which stops every npm token from publishing and leaves trusted publishing working.
+7. Merge the first changeset. Its canary is the first OIDC publish.
+8. Reject both staged `0.0.0` versions (`npm stage reject <stage-id>`, with 2FA; `npm stage list`
+   shows the ids). The packages now hold real versions, so the reject cannot remove them.
+
+If npm refuses to create a name through staging, the fallback is a short-lived granular access token:
+store it as an `npm` **environment** secret (not a repository secret), give it "Bypass two-factor
+authentication" so CI can publish with it, pass it to the publish step as `NODE_AUTH_TOKEN` for the
+first run only, then revoke the token on npmjs.com (deleting the GitHub secret does not revoke it)
+and continue from step 5 (skip step 8). On this path the first canary is each package's first upload,
+so it takes `latest` and the job fails with `canary-took-latest`, as described in step 4.
+
+Build and publish share a job, so dependency code run by the build can request the job's OIDC token.
+Closing that gap needs a publish job that only publishes archives built in another job.
+
 ## Merging and closing
 
 Before merging, a code owner checks the problem, where the change lives, the scope and every

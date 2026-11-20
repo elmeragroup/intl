@@ -1,0 +1,142 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: no\n"
+"X-Elmera-Serializer: 1\n"
+
+#: components/corpus.tsx
+msgid "100 kr"
+msgstr "100 kroner"
+
+#: app/actions.ts
+msgid "Action result"
+msgstr "Handlingsresultat"
+
+#: components/unused.tsx
+msgid "Catalog only sentinel"
+msgstr "KATALOGVAKT-7Q2"
+
+#: components/corpus.tsx
+msgid "Copyright © Elmera — 2026…"
+msgstr "Opphavsrett © Elmera — 2026…"
+
+#: components/messages.ts
+msgid "Declared message"
+msgstr "Deklarert melding"
+
+#: components/corpus.tsx
+msgid "Delete ''{name}'?"
+msgstr "Slett ''{name}'?"
+
+#: components/corpus.tsx
+msgid "Don't lose your cart"
+msgstr "Ikke mist handlekurven"
+
+#: app/(main)/page.tsx
+#: components/client-box.tsx
+msgid "Due {d, date, short}"
+msgstr "Forfaller {d, date, short}"
+
+#: components/unused.tsx
+msgid "English catalog sentinel ENVAKT-4X8 {name}"
+msgstr "Engelsk katalogvakt {name}"
+
+#: components/forms/receiver-forms.ts
+msgid "Form computed"
+msgstr "Beregnet"
+
+#: components/forms/receiver-forms.ts
+msgid "Form dot"
+msgstr "Punktum"
+
+#: components/forms/receiver-forms.ts
+msgid "Form optional"
+msgstr "Valgfri"
+
+#: components/forms/receiver-forms.ts
+msgid "Form paren"
+msgstr "Parentes"
+
+#: components/corpus.tsx
+msgid "Got {count, plural, one {# user's '{'name'}'} other {# users' '<'b'>{'x'}<'/b'>'}}"
+msgstr "Fikk {count, plural, one {# brukers '{'name'}'} other {# brukeres '<'b'>{'x'}<'/b'>'}}"
+
+#: components/client-box.tsx
+msgid "Hello from a call"
+msgstr "Hei fra et kall"
+
+#: components/client-box.tsx
+#: components/intl-only.tsx
+msgid "Hello from an element"
+msgstr "Hei fra et element"
+
+#: app/(main)/page.tsx
+msgid "Hello from the server"
+msgstr "Hei fra serveren"
+
+#. <x0> = <b>
+#: components/corpus.tsx
+msgid "Hi <x0>dear {name}</x0>!"
+msgstr "Hei <x0>kjære {name}</x0>!"
+
+#: components/corpus.tsx
+msgid "Item ''#1' or a''|b"
+msgstr "Vare ''#1' eller a''|b"
+
+#: components/locale-switcher.tsx
+msgid "Language"
+msgstr "Språk"
+
+#. <x0> = <br>
+#: components/corpus.tsx
+msgid "Line one<x0></x0>line two"
+msgstr "Linje en<x0></x0>linje to"
+
+#: components/corpus.tsx
+msgid "Literal '{}' braces"
+msgstr "Bokstavelige '{}' klammer"
+
+#: components/corpus.tsx
+msgid "Multi line with spaces"
+msgstr "Flere linjer med mellomrom"
+
+#: components/corpus.tsx
+msgctxt "verb"
+msgid "Open"
+msgstr "Åpne"
+
+#: components/corpus.tsx
+msgid "Price '<' 100 #1"
+msgstr "Pris '<' 100 #1"
+
+#. <x0> = <a href>
+#. <x1> = <Link href>
+#: components/corpus.tsx
+msgid "Read <x0>this</x0> and <x1>that</x1>"
+msgstr "Les <x0>dette</x0> og <x1>det</x1>"
+
+#: app/(main)/page.tsx
+msgid "Server element"
+msgstr "Serverelement"
+
+#: components/corpus.tsx
+msgid "Tab here"
+msgstr "Tabulator her"
+
+#. <x0> = <b>
+#: components/corpus.tsx
+msgid "The <x0>players''</x0> cards"
+msgstr "<x0>Spillernes</x0> kort"
+
+#: components/corpus.tsx
+msgid "Two ''' apostrophes"
+msgstr "To ''' apostrofer"
+
+#: components/corpus.tsx
+msgid "Wrapped fragment here"
+msgstr "Innpakket fragment her"
+
+#: components/corpus.tsx
+msgid "You have {count, plural, =0 {no orders} one {# order} other {# orders}}"
+msgstr "Du har {count, plural, =0 {ingen ordrer} one {# ordre} other {# ordrer}}"

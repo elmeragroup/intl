@@ -1,0 +1,74 @@
+name: Publish Release
+
+# Called by merge.yml after the checks and e2e jobs pass on a push to main. scripts/release.ts picks
+# the channel from the checked commit: a pending bump on main's head publishes a canary of both
+# packages; the merged Version Packages commit publishes its version under latest and records it as a
+# GitHub release; any other commit publishes nothing.
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    # npm's trusted-publisher entries name this environment, and only main can deploy to it, so an
+    # OIDC token from any other job cannot publish.
+    environment: npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: npm-release
+      cancel-in-progress: false
+      # Keeps every pending run instead of only the newest, so a queued stable publish is not displaced.
+      # A queued canary for a commit that is no longer main's head skips (scripts/release.ts).
+      queue: max
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # changeset status and version resolve the plan against origin/main's history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --no-runtime
+
+      # The release promotes with `npm dist-tag add`, which authenticates over OIDC from npm 11.21.0
+      # (docs.npmjs.com/trusted-publishers). The npm bundled with Node 26.13.0 is 11.20.0. A global
+      # install skips pnpm's minimumReleaseAge, so raise the pin only to a release older than its window.
+      - name: Install npm with OIDC dist-tag support
+        run: npm install --global npm@11.21.1
+
+      # For a canary, writes the snapshot version into this checkout only.
+      - name: Prepare
+        id: prepare
+        run: node scripts/release.ts prepare "$GITHUB_OUTPUT"
+
+      - name: Build
+        if: ${{ steps.prepare.outputs.channel != 'none' }}
+        run: pnpm build
+
+      # pnpm publish and npm dist-tag exchange the job's OIDC token for a short-lived token (trusted
+      # publishing); no npm token is stored. PNPM_CONFIG_PROVENANCE makes pnpm sign provenance or fail,
+      # so no version can publish unsigned. pnpm reads pnpm_config_*/PNPM_CONFIG_* variables, not
+      # npm_config_* (pnpm.io/configuring).
+      - name: Publish
+        if: ${{ steps.prepare.outputs.channel != 'none' }}
+        env:
+          CHANNEL: ${{ steps.prepare.outputs.channel }}
+          GH_TOKEN: ${{ github.token }}
+          PNPM_CONFIG_PROVENANCE: "true"
+        run: node scripts/release.ts publish "$CHANNEL"

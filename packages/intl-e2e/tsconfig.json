@@ -1,0 +1,9 @@
+{
+  "extends": "@elmeragroup/typescript-config/base.json",
+  "compilerOptions": {
+    "verbatimModuleSyntax": true,
+    // scripts/e2e.ts runs under Node's type stripping.
+    "erasableSyntaxOnly": true
+  },
+  "include": ["playwright.config.ts", "tests", "scripts"]
+}

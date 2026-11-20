@@ -1,0 +1,26 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The parser-free formatter exists only in dist, and the tests read it there; they compile their catalogs with
+    // intl-tools' source. An override replaces the root's dependsOn, so ^build is listed again.
+    "test": {
+      "dependsOn": ["build", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/intl-tools/src/**"]
+    },
+    "test:run": {
+      "dependsOn": ["build", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/intl-tools/src/**"]
+    },
+    "ci:checks": {
+      "dependsOn": ["build", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/intl-tools/src/**"]
+    },
+    // bench/runtime.ts imports this package's dist and intl-tools' built compiler by path; intl-tools depends on this
+    // package, so ^build would not build it.
+    "bench": {
+      "cache": false,
+      "dependsOn": ["build", "@elmeragroup/intl-tools#build"]
+    }
+  }
+}

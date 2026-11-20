@@ -1,0 +1,6 @@
+{
+  // Declarations come from src only: tsdown's tsgo pass writes a declaration beside any included file outside this
+  // package, and the tests reach the runtime's corpus (`#corpus`).
+  "extends": "./tsconfig.json",
+  "include": ["src"]
+}
