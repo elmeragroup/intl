@@ -1,0 +1,90 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "bracketSpacing": true,
+  "bracketSameLine": true,
+  "singleQuote": false,
+  "jsxSingleQuote": false,
+  "trailingComma": "es5",
+  "semi": true,
+  "printWidth": 110,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "sortImports": {
+    "newlinesBetween": true,
+    "sortSideEffects": true,
+    "customGroups": [
+      {
+        "groupName": "server-only",
+        "elementNamePattern": ["server-only"]
+      },
+      {
+        "groupName": "react",
+        "elementNamePattern": ["react", "react/**"]
+      },
+      {
+        "groupName": "next",
+        "elementNamePattern": ["next", "next/**"]
+      },
+      {
+        "groupName": "elmera",
+        "elementNamePattern": ["@elmeragroup", "@elmeragroup/**"]
+      },
+      {
+        "groupName": "css-relative",
+        "elementNamePattern": ["./*.css", "./**/*.css", "../*.css", "../**/*.css"]
+      },
+      {
+        "groupName": "css-non-relative",
+        "elementNamePattern": ["*.css", "**/*.css"]
+      }
+    ],
+    "groups": [
+      "server-only",
+      "react",
+      "next",
+      ["builtin", "external", "internal", "subpath"],
+      "elmera",
+      ["parent", "sibling", "index"],
+      "css-non-relative",
+      "css-relative",
+      "unknown"
+    ]
+  },
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "node_modules",
+    "**/node_modules/**",
+    "dist",
+    "**/dist/**",
+    ".turbo",
+    "**/.next/**",
+    "**/.output/**",
+    "**/.nitro/**",
+    "**/.tanstack/**",
+    "**/routeTree.gen.ts",
+    "**/next-env.d.ts",
+    "**/test-results/**",
+    "**/playwright-report/**",
+    ".artifacts",
+    ".cache",
+    ".ref",
+    ".scratch",
+    "**/__snapshots__/**",
+    "**/*.po",
+    "pnpm-lock.yaml",
+    "*.lock",
+    "*.log",
+    ".DS_Store",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**"
+  ]
+}

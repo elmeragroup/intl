@@ -1,0 +1,46 @@
+{
+  "name": "elmera-group-intl",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "turbo run build",
+    "bench": "turbo run bench",
+    "changeset": "changeset",
+    "ci:checks": "oxfmt --check && turbo run ci:checks",
+    "clean": "turbo run clean && git clean -xdf node_modules .turbo",
+    "dev": "turbo watch dev --continue",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint . --deny-warnings --report-unused-disable-directives-severity=error",
+    "lint:fix": "OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --fix .",
+    "tcw": "turbo run tcw",
+    "test": "turbo run test:run",
+    "test:watch": "turbo run test",
+    "test:e2e": "turbo run e2e",
+    "type-check": "turbo run type-check",
+    "type-check:scripts": "tsrs --noEmit -p scripts/tsconfig.json"
+  },
+  "devDependencies": {
+    "@changesets/cli": "catalog:",
+    "@elmeragroup/internal": "catalog:",
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "eslint-plugin-turbo": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "tsrs": "catalog:",
+    "turbo": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.13.0 <27"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "26.13.0",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@11.27.1"
+}

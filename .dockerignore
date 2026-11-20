@@ -1,0 +1,22 @@
+# A future docs image builds from the repository root (apps/docs/Dockerfile), as Fuse's does. Keep
+# host installs and build output out of the context so the image compiles everything itself.
+**/node_modules
+**/.next
+**/.output
+**/.turbo
+**/dist
+**/.artifacts
+**/coverage
+**/.cache
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo
+.git
+.github
+.agents
+.claude
+.ref
+.scratch
+.pnpm-store
+.env
+**/.DS_Store

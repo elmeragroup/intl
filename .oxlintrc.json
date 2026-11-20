@@ -1,0 +1,272 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "oxc", "import", "unicorn"],
+  "jsPlugins": [
+    "eslint-plugin-turbo",
+    {
+      "name": "elmera",
+      "specifier": "@elmeragroup/internal/oxlint"
+    },
+    {
+      "name": "anti-slop",
+      "specifier": "@elmeragroup/internal/oxlint/anti-slop"
+    },
+    {
+      "name": "tests",
+      "specifier": "@elmeragroup/internal/oxlint/tests"
+    }
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "turbo/no-undeclared-env-vars": "error",
+    "elmera/require-disable-reason": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-unnecessary-parameter-property-assignment": "off",
+    "typescript/no-misused-promises": [
+      "error",
+      {
+        "checksVoidReturn": {
+          "attributes": false
+        }
+      }
+    ],
+    "typescript/no-unnecessary-condition": [
+      "error",
+      {
+        "allowConstantLoopConditions": true
+      }
+    ],
+    "typescript/no-non-null-assertion": "error",
+    "typescript/dot-notation": "error",
+    "typescript/prefer-find": "error",
+    "typescript/prefer-regexp-exec": "error",
+    "typescript/prefer-string-starts-ends-with": "error",
+    "typescript/prefer-optional-chain": "error",
+    "typescript/prefer-nullish-coalescing": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-empty-function": "error",
+    "typescript/require-await": "error",
+    "typescript/promise-function-async": "off",
+    "typescript/non-nullable-type-assertion-style": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-unused-expressions": "error",
+    "typescript/consistent-type-definitions": ["warn", "type"],
+    "typescript/consistent-type-imports": [
+      "warn",
+      {
+        "prefer": "type-imports",
+        "fixStyle": "separate-type-imports"
+      }
+    ],
+    "typescript/array-type": "off",
+    "typescript/ban-types": "off",
+    "typescript/prefer-readonly": "off",
+    "typescript/no-duplicate-enum-values": "off",
+    "typescript/no-misused-spread": "error",
+    "typescript/no-meaningless-void-operator": "off",
+    "typescript/require-array-sort-compare": "error",
+    "no-constant-binary-expression": "error",
+    "typescript/no-redundant-type-constituents": "error",
+    "import/consistent-type-specifier-style": ["warn", "prefer-top-level"],
+    "import/no-cycle": "error",
+    "unicorn/filename-case": [
+      "error",
+      {
+        "case": "kebabCase",
+        "ignore": ["^[a-z]{2}-[A-Z]{2}\\."]
+      }
+    ],
+    "unicorn/no-await-in-promise-methods": "off",
+    "unicorn/no-empty-file": "off",
+    "unicorn/no-invalid-fetch-options": "off",
+    "unicorn/no-invalid-remove-event-listener": "off",
+    "unicorn/no-new-array": "off",
+    "unicorn/no-single-promise-in-promise-methods": "off",
+    "unicorn/no-thenable": "off",
+    "unicorn/no-unnecessary-await": "off",
+    "unicorn/no-useless-fallback-in-spread": "off",
+    "unicorn/no-useless-length-check": "off",
+    "unicorn/no-useless-spread": "off",
+    "unicorn/prefer-set-size": "off",
+    "unicorn/prefer-string-starts-ends-with": "off",
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-widen-then-assert": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-unknown-returns": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-module-mocking": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": "warn",
+    "anti-slop/no-runtime-typeof": "warn",
+    "anti-slop/no-shape-in-symbol-names": "warn",
+    "anti-slop/no-slop-comments": [
+      "warn",
+      {
+        "ticketPattern": "ELM-\\d+"
+      }
+    ],
+    "anti-slop/no-narration-comments": "warn"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/coverage/**",
+    "**/.turbo/**",
+    "**/.next/**",
+    "**/.output/**",
+    "**/.nitro/**",
+    "**/.tanstack/**",
+    "**/routeTree.gen.ts",
+    "**/next-env.d.ts",
+    "**/test-results/**",
+    "**/playwright-report/**",
+    "**/.artifacts/**",
+    "**/.cache/**",
+    "**/node_modules/**",
+    ".ref/**",
+    ".scratch/**",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**"
+  ],
+  "options": {
+    "typeAware": true
+  },
+  "settings": {
+    "react": {
+      "version": "19"
+    }
+  },
+  "overrides": [
+    // Apps and the e2e fixture apps: React rules. The runtime's React code is held by its tests and
+    // the conformance suite instead, which render keyless child arrays on purpose.
+    {
+      "files": ["apps/**/*.{ts,tsx}", "packages/intl-e2e/**/*.{ts,tsx}"],
+      "plugins": ["typescript", "oxc", "unicorn", "react", "jsx-a11y"],
+      "rules": {
+        "react/react-in-jsx-scope": "off",
+        "react/exhaustive-deps": "error",
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "error",
+        "react/no-unstable-nested-components": "error"
+      }
+    },
+    // @elmeragroup/intl and intl-tools are self-contained: they may import no other @elmeragroup package.
+    {
+      "files": ["packages/intl/**", "packages/intl-tools/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@elmeragroup/*", "!@elmeragroup/intl", "!@elmeragroup/intl/*"],
+                "message": "@elmeragroup/intl and intl-tools are self-contained: they may import no other @elmeragroup package, so consumers install nothing else of ours."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // oxc's ESTree types share one `type` ("Literal") across string, number, boolean, regexp and bigint literals,
+    // so `typeof value` is the discriminant; ast-children walks the fields `visitorKeys` names, which TypeScript
+    // cannot index, and checks each is a node.
+    {
+      "files": ["packages/intl-tools/src/extract-message.ts", "packages/intl-tools/src/ast-children.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    {
+      "files": ["packages/intl-tools/src/ast-children.ts"],
+      "rules": {
+        "anti-slop/no-unknown-parameters": "off"
+      }
+    },
+    // The compiled catalog's IR uses the JS type as its tag (a literal is a plain string, `#` the number 0, structure
+    // a tuple), so typeof is how a node is decoded; the compiler's dry-format proves every entry decodes.
+    {
+      "files": ["packages/intl/src/catalog.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // Config boundary of the intl CLI: elmera-intl.json and the app's formats module are parsed here.
+    {
+      "files": ["packages/intl-tools/src/project.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // <T> reads React children and element props, which have no static type: typeof is how text, numbers and
+    // <Val>/<Plural> values are told apart from elements, and anything else is rejected. A message value is an
+    // open primitive union (icu.ts): typeof picks the formatter a plain {x} renders it with. next-intl's formatter
+    // overloads (format.ts) take a format name or options, a `now` or options, in one position: typeof tells them apart.
+    {
+      "files": [
+        "packages/intl/src/resolve.tsx",
+        "packages/intl/src/intl.ts",
+        "packages/intl/src/icu.ts",
+        "packages/intl/src/format.ts"
+      ],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    {
+      "files": ["**/*.{test,spec}{,-d}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+      "rules": {
+        "tests/no-class-assertions": "error",
+        "tests/no-fixed-delay": "error",
+        "tests/no-geometry-assertions": "error",
+        "tests/no-source-reading-tests": "error",
+        "tests/no-test-retry": "error",
+        "tests/no-wall-clock": "error"
+      }
+    },
+    {
+      "files": ["**/test/**/*.{ts,tsx,mts,mjs,js}", "**/tests/**/*.{ts,tsx,mts,mjs,js}"],
+      "rules": {
+        "tests/no-fixed-delay": "error",
+        "tests/no-wall-clock": "error"
+      }
+    },
+    {
+      "files": ["**/vitest.config.*", "**/vitest.*.config.*", "**/playwright.config.*"],
+      "rules": {
+        "tests/no-test-retry": "error"
+      }
+    }
+  ]
+}

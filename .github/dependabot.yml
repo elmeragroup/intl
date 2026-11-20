@@ -1,0 +1,28 @@
+# Keeps the SHA-pinned third-party actions current and raises npm security advisories.
+# Actions: the 3-day cooldown mirrors `minimumReleaseAge` in `pnpm-workspace.yaml`, so a
+# compromised release has time to be pulled before it is proposed. Workflow-only bumps carry no
+# changeset, hence the `no-changeset` label.
+# npm: security updates only. `open-pull-requests-limit: 0` turns version updates off, because
+# dependencies are catalog-pinned and published at exact versions, and a bump is a deliberate
+# change with its own changeset.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    labels:
+      - no-changeset
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

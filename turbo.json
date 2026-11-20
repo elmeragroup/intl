@@ -1,0 +1,56 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "agentGuidance": false,
+  "ui": "stream",
+  "globalEnv": ["NODE_ENV"],
+  "tasks": {
+    "//#lint": {
+      "dependsOn": ["^build"]
+    },
+    "//#type-check:scripts": {
+      "inputs": ["scripts/**", "tooling/typescript/**"]
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    "type-check": {
+      "dependsOn": ["^build"]
+    },
+    "tcw": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    "test:run": {
+      "dependsOn": ["^build"]
+    },
+    // The e2e fixture apps build on the workspace-linked packages and then on their packed archives,
+    // so the builds are what is under test: never cached.
+    "e2e": {
+      "cache": false,
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["CI", "PLAYWRIGHT_BROWSERS_PATH", "INTL_FIXTURE_RUNTIME", "INTL_FIXTURE_SERVER"]
+    },
+    "bench": {
+      "cache": false,
+      "dependsOn": ["build"]
+    },
+    "clean": {
+      "cache": false
+    },
+    "ci:checks": {
+      "dependsOn": ["^build", "//#lint", "//#type-check:scripts"]
+    }
+  }
+}
