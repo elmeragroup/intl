@@ -1,6 +1,6 @@
 {
   "name": "@elmeragroup/intl-tools",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Build-time tools for @elmeragroup/intl: the deny-by-default extractor, the elmera-intl CLI, PO catalogs and their compiler and loaders, lint and the Vitest catalog check.",
   "keywords": [
     "i18n",
