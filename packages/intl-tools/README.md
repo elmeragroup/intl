@@ -62,6 +62,8 @@ Residuals (not caught):
 
 ## Catalogs
 
+A PO file is read as GNU msgcat reads it: an entry starts at `msgctxt`, or at a `msgid` not after one, blank line or not; a comment belongs to the entry it precedes; every `#,` line is read; obsolete (`#~`) entries and comments after the last entry are dropped. Entries carry `msgctxt`, `msgid`, `msgstr` and `#.`, `#:` and `#,` comments; translator comments (`# `), `#|` and `msgid_plural` fail with the line. `extract` writes each value on one line. The reader and writer are this package's own (an Effect `Schema` codec), conformant with the PO library it replaced wherever GNU msgcat agrees (`test/po-conformance`, credited in NOTICE).
+
 `compileCatalog(po, locale, { formats })` (`/compile`) is the one compiler; the loaders, `loadCatalog` and `check` all call it. It returns the catalog or a `CatalogCompileError` listing every problem:
 
 - Keys are `hashKey(keyOf(source, context))`, seven base-36 characters; a collision fails.

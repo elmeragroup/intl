@@ -18,7 +18,17 @@
     // The message corpus lives with the runtime's tests (vitest.config.ts aliases it the same way).
     "paths": {
       "#corpus": ["../intl/test/fixtures.tsx"]
-    }
+    },
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // Globs resolve against this file. The PO codec's round-trip property runs on effect/Arbitrary, which effect
+        // 4.1 marks unstable; only the tests use it.
+        "overrides": [
+          { "include": ["test/**/*"], "options": { "allowedUnstableApis": ["effect/Arbitrary"] } }
+        ]
+      }
+    ]
   },
   "include": ["bin", "src", "test", "vitest.config.ts", "tsdown.config.ts"],
   "exclude": ["dist", "node_modules"]

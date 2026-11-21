@@ -6,8 +6,9 @@ import manifest from "../package.json" with { type: "json" };
 
 // Lint sees imports one file at a time; what reaches a browser is the bundle. Bundling the client entry from source
 // for the browser, with every third-party package left external, lists exactly the packages it pulls in, so a
-// tools module (parser, PO, filesystem) reached through any chain of runtime files shows up here.
-const PARSE_TIME = [/^@elmeragroup\/intl-tools/u, /^oxc-/u, /^@oxc-/u, /^po-parser$/u, /^node:/u];
+// tools module (parser, PO, filesystem) reached through any chain of runtime files shows up here. `effect` is the
+// tools' PO codec and the optional peer of `/effect` only.
+const PARSE_TIME = [/^@elmeragroup\/intl-tools/u, /^oxc-/u, /^@oxc-/u, /^effect(?:\/|$)/u, /^node:/u];
 
 it("keeps parsers, PO and Node built-ins out of the browser bundle of /react", async () => {
   const bundle = await rolldown({

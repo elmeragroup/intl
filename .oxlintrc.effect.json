@@ -13,13 +13,19 @@
   "options": { "typeAware": true },
   "overrides": [
     // The files that import effect (the manifest test holds the list to them): the runtime's /effect entry, its unit
-    // and type tests, the extraction differential's Effect case, and the e2e consumer.
+    // and type tests, the tools' PO codec and its tests, the extraction differential's Effect case, and the e2e
+    // consumer.
     {
       "files": [
         "packages/intl/src/effect.ts",
         "packages/intl/test/effect.test.ts",
         "packages/intl/test/types.tsx",
+        "packages/intl-tools/src/po-document.ts",
+        "packages/intl-tools/src/po-text.ts",
+        "packages/intl-tools/src/po.ts",
         "packages/intl-tools/test/differential.test.tsx",
+        "packages/intl-tools/test/po-conformance/po-parser-shape.ts",
+        "packages/intl-tools/test/po-text.test.ts",
         "packages/intl-e2e/effect/server.ts"
       ],
       "plugins": ["effecttsgo"],

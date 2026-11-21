@@ -135,7 +135,8 @@ versions through the Version Packages PR ([CONTRIBUTING.md](CONTRIBUTING.md#rele
 its `LICENSE` and a `NOTICE` with the licenses of the third-party code in its `dist`, declarations
 included: the runtime's covers next-intl's relative-time rules and intl-messageformat and its
 `@formatjs` dependencies bundled into the formatter; the tools' covers the `@oxlint/plugins`,
-`type-fest` and `@types/json-schema` declarations inlined into `dist/oxlint.d.ts`. Code copied or
+`type-fest` and `@types/json-schema` declarations inlined into `dist/oxlint.d.ts`, and po-parser, whose
+PO reader and writer its codec ports (`test/po-conformance/LICENSE-po-parser` beside the ported tests). Code copied or
 bundled from another project gets an entry there (check the `//#region` paths in `dist` after a
 dependency or bundling change), or beside the files when only tests carry it
 (`test/conformance/LICENSE-next-intl`). Every runtime export is listed in its package's
