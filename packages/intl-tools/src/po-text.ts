@@ -42,7 +42,6 @@ type Draft = {
 const QUOTE = '"';
 const OBSOLETE = "#~";
 const COMMENT = "#";
-const FLAG_LINE = "#, ";
 const KEYWORD = /^msg\w*/u;
 // Each character PO escapes, and the letter it escapes to.
 const ESCAPES: ReadonlyMap<string, string> = new Map([
@@ -199,13 +198,15 @@ class MessageReader {
       return `Previous string key comments (#|) are not supported:\n> ${text}`;
     }
 
+    // Every `#,` line of an entry adds its flags, in order.
     if (hasPrefix(text, "#,")) {
-      this.draftOf().flags = text
-        .slice(2)
-        .trim()
-        .split(",")
-        .map((flag) => flag.trim())
-        .filter((flag) => flag !== "");
+      const { flags } = this.draftOf();
+
+      for (const flag of text.slice(2).split(",")) {
+        if (flag.trim() !== "") {
+          flags.push(flag.trim());
+        }
+      }
 
       return undefined;
     }
@@ -326,15 +327,7 @@ function readPoText(text: string): Result.Result<Document, PoSyntaxError> {
     }
 
     if (trimmed.startsWith(COMMENT)) {
-      const flags = pending.findIndex((comment) => comment.text.startsWith(FLAG_LINE));
-      const merged = flags === -1 || !trimmed.startsWith(FLAG_LINE) ? undefined : pending[flags];
-
-      if (merged === undefined) {
-        pending.push({ text: trimmed, line });
-      } else {
-        pending[flags] = { ...merged, text: `${merged.text}, ${trimmed.slice(FLAG_LINE.length)}` };
-      }
-
+      pending.push({ text: trimmed, line });
       continue;
     }
 
@@ -394,22 +387,29 @@ function writePoText(document: Document): string {
     lines.push("");
   }
 
+  // One push per line: a message may have more comments or references than a call takes arguments.
   for (const message of document.messages) {
-    lines.push(
-      ...message.extractedComments.map((comment) => `#. ${comment}`),
-      ...message.references.map((reference) =>
+    for (const comment of message.extractedComments) {
+      lines.push(`#. ${comment}`);
+    }
+
+    for (const reference of message.references) {
+      lines.push(
         reference.line === undefined || reference.line === 0
           ? `#: ${reference.path}`
           : `#: ${reference.path}:${reference.line}`
-      ),
-      ...(message.flags.length === 0 ? [] : [`#, ${message.flags.join(", ")}`]),
-      ...(message.context === undefined || message.context === ""
-        ? []
-        : [`msgctxt "${escape(message.context)}"`]),
-      `msgid "${escape(message.id)}"`,
-      `msgstr "${escape(message.translation)}"`,
-      ""
-    );
+      );
+    }
+
+    if (message.flags.length > 0) {
+      lines.push(`#, ${message.flags.join(", ")}`);
+    }
+
+    if (message.context !== undefined && message.context !== "") {
+      lines.push(`msgctxt "${escape(message.context)}"`);
+    }
+
+    lines.push(`msgid "${escape(message.id)}"`, `msgstr "${escape(message.translation)}"`, "");
   }
 
   return lines.join("\n");

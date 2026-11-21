@@ -7,7 +7,8 @@ import type { ESTree, Rule } from "@oxlint/plugins";
 // - The runtime's source imports no Node builtin: every runtime module is platform-neutral, and the client ones reach
 //   browsers.
 // - In the runtime's source only src/effect.ts, the `/effect` entry, imports `effect` (or an `effect/*` module): it is an
-//   optional peer, so every other entry must load without it.
+//   optional peer, so every other entry must load without it. No other runtime module reaches that entry either (its
+//   declarations import effect): not relatively, not by `@elmeragroup/intl/effect`, not for types alone.
 // - A published package's source stays inside its own `src` (a relative import out of it would be bundled into, or
 //   break, its dist), and imports a bare package only when its manifest declares it as a dependency or peer, so a
 //   consumer's install has it. A type-only import may also come from a devDependency: declarations are inlined.
@@ -20,6 +21,7 @@ import { E2E, isPublishedSource, packageOf, pathInPackage, RUNTIME, TOOLS } from
 // The optional peer, and the one runtime module that may import it.
 const EFFECT = "effect";
 const EFFECT_ENTRY = "src/effect.ts";
+const EFFECT_SUBPATH = `${RUNTIME}/effect`;
 
 // `@scope/name/sub` → `@scope/name`; `name/sub` → `name`.
 function packageName(specifier: string): string {
@@ -45,6 +47,8 @@ export const importBoundaries: Rule = {
         "`{{specifier}}` leaves this package's src: a published package's source imports only its own src and its dependencies (a path outside would be bundled into its dist).",
       effect:
         "`{{specifier}}` is the optional peer `effect`: in @elmeragroup/intl's source only src/effect.ts (the `/effect` entry) imports it, so every other entry loads without it. Move the Effect code there.",
+      effectEntry:
+        "`{{specifier}}` is the `/effect` entry, whose declarations import the optional peer `effect`: another @elmeragroup/intl module that reaches it, types included, requires the peer. Keep the Effect code in src/effect.ts.",
       undeclared:
         "`{{specifier}}` is not a dependency or peer dependency of {{package}}: a consumer's install would not have it. Declare it, or import it with `import type` when only types are needed.",
     },
@@ -65,6 +69,7 @@ export const importBoundaries: Rule = {
     const srcRoot = resolve(pkg.root, "src");
     const inRuntimeSource = inRuntime && pathInPackage(pkg, context.filename).startsWith("src/");
     const isEffectEntry = inRuntime && pathInPackage(pkg, context.filename) === EFFECT_ENTRY;
+    const effectEntryPath = resolve(pkg.root, EFFECT_ENTRY.replace(/\.ts$/u, ""));
 
     function check(source: ESTree.StringLiteral, typeOnly: boolean): void {
       const specifier = source.value;
@@ -72,6 +77,10 @@ export const importBoundaries: Rule = {
 
       if (specifier.startsWith(".")) {
         const target = resolve(dirname(context.filename), specifier);
+
+        if (inRuntimeSource && !isEffectEntry && target.replace(/\.[cm]?[jt]sx?$/u, "") === effectEntryPath) {
+          context.report({ node: source, messageId: "effectEntry", data });
+        }
 
         if (shipped && !`${target}/`.startsWith(`${srcRoot}/`)) {
           context.report({ node: source, messageId: "outside", data });
@@ -101,6 +110,10 @@ export const importBoundaries: Rule = {
 
       if (name === EFFECT && inRuntimeSource && !isEffectEntry) {
         context.report({ node: source, messageId: "effect", data });
+      }
+
+      if (specifier === EFFECT_SUBPATH && inRuntimeSource && !isEffectEntry) {
+        context.report({ node: source, messageId: "effectEntry", data });
       }
 
       if (isBuiltin(specifier)) {

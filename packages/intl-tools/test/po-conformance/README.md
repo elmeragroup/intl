@@ -6,13 +6,17 @@ three oracles:
 - `po-parser.test.ts`: po-parser's own test suite (`src/POParser.test.ts` at 2.2.0), ported with its expected output
   verbatim and run against `PoText` through `po-parser-shape.ts`. Its inline snapshots are exact strings here, so a
   snapshot update cannot rewrite them.
-- `recorded.test.ts`: `po-parser-2.2.0.json`, recorded with po-parser 2.2.0 and GNU msgcat 1.0 over 85 PO texts: the repo's
-  catalogs, every input of po-parser's suite, the GNU msgcat cases `test/cli.test.ts` holds, and edge cases (every
-  escape, unknown escapes, multi-line strings, msgctxt, flags, references with and without lines, header fields,
-  plural keywords, CRLF, empty msgstr, unicode, no trailing newline, a lone quote, reference lines `parseInt` reads). Each input records po-parser's `parse` (or its
-  error) and `serialize`; `dialect`, po-parser on the text `parsePo` rewrote it to (`toParserDialect`, the function the
-  codec replaces); `current`, what `parsePo` returned; and `msgcat`, GNU msgcat 1.0's exit status and output. It also
-  records po-parser's `serialize` of 6 catalogs and `formatPo`'s output for 2 entry sets.
+- `recorded.test.ts`: `po-parser-2.2.0.json`, recorded with po-parser 2.2.0 and GNU msgcat 1.0 over 91 PO texts: the
+  repo's catalogs, every input of po-parser's suite, the GNU msgcat cases `test/cli.test.ts` holds (and, for the five
+  that flag `ignore-same`, which msgcat drops as unknown, the same inputs flagging `c-format`), and edge cases (every
+  escape, unknown escapes, multi-line strings, msgctxt, flags, references with and without lines, a line past the safe
+  integers, header fields, plural keywords, CRLF, empty msgstr, unicode, no trailing newline, a lone quote, reference
+  lines `parseInt` reads). Each input records po-parser's `parse` (or its error) and `serialize`; `dialect`, only where
+  it differs from that, po-parser on the text `parsePo` rewrote it to (`toParserDialect`, the function the codec
+  replaces); `current`, what `parsePo` returned; and `msgcat`, GNU msgcat 1.0's exit status and output (for the GNU
+  cases, run on the input with a UTF-8 charset header, as `msgcat.input` records, so msgcat reads every entry and exits
+  0). Each input is decoded once. The GNU cases' entries, with their comments and the flags msgcat knows, must equal
+  msgcat's output. It also records po-parser's `serialize` of 6 catalogs and `formatPo`'s output for 2 entry sets.
 - `../po-text.test.ts`: a round-trip property over documents `Arbitrary.schema` generates: written and read back, each
   comes back unchanged (500 runs).
 
@@ -41,9 +45,10 @@ Every case of po-parser's suite is counted once: ported (asserts po-parser's out
 | ------------------ | ------------------- | ----: | -----: | --------------------: | -------: |
 | `POParser.test.ts` | `po-parser.test.ts` |    48 |     46 |                     2 |        0 |
 
-The recording holds 85 inputs. 73 read exactly as po-parser reads them and write back as it writes them; 12 read
-differently, the 2 below and the 10 inputs that exist to show GNU msgcat's reading (all named in `recorded.test.ts`'s
-`DELIBERATE`). All 85 read exactly as `parsePo` read them before (`dialect`, `current`).
+The recording holds 91 inputs. 75 read exactly as po-parser reads them and write back as it writes them; 16 read
+differently, the 2 below and the 14 inputs that exist to show GNU msgcat's reading (all named in `recorded.test.ts`'s
+`DELIBERATE`, and the only rows with a `dialect`). All 91 read exactly as `parsePo` read them before (`dialect`,
+`current`).
 
 ## Deliberate differences
 

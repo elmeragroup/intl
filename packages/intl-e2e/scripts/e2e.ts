@@ -154,6 +154,8 @@ function installEffectConsumer(runtimeTarball: string): string {
         types: [],
         verbatimModuleSyntax: true,
         erasableSyntaxOnly: true,
+        // The packed declarations are what is under test, their dependencies' included.
+        skipLibCheck: false,
       },
       include: ["*.ts"],
     })}\n`

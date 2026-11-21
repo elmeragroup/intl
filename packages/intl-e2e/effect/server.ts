@@ -33,6 +33,15 @@ const greet = Effect.gen(function* () {
   return HttpServerResponse.text(t("Hello, {name}", { name: "Ada" }));
 });
 
+// Never run, only type-checked: `t` is typed from its literal through the packed declarations and their
+// dependencies, so a packed runtime that lost @schummar/icu-type-parser fails here as an unused directive.
+const _typedFromLiteral = Effect.gen(function* () {
+  const { t } = yield* CurrentIntl;
+
+  // @ts-expect-error a plain {x} takes text
+  return t("Hello, {name}", { name: 1 });
+});
+
 // No request log: stdout carries only the answers.
 const { handler, dispose } = HttpRouter.toWebHandler(
   HttpRouter.add("GET", "/", greet).pipe(Layer.provide(IntlMiddleware)),

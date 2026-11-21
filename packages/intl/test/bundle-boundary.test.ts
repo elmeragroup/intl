@@ -78,6 +78,8 @@ async function graphOf(
     input: fileURLToPath(new URL(`../${entry}`, import.meta.url)),
     platform: "neutral",
     logLevel: "silent",
+    // Every import counts, used or not: Node loads a module's imports whether or not a bundler would drop them.
+    treeshake: false,
     external: (id) => !id.startsWith(".") && !id.startsWith("/") && !id.startsWith(SELF),
     plugins: [
       {

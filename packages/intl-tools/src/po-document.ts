@@ -5,7 +5,14 @@ import * as Schema from "effect/Schema";
 /** A `#:` reference: the file that uses a message, and the line when the reference names one. */
 export const PoReference = /* @__PURE__ */ Schema.Struct({
   path: Schema.String,
-  line: /* @__PURE__ */ Schema.optionalKey(Schema.Int),
+  // Any number parseInt returns for the line but NaN, which the reader leaves out: integers past the safe range and
+  // ±Infinity included, as the ported reader keeps them, so a catalog it read still reads.
+  line: /* @__PURE__ */ Schema.optionalKey(
+    // @effect-diagnostics-next-line schemaNumber:off - every number but NaN is a reference line here, and no Schema number type admits ±Infinity without NaN
+    /* @__PURE__ */ Schema.Number.check(
+      /* @__PURE__ */ Schema.makeFilter((line: number) => !Number.isNaN(line))
+    )
+  ),
 });
 
 /** One message: its keywords' strings, unescaped, and the comments that precede it. */

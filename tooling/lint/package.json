@@ -18,6 +18,7 @@
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "jsonc-parser": "catalog:",
+    "oxc-parser": "catalog:",
     "oxlint": "catalog:",
     "tsrs": "catalog:",
     "typescript": "catalog:",

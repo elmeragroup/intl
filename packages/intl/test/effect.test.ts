@@ -69,6 +69,31 @@ describe("CurrentIntl.provide", () => {
     expect(await Promise.all([request("nb"), request("en")])).toEqual(["Hei, Ada", "Hello, Ada"]);
   });
 
+  // A layer would be built once by the outer provide and reused by the inner one (Effect.provide reuses a layer an
+  // enclosing provide built), so the inner request would get the outer translator.
+  it("gives a run nested in another its own translator from the same provider", async () => {
+    const provideIntl = CurrentIntl.provide(
+      Effect.gen(function* () {
+        const locale = yield* RequestLocale;
+
+        return { locale, catalog: CATALOGS[locale], timeZone: "UTC" };
+      })
+    );
+    const greet = Effect.gen(function* () {
+      const { t } = yield* CurrentIntl;
+
+      return t("Hello, {name}", { name: "Ada" });
+    });
+    const nested = Effect.gen(function* () {
+      const outer = yield* greet;
+      const inner = yield* greet.pipe(provideIntl, Effect.provideService(RequestLocale, "en"));
+
+      return [outer, inner];
+    }).pipe(provideIntl, Effect.provideService(RequestLocale, "nb"));
+
+    expect(await runtime.runPromise(nested)).toEqual(["Hei, Ada", "Hello, Ada"]);
+  });
+
   it("fails with the options effect's error, without running the handler", async () => {
     const ran = await runtime.runPromise(Ref.make(false));
     const options: Effect.Effect<CreateIntlOptions, CatalogUnavailable> = Effect.fail(

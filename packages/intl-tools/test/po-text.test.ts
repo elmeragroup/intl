@@ -68,3 +68,24 @@ it("reads back every document it writes", async () => {
   expect([result._tag, Arbitrary.formatCheckFailure(result)]).toEqual(["Passed", undefined]);
   expect(result._tag === "Passed" ? result.runs : 0).toBe(RUNS);
 });
+
+// Unit under test: the PoText writer. Oracle: the count the test states: one `#:` line per reference, however many.
+// A message used in more files than a call's argument limit (about 125,000 in V8) is still written.
+it("writes a message with 200,000 references", () => {
+  const references = Array.from({ length: 200_000 }, (_, index) => ({ path: `src/page-${index}.tsx` }));
+  const text = encode({
+    messages: [{ id: "Hi", translation: "Hei", references, extractedComments: [], flags: [] }],
+  });
+
+  expect(text.split("\n").filter((line) => line.startsWith("#: "))).toHaveLength(200_000);
+});
+
+// Unit under test: the PoText reader. Oracle: Number.parseInt, which the ported reader read a line with: a line past
+// Number's range is Infinity, kept as the reference's line rather than failing the file.
+it("reads a reference line past Number's range", () => {
+  const decoded = decode(`#: src/a.tsx:${"9".repeat(400)}\nmsgid "Hi"\nmsgstr "Hei"\n`);
+
+  expect(
+    Result.isSuccess(decoded) ? decoded.success.messages[0]?.references : decoded.failure.message
+  ).toEqual([{ path: "src/a.tsx", line: Number.POSITIVE_INFINITY }]);
+});

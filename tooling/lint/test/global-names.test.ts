@@ -1,7 +1,7 @@
 import { globalNames } from "../src/rules/global-names.ts";
 import { createTester, fixture } from "./rule-tester.ts";
 
-const SERVICE_KEY = "an Effect service key, which every library's services share in a Context";
+const RUNTIME_NAMESPACE = { namespace: "elmera-intl" };
 
 // Unit under test: elmera-workspace/global-names. Oracle: the global-namespace contract per case: a lint plugin's
 // name, a Symbol.for key, a custom HMR event, and (in published src) a `*_EVENT`/`*_FILE` string constant and an Effect
@@ -52,20 +52,36 @@ createTester().run("global-names", globalNames, {
       filename: fixture("runtime/src/effect.ts"),
       errors: [
         {
-          messageId: "prefix",
-          data: { value: "CurrentIntl", what: SERVICE_KEY },
+          messageId: "serviceKey",
+          data: { value: "CurrentIntl", ...RUNTIME_NAMESPACE },
         },
       ],
     },
     {
       code: `import { Context } from "effect";\nexport class CurrentIntl extends Context.Service<CurrentIntl, number>()("@elmeragroup/intl/CurrentIntl") {}`,
       filename: fixture("runtime/src/effect.ts"),
-      errors: [{ messageId: "prefix", data: { value: "@elmeragroup/intl/CurrentIntl", what: SERVICE_KEY } }],
+      errors: [
+        { messageId: "serviceKey", data: { value: "@elmeragroup/intl/CurrentIntl", ...RUNTIME_NAMESPACE } },
+      ],
     },
     {
       code: `import { Service } from "effect/Context";\nexport const Locale = Service<string>("intl/Locale");`,
       filename: fixture("runtime/src/effect.ts"),
-      errors: [{ messageId: "prefix", data: { value: "intl/Locale", what: SERVICE_KEY } }],
+      errors: [{ messageId: "serviceKey", data: { value: "intl/Locale", ...RUNTIME_NAMESPACE } }],
+    },
+    // Another Elmera package's namespace is not this package's: the runtime's keys are `elmera-intl/…`.
+    {
+      code: `import * as Context from "effect/Context";\nexport class CurrentUser extends Context.Service<CurrentUser, string>()("elmera-session/CurrentUser") {}`,
+      filename: fixture("runtime/src/effect.ts"),
+      errors: [
+        { messageId: "serviceKey", data: { value: "elmera-session/CurrentUser", ...RUNTIME_NAMESPACE } },
+      ],
+    },
+    // A key the rule cannot read is not checked, so it must be a literal at the declaration.
+    {
+      code: `import * as Context from "effect/Context";\nconst SERVICE_KEY = "CurrentIntl";\nexport class CurrentIntl extends Context.Service<CurrentIntl, number>()(SERVICE_KEY) {}`,
+      filename: fixture("runtime/src/effect.ts"),
+      errors: [{ messageId: "literalKey" }],
     },
     // Only the events Vite declares are Vite's: another name under `vite:` is not.
     {

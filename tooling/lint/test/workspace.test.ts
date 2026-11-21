@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -93,7 +94,27 @@ const SKIPPED_DIRECTORIES = new Set([
   ".tanstack",
 ]);
 
-// A package's TypeScript files, outside build output and dependencies.
+// Whether a module imports effect, read from its parsed module record: a static import, a re-export, or a dynamic
+// import of a literal specifier. Text that only looks like an import (a fixture in a template literal) is none.
+function importsEffect(file: string): boolean {
+  const code = read(file);
+  const { module } = parseSync(file, code);
+  const specifiers = [
+    ...module.staticImports.map((declaration) => declaration.moduleRequest.value),
+    ...module.staticExports.flatMap((declaration) =>
+      declaration.entries.flatMap((entry) =>
+        entry.moduleRequest === null ? [] : [entry.moduleRequest.value]
+      )
+    ),
+    ...module.dynamicImports.map((expression) =>
+      code.slice(expression.moduleRequest.start + 1, expression.moduleRequest.end - 1)
+    ),
+  ];
+
+  return specifiers.some((specifier) => /^effect(?:\/|$)/u.test(specifier));
+}
+
+// A directory's source modules, outside build output and dependencies.
 function sourceFiles(directory: string): ReadonlyArray<string> {
   return readdirSync(join(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
     const path = `${directory}/${entry.name}`;
@@ -102,7 +123,7 @@ function sourceFiles(directory: string): ReadonlyArray<string> {
       return SKIPPED_DIRECTORIES.has(entry.name) || entry.name.startsWith(".next") ? [] : sourceFiles(path);
     }
 
-    return /\.tsx?$/u.test(entry.name) && !entry.name.endsWith(".d.ts") ? [path] : [];
+    return /\.[cm]?[jt]sx?$/u.test(entry.name) && !entry.name.endsWith(".d.ts") ? [path] : [];
   });
 }
 
@@ -327,11 +348,12 @@ describe("Effect diagnostics", () => {
   // Lint reads one file at a time and cannot see which files the second config scopes, so the list is held here: the
   // gate covers every source file that imports effect, and nothing else.
   it("covers every file that imports effect", () => {
-    const importsEffect = /^\s*(?:import|export)\b[^;]*?\bfrom\s+["']effect(?:\/[^"']*)?["']/mu;
-    const sources = PACKAGES.flatMap(({ path }) => sourceFiles(path)).filter((file) =>
-      importsEffect.test(read(file))
-    );
+    // The directories `lint:effect` lints: its arguments after the config that are not flags.
+    const args = (parseManifest("package.json").scripts?.["lint:effect"] ?? "").split(/\s+/u);
+    const roots = args.slice(args.indexOf(".oxlintrc.effect.json") + 1).filter((arg) => !arg.startsWith("-"));
+    const sources = roots.flatMap((root) => sourceFiles(root)).filter((file) => importsEffect(file));
 
+    expect(roots).toEqual(["packages"]);
     expect(sources.length).toBeGreaterThan(0);
     expect([...(override?.files ?? [])].toSorted()).toEqual(sources.toSorted());
   });

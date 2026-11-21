@@ -128,9 +128,11 @@ const { handler, dispose } = HttpRouter.toWebHandler(
 );
 ```
 
-The options effect's failures (a catalog that cannot load) are the handler's `E`, and its requirements its `R`, less
-`CurrentIntl`. A catalog compiled for another catalog version throws in `createIntl`, so it is a defect, as on every
-host.
+`CurrentIntl.provide` keeps the failures the options effect declares in its `E` as the handler's `E`, and its
+requirements, less `CurrentIntl`, as the handler's `R`. In the loader above a rejected import is a defect, since
+`Effect.promise` declares no failure; to make a catalog that cannot load recoverable, load it with `Effect.tryPromise`
+and map the rejection to the app's own error. A catalog compiled for another catalog version throws in `createIntl`, so
+it is a defect, as on every host.
 
 A program with one locale (a worker, a CLI, a test) provides a fixed translator once:
 `program.pipe(Effect.provide(CurrentIntl.layer({ locale: "nb", catalog, timeZone: "Europe/Oslo" })))`.

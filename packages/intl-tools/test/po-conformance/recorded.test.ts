@@ -3,16 +3,16 @@ import { describe, expect, it } from "vitest";
 import type { PoEntry } from "../../src/po";
 import { formatPo, parsePo } from "../../src/po";
 import recording from "./po-parser-2.2.0.json" with { type: "json" };
-import type { Catalog } from "./po-parser-shape.ts";
+import type { Catalog, Entry } from "./po-parser-shape.ts";
 import POParser from "./po-parser-shape.ts";
 
-// Unit under test: the PoText codec, and parsePo/formatPo over it. Oracle: po-parser-2.2.0.json, recorded before
-// po-parser was removed, per input:
+// Unit under test: the PoText codec, and parsePo/formatPo over it. Oracle: po-parser-2.2.0.json, recorded with
+// po-parser 2.2.0 and GNU msgcat 1.0, per input:
 // - `parsed`/`throws` and `serialized`: po-parser 2.2.0 itself;
-// - `dialect`: po-parser on the GNU msgcat entries `parsePo` rewrote its input to (`toParserDialect`), the reader the
-//   codec replaces;
+// - `dialect`, only where it differs from `parsed`/`throws`: po-parser on the GNU msgcat entries `parsePo` rewrote its
+//   input to (`toParserDialect`), the reader the codec replaces;
 // - `current`: what `parsePo` returned;
-// - `msgcat`: GNU msgcat 1.0 on the same input, the evidence behind each deliberate difference (README.md).
+// - `msgcat`: GNU msgcat 1.0's output (for the `gnu` inputs, on the input with a UTF-8 charset header, `msgcat.input`).
 
 // The inputs where GNU msgcat's entries, which parsePo read, differ from po-parser's (README.md).
 const DELIBERATE = new Set([
@@ -28,16 +28,22 @@ const DELIBERATE = new Set([
   "gnu: two flag lines",
   "gnu: header directly followed by an entry",
   "edge: blank line inside a multi-line string",
+  "gnu (c-format): obsolete entry ends at a blank line",
+  "gnu (c-format): two entries without a blank line",
+  "gnu (c-format): flag after the last entry",
+  "gnu (c-format): two flag lines",
 ]);
 
 type Outcome = { readonly parsed: Catalog } | { readonly throws: string };
 
 type Recording = {
   readonly parse: ReadonlyArray<
-    { readonly name: string; readonly input: string; readonly dialect: Outcome } & (
-      | { readonly parsed: Catalog; readonly serialized: string }
-      | { readonly throws: string }
-    ) & {
+    {
+      readonly name: string;
+      readonly input: string;
+      readonly dialect?: Outcome;
+      readonly msgcat: { readonly status: number; readonly stdout: string };
+    } & ({ readonly parsed: Catalog; readonly serialized: string } | { readonly throws: string }) & {
         readonly current:
           | { readonly _tag: "Parsed"; readonly file: unknown }
           | { readonly _tag: "PoParseError"; readonly reason: string };
@@ -94,9 +100,21 @@ function poParserOutcome(recorded: Recording["parse"][number]): Outcome {
   return "throws" in recorded ? { throws: recorded.throws } : { parsed: recorded.parsed };
 }
 
-describe("reads as parsePo read it, through toParserDialect and po-parser", () => {
+// Each input decoded once: it reads as parsePo read it (po-parser's reading unless `dialect` records GNU msgcat's), and
+// where that is po-parser's reading, it writes back as po-parser wrote it.
+describe("reads as parsePo read it, and as po-parser 2.2.0 does unless GNU msgcat's entries win", () => {
   it.each(RECORDED.parse)("$name", (recorded) => {
-    expectOutcome(ours(recorded.input), recorded.dialect);
+    const actual = ours(recorded.input);
+    const po = poParserOutcome(recorded);
+
+    expect(recorded.dialect !== undefined).toBe(DELIBERATE.has(recorded.name));
+    expectOutcome(actual, recorded.dialect ?? po);
+
+    if (recorded.dialect !== undefined) {
+      expect(withoutEmptyFlags(actual)).not.toEqual(withoutEmptyFlags(po));
+    } else if ("parsed" in actual && "serialized" in recorded) {
+      expect(POParser.serialize(actual.parsed)).toBe(recorded.serialized);
+    }
   });
 });
 
@@ -116,19 +134,34 @@ describe("projects onto the entries parsePo returned", () => {
   });
 });
 
-describe("reads and writes as po-parser 2.2.0 does", () => {
-  it.each(RECORDED.parse.filter(({ name }) => !DELIBERATE.has(name)))("$name", (recorded) => {
-    expectOutcome(ours(recorded.input), poParserOutcome(recorded));
+// GNU msgcat writes each entry it read in one unambiguous form (its flags on one line, obsolete entries as `#~`, the
+// header as an entry with an empty msgid), and keeps only the flags it knows (`fuzzy`, `*-format`).
+function gnuMessages(catalog: Catalog): ReadonlyArray<Entry> {
+  const messages = (catalog.messages ?? []).filter(
+    (entry) => entry.msgid !== "" || entry.msgctxt !== undefined
+  );
 
-    if ("serialized" in recorded) {
-      expect(POParser.serialize(POParser.parse(recorded.input))).toBe(recorded.serialized);
-    }
+  return messages.map((entry) => {
+    const flags = (entry.flags ?? [])
+      .filter((flag) => flag === "fuzzy" || flag.endsWith("-format"))
+      .toSorted();
+    const { flags: _all, ...rest } = entry;
+
+    return flags.length === 0 ? rest : { ...rest, flags };
   });
-});
+}
 
-describe("differs from po-parser 2.2.0 where GNU msgcat's entries win", () => {
-  it.each(RECORDED.parse.filter(({ name }) => DELIBERATE.has(name)))("$name", (recorded) => {
-    expect(withoutEmptyFlags(ours(recorded.input))).not.toEqual(withoutEmptyFlags(poParserOutcome(recorded)));
+// Unit under test: which entry each comment and flag of the `gnu` inputs belongs to. Oracle: GNU msgcat 1.0's output
+// for the same input, each entry with its comments and flags in its own block. The `gnu (c-format)` inputs repeat the
+// ones that flag `ignore-same`, which msgcat does not know and drops, with a flag it keeps.
+describe("gives each comment and flag to the entry GNU msgcat gives it", () => {
+  it.each(RECORDED.parse.filter(({ name }) => name.startsWith("gnu")))("$name", (recorded) => {
+    const read = ours(recorded.input);
+
+    expect(recorded.msgcat.status).toBe(0);
+    expect("parsed" in read ? gnuMessages(read.parsed) : read).toEqual(
+      gnuMessages(POParser.parse(recorded.msgcat.stdout))
+    );
   });
 });
 

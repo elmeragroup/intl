@@ -45,7 +45,7 @@ plugins Oxlint loads from source. Run Oxlint through `pnpm lint`, which sets tha
 the Effect diagnostics on the files that import `effect`, through the Effect-patched oxlint (`.oxlintrc.effect.json`;
 tooling/typescript/effect.json holds the same rules for the editor). The e2e fixtures'
 `type-check` drops the condition (`--customConditions null`) to read the built declarations, as
-consumers do. Development needs macOS or Linux.
+consumers do. Development needs macOS or glibc-based Linux: the Effect-patched binaries `lint:effect` runs do not support musl.
 
 Run commands from the repository root unless stated otherwise.
 

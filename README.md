@@ -35,7 +35,7 @@ V=$(npm view @elmeragroup/intl-tools@canary version) &&
 
 ## Development
 
-Requires macOS or Linux. Use the Node version in `.node-version` and the pnpm version in
+Requires macOS or glibc-based Linux (the Effect lint pass does not run on musl). Use the Node version in `.node-version` and the pnpm version in
 `package.json`; pnpm downloads the pinned Node when it is missing.
 
 ```sh

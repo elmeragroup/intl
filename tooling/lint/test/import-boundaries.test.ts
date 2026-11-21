@@ -29,9 +29,11 @@ createTester().run("import-boundaries", importBoundaries, {
       filename: fixture("runtime/src/effect.ts"),
     },
     {
-      code: `import * as ManagedRuntime from "effect/ManagedRuntime";`,
+      code: `import * as ManagedRuntime from "effect/ManagedRuntime";\nimport { CurrentIntl } from "@elmeragroup/intl/effect";`,
       filename: fixture("runtime/test/effect.test.ts"),
     },
+    // A module named like the entry elsewhere in src is not it.
+    { code: `import { x } from "./effect";`, filename: fixture("runtime/src/start/index.ts") },
     // Tests may use what their package's test config provides.
     {
       code: `import { compileCatalog } from "#compile";\nimport { describe } from "vitest";\nimport { join } from "node:path";`,
@@ -77,6 +79,23 @@ createTester().run("import-boundaries", importBoundaries, {
       code: `import { corpus } from "#corpus";`,
       filename: fixture("tools/src/a.ts"),
       errors: [{ messageId: "outside" }],
+    },
+    // Nor may another runtime module reach the /effect entry, whose declarations import effect: relatively, by the
+    // package's own specifier, or for its types alone.
+    {
+      code: `export type { CurrentIntl } from "./effect";`,
+      filename: fixture("runtime/src/core.ts"),
+      errors: [{ messageId: "effectEntry", data: { specifier: "./effect" } }],
+    },
+    {
+      code: `import { CurrentIntl } from "../effect.ts";`,
+      filename: fixture("runtime/src/next/server.ts"),
+      errors: [{ messageId: "effectEntry", data: { specifier: "../effect.ts" } }],
+    },
+    {
+      code: `import type { CurrentIntl } from "@elmeragroup/intl/effect";`,
+      filename: fixture("runtime/src/server.ts"),
+      errors: [{ messageId: "effectEntry", data: { specifier: "@elmeragroup/intl/effect" } }],
     },
     // Any other runtime module would make the optional peer required: by a module path, the root, or types alone.
     {
