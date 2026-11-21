@@ -37,7 +37,7 @@ export default defineConfig([
     clean: true,
     // Self-specifiers stay imports: react-server reaches the "use client" provider through one, so the provider stays
     // in react.js behind its directive.
-    deps: { neverBundle: [/^@elmeragroup\/intl\//] },
+    deps: { neverBundle: [/^@elmeragroup\/intl\//u] },
   },
   {
     ...shared,
@@ -45,7 +45,7 @@ export default defineConfig([
     entry: { "internal/formatter": "src/formatter.ts" },
     dts: { sourcemap: true },
     clean: false,
-    deps: { alwaysBundle: ["intl-messageformat", /^@formatjs\//] },
+    deps: { alwaysBundle: ["intl-messageformat", /^@formatjs\//u] },
     alias: { "@formatjs/icu-messageformat-parser": noParser },
   },
 ]);

@@ -22,6 +22,10 @@ export type MessageValue = string | number | bigint | Date;
 export class PlainArgumentNotText extends Error {
   /** The error's tag. */
   readonly _tag = "PlainArgumentNotText" as const;
+  /** The argument's name. */
+  readonly argument: string;
+  /** What the value is: its `typeof`, or `Date`. */
+  readonly received: string;
 
   /**
    * Name the argument and what it got.
@@ -29,15 +33,12 @@ export class PlainArgumentNotText extends Error {
    * @param argument - The argument's name.
    * @param received - What the value is: its `typeof`, or `Date`.
    */
-  constructor(
-    /** The argument's name. */
-    readonly argument: string,
-    /** What the value is: its `typeof`, or `Date`. */
-    readonly received: string
-  ) {
+  constructor(argument: string, received: string) {
     super(
       `argument "${argument}" got a ${received}: plain {${argument}} takes text; use {${argument}, number} or {${argument}, date}`
     );
+    this.argument = argument;
+    this.received = received;
   }
 }
 
@@ -116,11 +117,17 @@ function frozenCopies<O extends Intl.DateTimeFormatOptions | NumberStyle | Intl.
 // Options as entry lists, so an undefined option stays in the key (as null): `{ full: { weekday: undefined } }` removes
 // the built-in weekday (the merge spreads it over), `{ full: {} }` keeps it.
 function formatsKey(formats: Formats | undefined): string {
-  const entries = <O extends Intl.DateTimeFormatOptions | NumberStyle | Intl.ListFormatOptions>(
-    styles: Readonly<Record<string, O>> = {}
-  ) => Object.entries(styles).map(([name, options]) => [name, Object.entries(options)]);
+  return JSON.stringify([
+    styleEntries(formats?.dateTime),
+    styleEntries(formats?.number),
+    styleEntries(formats?.list),
+  ]);
+}
 
-  return JSON.stringify([entries(formats?.dateTime), entries(formats?.number), entries(formats?.list)]);
+function styleEntries<O extends Intl.DateTimeFormatOptions | NumberStyle | Intl.ListFormatOptions>(
+  styles: Readonly<Record<string, O>> = {}
+): Array<[string, Array<[string, unknown]>]> {
+  return Object.entries(styles).map(([name, options]) => [name, Object.entries(options)]);
 }
 
 /** Where a message formats: its locale, the zone for dates and times, and the app's named styles. */
@@ -288,7 +295,7 @@ const formattersByZone = new Map<string, Formatters>();
  * @returns The cached formatter.
  * @throws When `Intl` rejects the options (a `RangeError`).
  */
-export function getNumberFormat(
+export function cachedNumberFormat(
   locales: Intl.LocalesArgument,
   options: Intl.NumberFormatOptions | undefined
 ): Intl.NumberFormat {
@@ -307,7 +314,7 @@ export function getNumberFormat(
  * @returns The cached formatter.
  * @throws When `Intl` rejects the options (a `RangeError`).
  */
-export function getDateTimeFormat(
+export function cachedDateTimeFormat(
   locales: Intl.LocalesArgument,
   options: Intl.DateTimeFormatOptions | undefined
 ): Intl.DateTimeFormat {
@@ -331,7 +338,7 @@ export type RelativeTimeFormatOptions = Intl.RelativeTimeFormatOptions & {
  * @returns The cached formatter.
  * @throws When `Intl` rejects the options (a `RangeError`).
  */
-export function getRelativeTimeFormat(
+export function cachedRelativeTimeFormat(
   locale: string,
   options: RelativeTimeFormatOptions
 ): Intl.RelativeTimeFormat {
@@ -350,17 +357,20 @@ export function getRelativeTimeFormat(
  * @returns The cached formatter.
  * @throws When `Intl` rejects the options (a `RangeError`).
  */
-export function getListFormat(locale: string, options: Intl.ListFormatOptions | undefined): Intl.ListFormat {
+export function cachedListFormat(
+  locale: string,
+  options: Intl.ListFormatOptions | undefined
+): Intl.ListFormat {
   return memoized(listFormats, JSON.stringify([locale, options]), () => new Intl.ListFormat(locale, options));
 }
 
 function formattersFor(timeZone: string): Formatters {
   return memoized(formattersByZone, timeZone, (): Formatters => ({
-    getNumberFormat,
+    getNumberFormat: cachedNumberFormat,
     // Every date/time (named styles, plain {d, date}, skeletons) formats in the configured zone, unless its named
     // style sets its own, as next-intl applies the zone.
     getDateTimeFormat: (locales, options) =>
-      getDateTimeFormat(locales, { ...options, timeZone: options?.timeZone ?? timeZone }),
+      cachedDateTimeFormat(locales, { ...options, timeZone: options?.timeZone ?? timeZone }),
     getPluralRules: (locales, options) =>
       memoized(pluralRules, JSON.stringify([locales, options]), () => new Intl.PluralRules(locales, options)),
   }));

@@ -23,7 +23,7 @@ export function configureRequestIntl(resolver: () => Promise<IntlInstance>): voi
  * @returns The request's `IntlInstance`.
  * @throws When `configureRequestIntl` was never called: a setup defect, not a request failure.
  */
-export const getIntl: () => Promise<IntlInstance> = cache(async (): Promise<IntlInstance> => {
+export const getIntl: () => Promise<IntlInstance> = /* @__PURE__ */ cache(async (): Promise<IntlInstance> => {
   if (!resolveRequestIntl) {
     throw new Error(
       "configureRequestIntl was not called; configure the request IntlInstance in a server module first"

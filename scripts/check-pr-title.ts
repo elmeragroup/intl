@@ -27,14 +27,16 @@ function isLowercasePart(part: string): boolean {
  */
 export function prTitleProblems(title: string): ReadonlyArray<string> {
   const trimmed = title.trim();
-  if (trimmed.length === 0) return ["The title is empty."];
+  if (trimmed.length === 0) {
+    return ["The title is empty."];
+  }
   if (CONVENTIONAL_PREFIX.test(trimmed)) {
     return ["Drop the conventional commit prefix; commit messages keep it, PR titles do not."];
   }
   const lowercase = trimmed
-    .replace(CODE_SPAN, " ")
+    .replaceAll(CODE_SPAN, " ")
     .split(/\s+/u)
-    .filter((word) => word.split("-").some(isLowercasePart));
+    .filter((word) => word.split("-").some((part) => isLowercasePart(part)));
   return lowercase.length === 0 ? [] : [`Capitalize: ${lowercase.join(", ")}.`];
 }
 
@@ -48,7 +50,9 @@ function main(args: ReadonlyArray<string>): void {
   const problems = prTitleProblems(title);
   if (problems.length > 0) {
     console.error(`PR title "${title}" is not Title Case (CONTRIBUTING.md#pr-title).`);
-    for (const problem of problems) console.error(problem);
+    for (const problem of problems) {
+      console.error(problem);
+    }
     process.exitCode = 1;
   }
 }

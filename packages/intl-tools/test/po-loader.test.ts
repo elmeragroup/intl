@@ -75,5 +75,7 @@ it("compiles the PO with the config's formats module, and fails a style only its
   expect(createIntl({ locale: "nb", catalog, timeZone: "UTC", formats }).t(SOURCE, { n: 1234.5 })).toBe(
     `${new Intl.NumberFormat("nb", { style: "currency", currency: "NOK" }).format(1234.5)} totalt`
   );
-  expect((await load("NOKK")).error?.message).toMatch(/"\{n, number, money\}": Invalid currency code : NOKK/);
+  expect((await load("NOKK")).error?.message).toMatch(
+    /"\{n, number, money\}": Invalid currency code : NOKK/u
+  );
 });

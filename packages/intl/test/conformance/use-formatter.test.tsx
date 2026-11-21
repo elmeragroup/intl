@@ -132,7 +132,7 @@ describe("dateTime", () => {
         "FormatNotFound",
         "Format `onlyYear` is not available in formats.dateTime.",
       ]);
-      expect(html).toMatch(/Nov 20 2020/);
+      expect(html).toMatch(/Nov 20 2020/u);
     });
 
     it("handles missing formats, which are available as defaults for `useTranslations`", () => {
@@ -142,7 +142,7 @@ describe("dateTime", () => {
         "FormatNotFound",
         "Format `medium` is not available in formats.dateTime.",
       ]);
-      expect(html).toMatch(/Nov 20 2020/);
+      expect(html).toMatch(/Nov 20 2020/u);
     });
 
     it("handles formatting errors", () => {
@@ -156,7 +156,7 @@ describe("dateTime", () => {
         "FormatFailed",
         "format.dateTime failed: Value very long out of range for Intl.DateTimeFormat options property year",
       ]);
-      expect(html).toMatch(/Nov 20 2020/);
+      expect(html).toMatch(/Nov 20 2020/u);
     });
   });
 });

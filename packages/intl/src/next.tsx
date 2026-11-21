@@ -62,6 +62,7 @@ export function useLocaleSwitch(
                     await latestPersist.current(locale);
                     resolve();
                   } catch (cause) {
+                    // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- persist's own rejection passes through unchanged, as awaiting it directly would
                     reject(cause);
                   }
                 });

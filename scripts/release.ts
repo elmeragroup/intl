@@ -556,10 +556,13 @@ function channelOrder(next: string, current: string, tag: ChannelTag): Result<"a
   const parsedNext = parseVersion(next);
   const parsedCurrent = parseVersion(current);
 
-  if (parsedNext !== undefined && parsedCurrent !== undefined && parsedNext.prerelease === undefined) {
-    if (parsedCurrent.prerelease !== undefined) {
-      return ok("after");
-    }
+  if (
+    parsedNext !== undefined &&
+    parsedCurrent !== undefined &&
+    parsedNext.prerelease === undefined &&
+    parsedCurrent.prerelease !== undefined
+  ) {
+    return ok("after");
   }
 
   return compareVersions(next, current, source);
@@ -824,7 +827,7 @@ function releaseState(tag: string): Result<"missing" | "draft" | "published"> {
     return listed;
   }
 
-  const [isDraft] = listed.value.split("\n").filter((line) => line !== "");
+  const isDraft = listed.value.split("\n").find((line) => line !== "");
 
   if (isDraft === undefined) {
     return ok("missing");
@@ -889,7 +892,7 @@ function recordRelease(tag: string, commit: string): Result<void> {
     process.stderr.write(
       [
         "To record the release from a maintainer session with workflow write access, run:",
-        `  gh ${createRef.map(shellQuote).join(" ")} && gh ${createRelease.map(shellQuote).join(" ")} --repo ${REPOSITORY}`,
+        `  gh ${createRef.map((arg) => shellQuote(arg)).join(" ")} && gh ${createRelease.map((arg) => shellQuote(arg)).join(" ")} --repo ${REPOSITORY}`,
         `If the ref already exists, check it marks ${commit} (gh api repos/${REPOSITORY}/git/ref/tags/${tag} --jq .object.sha) before running the release create alone.`,
         "",
       ].join("\n")

@@ -89,7 +89,9 @@ describe("locale switch", () => {
     const second = switchLocale("sv");
     // The second persist is not sent while the first is in flight, so it cannot overtake it at the server. The
     // switcher only chains promises, so one macrotask turn drains every microtask an eager send would need.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(server.requests.map((r) => r.locale)).toEqual(["nb"]);
     nb.arrive();
     (await server.request(1)).arrive();

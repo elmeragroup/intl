@@ -11,7 +11,7 @@ export const getIntlConfig = createServerFn({ method: "GET" }).handler(() =>
   loadIntlConfig(
     {
       resolveLocale: (request) =>
-        /(?:^|;\s*)locale=en(?:;|$)/.test(request.headers.get("cookie") ?? "") ? "en" : "nb",
+        /(?:^|;\s*)locale=en(?:;|$)/u.test(request.headers.get("cookie") ?? "") ? "en" : "nb",
       resolveTimeZone: () => "Europe/Oslo",
       formats,
       loadCatalog: async (locale): Promise<Catalog> =>

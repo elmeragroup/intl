@@ -22,10 +22,10 @@ export type MessageNode =
 export const SERIALIZER_VERSION = "1";
 
 const PLURAL_CATEGORIES = new Set(["zero", "one", "two", "few", "many", "other"]);
-const EXACT_PLURAL_FORM = /^_\d+$/;
-const SYNTAX_CHAR = /[{}<>]/;
-const QUOTE_RUN_CHAR = /[{}<>']/;
-const QUOTE_OPENER = /['{}<>#|]/;
+const EXACT_PLURAL_FORM = /^_\d+$/u;
+const SYNTAX_CHAR = /[{}<>]/u;
+const QUOTE_RUN_CHAR = /[{}<>']/u;
+const QUOTE_OPENER = /['{}<>#|]/u;
 
 /**
  * Whether a `<Plural>` prop name is a plural form: a CLDR category, or `_<n>` for an exact match (`_0` is `=0`).
@@ -83,7 +83,7 @@ export function describeInvalidCase(name: string): string {
 
 // Positional tags are `x<n>`, and <T> passes args and tag renderers in one values object, so an arg named like a
 // tag would overwrite (or be overwritten by) a tag renderer.
-const RESERVED_ARG = /^x\d+$/;
+const RESERVED_ARG = /^x\d+$/u;
 
 /** Why a `<Val>`/`<Plural>`/`<Select>` argument cannot be part of a `<T>` message. */
 export type ArgProblem =
@@ -149,7 +149,7 @@ export function serialize(nodes: ReadonlyArray<MessageNode>): string {
  * @returns The catalog key.
  */
 export function keyOf(source: string, context: string | undefined): string {
-  return context ? `${context}\u0004${source}` : source;
+  return context === undefined || context === "" ? source : `${context}\u0004${source}`;
 }
 
 // Seven base-36 characters: 36^7 ≈ 7.8e10 keys. By the birthday bound, n keys collide with probability about
@@ -181,6 +181,7 @@ export function hashKey(key: string): string {
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
   for (let i = 0; i < key.length; i++) {
+    // oxlint-disable-next-line unicorn/prefer-code-point -- cyrb53 hashes UTF-16 code units; code points would change every wire key
     const code = key.charCodeAt(i);
     h1 = Math.imul(h1 ^ code, 2654435761);
     h2 = Math.imul(h2 ^ code, 1597334677);
@@ -215,7 +216,7 @@ function normalize(nodes: ReadonlyArray<MessageNode>): Array<Normalized> {
   }
   for (const node of merged) {
     if (node.kind === "text") {
-      node.text = node.text.replace(/[ \t\n\r]+/g, " ");
+      node.text = node.text.replaceAll(/[ \t\n\r]+/gu, " ");
     }
   }
 
@@ -227,11 +228,11 @@ function trimEnds(nodes: Array<Normalized>): Array<Normalized> {
   const last = nodes.at(-1);
 
   if (first?.kind === "text") {
-    first.text = first.text.replace(/^[ \t\n\r]+/, "");
+    first.text = first.text.replace(/^[ \t\n\r]+/u, "");
   }
 
   if (last?.kind === "text") {
-    last.text = last.text.replace(/[ \t\n\r]+$/, "");
+    last.text = last.text.replace(/[ \t\n\r]+$/u, "");
   }
 
   return nodes.filter((node) => node.kind !== "text" || node.text !== "");
@@ -319,6 +320,11 @@ function emit(nodes: ReadonlyArray<MessageNode>, after: string): string {
           );
 
           return `{${node.name}, select, ${branches.join(" ")}}`;
+        }
+        default: {
+          const unhandled: never = node;
+
+          return unhandled;
         }
       }
     })

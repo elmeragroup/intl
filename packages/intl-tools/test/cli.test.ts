@@ -696,7 +696,7 @@ describe("bin", () => {
     write("messages", "");
     const run = spawnSync(execPath, cliFromSource("extract"), { cwd: root, encoding: "utf8" });
     expect(run.status).toBe(2);
-    expect(run.stderr).toMatch(/^elmera-intl failed: Error:/);
+    expect(run.stderr).toMatch(/^elmera-intl failed: Error:/u);
   });
 
   it("exits quietly when the reader closes the pipe early", async () => {

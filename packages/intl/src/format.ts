@@ -13,7 +13,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import type { FormatSettings, NumberStyle, RelativeTimeFormatOptions } from "./icu";
-import { getDateTimeFormat, getListFormat, getNumberFormat, getRelativeTimeFormat } from "./icu";
+import { cachedDateTimeFormat, cachedListFormat, cachedNumberFormat, cachedRelativeTimeFormat } from "./icu";
 
 /** Options of `relativeTime`: next-intl's, with `now` required. */
 export type RelativeTimeOptions = {
@@ -130,6 +130,10 @@ export type Format = {
 export class FormatNotFound extends Error {
   /** The error's tag. */
   readonly _tag = "FormatNotFound" as const;
+  /** The `formats` kind looked in. */
+  readonly kind: "dateTime" | "number" | "list";
+  /** The name. */
+  readonly format: string;
 
   /**
    * Name the missing format.
@@ -137,13 +141,10 @@ export class FormatNotFound extends Error {
    * @param kind - The `formats` kind looked in.
    * @param format - The name.
    */
-  constructor(
-    /** The `formats` kind looked in. */
-    readonly kind: "dateTime" | "number" | "list",
-    /** The name. */
-    readonly format: string
-  ) {
+  constructor(kind: "dateTime" | "number" | "list", format: string) {
     super(`Format \`${format}\` is not available in formats.${kind}.`);
+    this.kind = kind;
+    this.format = format;
   }
 }
 
@@ -151,6 +152,10 @@ export class FormatNotFound extends Error {
 export class FormatFailed extends Error {
   /** The error's tag. */
   readonly _tag = "FormatFailed" as const;
+  /** The formatter method. */
+  readonly method: keyof Format;
+  /** What `Intl` threw. */
+  override readonly cause: unknown;
 
   /**
    * Wrap what `Intl` threw.
@@ -158,13 +163,10 @@ export class FormatFailed extends Error {
    * @param method - The formatter method.
    * @param cause - What `Intl` threw.
    */
-  constructor(
-    /** The formatter method. */
-    readonly method: keyof Format,
-    /** What `Intl` threw. */
-    override readonly cause: unknown
-  ) {
+  constructor(method: keyof Format, cause: unknown) {
     super(`format.${method} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.method = method;
+    this.cause = cause;
   }
 }
 
@@ -210,7 +212,7 @@ export function createFormat(
 
   const zoned = (options: Intl.DateTimeFormatOptions | undefined): Intl.DateTimeFormatOptions => ({
     ...options,
-    // oxlint-disable-next-line typescript/prefer-nullish-coalescing -- next-intl's applyTimeZone treats an empty zone as unset
+    // oxlint-disable-next-line typescript/prefer-nullish-coalescing, typescript/strict-boolean-expressions -- next-intl's applyTimeZone treats an empty zone as unset
     timeZone: options?.timeZone || timeZone,
   });
 
@@ -224,7 +226,7 @@ export function createFormat(
       ["dateTime", named.dateTime],
       formatOrOptions,
       overrides,
-      (options) => getDateTimeFormat(locale, zoned(options)).format(value),
+      (options) => cachedDateTimeFormat(locale, zoned(options)).format(value),
       () => String(value)
     );
   }
@@ -240,7 +242,7 @@ export function createFormat(
       ["dateTime", named.dateTime],
       formatOrOptions,
       overrides,
-      (options) => getDateTimeFormat(locale, zoned(options)).formatRange(start, end),
+      (options) => cachedDateTimeFormat(locale, zoned(options)).formatRange(start, end),
       () => [dateTime(start), dateTime(end)].join("\u2009–\u2009")
     );
   }
@@ -255,7 +257,7 @@ export function createFormat(
       ["number", named.number],
       formatOrOptions,
       overrides,
-      (options) => getNumberFormat(locale, options).format(value),
+      (options) => cachedNumberFormat(locale, options).format(value),
       () => String(value)
     );
   }
@@ -278,7 +280,7 @@ export function createFormat(
       };
 
       // Rounded: Intl.RelativeTimeFormat would print fractions ("2.1 hours ago").
-      return getRelativeTimeFormat(locale, options).format(
+      return cachedRelativeTimeFormat(locale, options).format(
         Math.round(seconds / UNIT_SECONDS[resolvedUnit]),
         resolvedUnit
       );
@@ -301,7 +303,7 @@ export function createFormat(
       ["list", named.list],
       formatOrOptions,
       overrides,
-      (options) => getListFormat(locale, options).format(items),
+      (options) => cachedListFormat(locale, options).format(items),
       // oxlint-disable-next-line typescript/no-base-to-string -- next-intl's fallback is String(values) verbatim: "[object Set]" for a Set
       () => String(values)
     );

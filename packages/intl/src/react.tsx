@@ -1,5 +1,7 @@
 "use client";
 // Client build of `/react`: the translator comes from <IntlProvider>. `react-server.tsx` has the same export list.
+// `createIntl`, `useIntl` and `IntlProvider` share react-intl's and use-intl's names on purpose: they match the install
+// name, and an app imports ours from this distinct specifier, so the two never meet in one import.
 import type { ReactNode } from "react";
 import { createContext, use, useMemo } from "react";
 
@@ -11,7 +13,7 @@ import { renderT } from "./resolve";
 export { Plural, Select, Val, type PluralProps, type SelectProps, type ValProps } from "./resolve";
 export { createIntl, msg } from "./intl";
 
-const IntlContext = createContext<IntlInstance | null>(null);
+const IntlContext = /* @__PURE__ */ createContext<IntlInstance | null>(null);
 
 /** Props of `<IntlProvider>`: a serializable `IntlConfig`, so a server layout or a route loader can pass it. */
 export type IntlProviderProps = IntlConfig & {

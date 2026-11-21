@@ -1,6 +1,15 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
@@ -10,7 +19,7 @@ import { runCli } from "../src/cli-run";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import { parsePo } from "../src/po";
 import { loadConfig } from "../src/project";
-import type { ProjectWatcher } from "../src/watch";
+import type { ProjectWatcher, WatchMode } from "../src/watch";
 import { watchProject } from "../src/watch";
 import { cliFromSource } from "./cli-source";
 
@@ -24,6 +33,12 @@ msgstr ""
 "X-Elmera-Serializer: 1\\n"
 `;
 
+// Every watch here polls: a stat of each watched file every 50 ms sees an edit whatever the host's file events do
+// (macOS delivers them through fseventsd, which a busy host delays by seconds or drops), so each wait below ends on
+// the edit, not on the event daemon. `--poll` and `watchProject`'s mode are the same seam the CLI and the Vite plugin
+// expose to such hosts; the native events stay the default, and the e2e dev loop runs on them.
+const POLL_MS = "50";
+const POLLING: WatchMode = { _tag: "poll", intervalMs: Number(POLL_MS) };
 // A hang guard, not a timing assertion: a spawned watcher's first sync and a 300-file rescan outlast poll's 1 s default.
 const HANG_GUARD = { timeout: 15_000 };
 const PROBE = { ...HANG_GUARD, interval: 500 };
@@ -32,6 +47,8 @@ const PROBE_FILE = "src/probe.tsx";
 let root = "";
 let watcher: Watcher | undefined;
 let inProcess: ProjectWatcher | undefined;
+// Directories a test made unreadable, restored before the temp tree is removed.
+let locked: Array<string> = [];
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "elmera-intl-watch-"));
@@ -44,6 +61,10 @@ afterEach(async () => {
   watcher = undefined;
   await inProcess?.close();
   inProcess = undefined;
+  locked.forEach((dir) => {
+    chmodSync(dir, 0o755);
+  });
+  locked = [];
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -61,11 +82,11 @@ function component(text: string): string {
 }
 
 // One-shot extract, then a msgstr for each pair.
-function extractTranslated(translations: ReadonlyArray<readonly [string, string]>): void {
+function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): void {
   const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
   expect(runCli(["extract"], io)).toBe(0);
   let po = read("messages/nb.po");
-  for (const [source, translation] of translations) {
+  for (const [source, translation] of pairs) {
     po = po.replace(`msgid "${source}"\nmsgstr ""`, `msgid "${source}"\nmsgstr "${translation}"`);
   }
   write("messages/nb.po", po);
@@ -88,7 +109,9 @@ type Watcher = {
 // fs.watch returns, but a recursive watch misses an edit made before its stream starts (seen under load: an edit right
 // after it never synced). The probe is a syntax error, so its syncs write nothing; `output()` starts after them.
 async function startWatch(): Promise<Watcher> {
-  const child: ChildProcess = spawn(execPath, cliFromSource("extract", "--watch"), { cwd: root });
+  const child: ChildProcess = spawn(execPath, cliFromSource("extract", "--watch", "--poll", POLL_MS), {
+    cwd: root,
+  });
   let stdout = "";
   let stderr = "";
   child.stdout?.setEncoding("utf8").on("data", (text: string) => {
@@ -162,9 +185,10 @@ describe("extract --watch", { timeout: 20_000 }, () => {
         }
 
         return result;
-      }
+      },
+      POLLING
     );
-    // fs.watch has no ready signal, so the trigger is rewritten until the watch syncs it. It stops once the PO has the
+    // The watch has no ready signal, so the trigger is rewritten until the watch syncs it. It stops once the PO has the
     // message: one more source event would sync again and compile the edit whether or not the watch saw it.
     await expect
       .poll(() => {
@@ -207,9 +231,10 @@ describe("extract --watch", { timeout: 20_000 }, () => {
         }
 
         return writeCatalogs(plan, options);
-      }
+      },
+      POLLING
     );
-    // fs.watch has no ready signal, so the trigger is rewritten until a sync writes it.
+    // The watch has no ready signal, so the trigger is rewritten until a sync writes it.
     await expect
       .poll(() => {
         if (!read("messages/nb.po").includes(`msgid "Ready"`)) {
@@ -220,6 +245,68 @@ describe("extract --watch", { timeout: 20_000 }, () => {
       }, PROBE)
       .toContain(`msgid "Ready"`);
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Hello"\nmsgstr "Hei"`);
+  });
+
+  // An unreadable directory stands in for one the poll must never read: reading it would fail, and the failure would
+  // be reported. Oracle: the contract per case, by hand: a directory the config excludes, and node_modules, are pruned
+  // before the poll descends; any other unreadable directory is reported once, and the rest of the tree still syncs.
+  describe("polling a tree with unreadable directories", () => {
+    function lock(path: string): void {
+      mkdirSync(join(root, path), { recursive: true });
+      write(`${path}/inside.tsx`, component("Hidden"));
+      chmodSync(join(root, path), 0o000);
+      locked.push(join(root, path));
+    }
+
+    function watchPolling(): Array<string> {
+      const loaded = loadConfig(join(root, "elmera-intl.json"));
+
+      if (loaded._tag !== "Config") {
+        throw new Error(loaded.problem.message);
+      }
+
+      const reported: Array<string> = [];
+      inProcess = watchProject(
+        loaded.config,
+        (result) => {
+          if (result._tag === "Failed") {
+            reported.push(...result.problems.map((problem) => `${problem.code}: ${problem.message}`));
+          }
+        },
+        extractCatalogs,
+        POLLING
+      );
+
+      return reported;
+    }
+
+    it("never reads an excluded directory or node_modules, and syncs the rest", async () => {
+      write(
+        "elmera-intl.json",
+        JSON.stringify({ ...CONFIG, include: ["**/*.tsx"], exclude: ["src/private"] })
+      );
+      lock("src/private");
+      lock("node_modules/some-package");
+      const reported = watchPolling();
+      await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Hello"`);
+
+      write("src/page.tsx", component("Edited"));
+      await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Edited"`);
+      expect(reported).toEqual([]);
+    });
+
+    it("reports an unreadable directory once, and syncs the rest of the tree", async () => {
+      lock("src/locked");
+      const reported = watchPolling();
+
+      write("src/page.tsx", component("Edited"));
+      await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Edited"`);
+      write("src/page.tsx", component("Edited again"));
+      await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Edited again"`);
+      expect(reported.filter((problem) => problem.startsWith("WatchFailed"))).toEqual([
+        expect.stringContaining(join(root, "src/locked")),
+      ]);
+    });
   });
 
   it("keeps a deleted message's entry and translation", async () => {
@@ -247,7 +334,7 @@ msgstr ""
     const { output } = await startWatch();
     write("src/broken.tsx", `${IMPORT}export const C = () => <T>Broken</T;\n`);
     // One line: a late probe report also says ExtractFailed.
-    await expect.poll(() => output().stderr, HANG_GUARD).toMatch(/src\/broken\.tsx[^\n]*: ExtractFailed:/);
+    await expect.poll(() => output().stderr, HANG_GUARD).toMatch(/src\/broken\.tsx[^\n]*: ExtractFailed:/u);
 
     expect(read("messages/nb.po")).toBe(po);
 
@@ -341,6 +428,21 @@ msgstr ""
     const run = spawnSync(execPath, cliFromSource(...args), { cwd: root, encoding: "utf8", timeout: 10_000 });
     expect(run.status).toBe(2);
     expect(run.stderr).toContain("usage: elmera-intl");
+  });
+
+  // Oracle: the usage contract: `--poll` takes a positive whole number of milliseconds, and only with `--watch`.
+  it.each([
+    ["without --watch", ["extract", "--poll", "50"], "--poll goes with extract --watch only"],
+    ["with no interval", ["extract", "--watch", "--poll"], "--poll needs an interval in milliseconds"],
+    ["with a zero interval", ["extract", "--watch", "--poll", "0"], "between 10 and 2147483647"],
+    ["with a fraction", ["extract", "--watch", "--poll", "1.5"], "--poll needs an interval in milliseconds"],
+    // Node turns a delay past 2^31 - 1 ms into 1 ms, which would scan without pause; under 10 ms a walk per tick is a
+    // continuous scan of a real project.
+    ["past Node's timer range", ["extract", "--watch", "--poll", "2147483648"], "between 10 and 2147483647"],
+    ["under the 10 ms floor", ["extract", "--watch", "--poll", "5"], "between 10 and 2147483647"],
+  ])("exits 2 with usage for --poll %s", (_label, args, reason) => {
+    const run = spawnSync(execPath, cliFromSource(...args), { cwd: root, encoding: "utf8", timeout: 10_000 });
+    expect([run.status, run.stderr.split("\n")[0]]).toEqual([2, expect.stringContaining(reason)]);
   });
 
   it("exits 0 on SIGINT", async () => {

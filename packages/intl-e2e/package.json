@@ -9,7 +9,7 @@
     "clean": "git clean -xdf .turbo node_modules test-results playwright-report fixtures/*/node_modules fixtures/*/.next* fixtures/*/.output* fixtures/*/.nitro fixtures/*/.tanstack",
     "ci:checks": "pnpm type-check",
     "e2e": "node scripts/e2e.ts",
-    "type-check": "tsrs --noEmit -p fixtures/next && tsrs --noEmit -p fixtures/start && tsrs --noEmit"
+    "type-check": "tsrs --noEmit -p fixtures/next --customConditions null && tsrs --noEmit -p fixtures/start --customConditions null && tsrs --noEmit"
   },
   "devDependencies": {
     "@elmeragroup/intl": "workspace:*",

@@ -150,7 +150,7 @@ export function loadConfig(
   };
 }
 
-const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/;
+const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/u;
 
 /**
  * Load the app's `formats` from the module the config names. Node loads it (type stripping for TypeScript), so the
@@ -287,7 +287,7 @@ function evaluateFormats(path: string): Evaluated {
 function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
   if (status !== 0) {
     // The error line, not Node's stack and source excerpt around it.
-    const reason = stderr.split("\n").find((line) => /^\w*Error\b/.test(line)) ?? stderr.trim();
+    const reason = stderr.split("\n").find((line) => /^\w*Error\b/u.test(line)) ?? stderr.trim();
 
     return { _tag: "FormatsUnloadable", reason };
   }
@@ -337,6 +337,25 @@ export function isProjectSource(config: ProjectConfig, file: string): boolean {
     !segments.includes("node_modules") &&
     config.include.some((pattern) => matchesGlob(path, pattern)) &&
     !candidates.some((candidate) => config.exclude.some((pattern) => matchesGlob(candidate, pattern)))
+  );
+}
+
+/**
+ * Whether a directory holds no project source: it is or lies in `node_modules`, or the config excludes it (as
+ * `isProjectSource` and the extract walk prune it).
+ *
+ * @param config - The project config.
+ * @param directory - An absolute directory path.
+ * @returns `true` when nothing under the directory can be a project source.
+ */
+export function isExcludedDirectory(config: ProjectConfig, directory: string): boolean {
+  const path = relative(config.root, directory).split(sep).join("/");
+  const segments = path.split("/");
+  const candidates = segments.map((_, index) => `${segments.slice(0, index + 1).join("/")}/`);
+
+  return (
+    segments.includes("node_modules") ||
+    candidates.some((candidate) => config.exclude.some((pattern) => matchesGlob(candidate, pattern)))
   );
 }
 
@@ -403,7 +422,7 @@ export function scanProject(
       fix: `fix or remove the pattern in ${CONFIG_FILE}`,
       file: CONFIG_FILE,
     }));
-  const files = [...new Set(matches.flatMap(({ files }) => files))].toSorted();
+  const files = [...new Set(matches.flatMap((match) => match.files))].toSorted();
   const problems: Array<Problem> = [];
   const byKey = new Map<
     string,

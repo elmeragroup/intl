@@ -37,26 +37,34 @@
   },
   "exports": {
     "./oxlint": {
+      "elmera-source": "./src/oxlint.ts",
       "types": "./dist/oxlint.d.ts",
       "import": "./dist/oxlint.js"
     },
     "./vitest": {
+      "elmera-source": "./src/vitest.ts",
       "types": "./dist/vitest.d.ts",
       "import": "./dist/vitest.js"
     },
     "./vite": {
+      "elmera-source": "./src/vite.ts",
       "types": "./dist/vite.d.ts",
       "import": "./dist/vite.js"
     },
     "./next": {
+      "elmera-source": "./src/next.ts",
       "types": "./dist/next.d.ts",
       "default": "./dist/next.js"
     },
     "./compile": {
+      "elmera-source": "./src/compile.ts",
       "types": "./dist/compile.d.ts",
       "import": "./dist/compile.js"
     },
     "./po": {
+      "elmera-source": {
+        "types": "./po.d.ts"
+      },
       "types": "./po.d.ts"
     }
   },

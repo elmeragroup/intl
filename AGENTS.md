@@ -15,17 +15,17 @@ behavior.
   the `elmera-intl/extractable` lint rule and the Vitest catalog check. Public.
 - `packages/intl-e2e` holds the Next.js and TanStack Start fixture apps and their Playwright gates.
   Private; nothing depends on it, so its framework dependencies stay out of consumers' installs.
-- `apps/*` holds deployable apps, such as a future docs site shipped as a container image
-  (see [Docs site](#docs-site)). Private.
 - `tooling/typescript` contains the shared TypeScript configuration.
+- `tooling/lint` holds this workspace's own contracts as lint: the `elmera-workspace` oxlint plugin
+  and the manifest test for what lives in JSON and YAML. Private.
 - `scripts` contains workspace scripts: the PR title check and the release script
   (`scripts/release.ts`, run by `.github/workflows/publish-release.yml` and
   `version-packages.yml`, and by maintainers for `promote`).
 
-Keep the dependency direction `intl-e2e`, `apps/*` → `intl-tools` → `intl`. The runtime never
-imports the tools; the tools reach the runtime's serializer, catalog codec and formatter through its
-`/internal/*` subpaths. Both published packages are self-contained: they import no other
-`@elmeragroup` package, which lint enforces, so a consumer installs nothing else of ours.
+Keep the dependency direction `intl-e2e` → `intl-tools` → `intl`
+(`elmera-workspace/import-boundaries`). The tools reach the runtime's serializer, catalog codec and
+formatter through its `/internal/*` subpaths. Both published packages are self-contained: they import
+no other `@elmeragroup` package, so a consumer installs nothing else of ours.
 
 ## Setup and checks
 
@@ -36,12 +36,13 @@ belong in the catalog in `pnpm-workspace.yaml`, pinned exactly; use `catalog:`, 
 
 The workspace type-checks with `tsrs`, a Rust port of the TypeScript 7 compiler that follows
 TypeScript 7.1. `typescript` stays installed for tsdown and the frameworks' own type generation.
-Type-aware Oxlint runs on tsrs too: the lint scripts set
-`OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint`, so run Oxlint through `pnpm lint` or with that
-variable set. Type-aware rules read both packages' `dist`, and the `elmera-intl` plugin (the
-`elmera-intl/extractable` rule, loaded from `packages/intl-tools/src/oxlint.ts` and applied to the e2e
-fixtures) imports the runtime's `dist`, so `pnpm lint` builds both packages first; `pnpm lint:oxlint`
-runs Oxlint alone. Development needs macOS or Linux.
+Type-aware Oxlint runs on tsrs too. Lint and type-check read source, never `dist`: every
+workspace export map has an `elmera-source` condition pointing at `src`, which `tooling/typescript`
+enables for TypeScript and the lint script passes to Node (`--conditions=elmera-source`) for the
+plugins Oxlint loads from source. Run Oxlint through `pnpm lint`, which sets that and
+`OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint`; neither needs a build. The e2e fixtures'
+`type-check` drops the condition (`--customConditions null`) to read the built declarations, as
+consumers do. Development needs macOS or Linux.
 
 Run commands from the repository root unless stated otherwise.
 
@@ -72,22 +73,22 @@ Report the checks run and any failures or checks you could not complete, as the 
 ## Code conventions
 
 Follow `.oxlintrc.json`, `.oxfmtrc.json` and the shared TypeScript configuration. Use strict types,
-separate type imports and kebab-case filenames. Lint runs with `--deny-warnings`, so warnings fail
-the check too. Use the formatter for layout and import ordering.
+separate type imports and kebab-case filenames. Every configured rule is an error, never `warn`, and
+every rule turned off carries a comment naming the contract it conflicts with (the manifest test
+checks both). Use the formatter for layout and import ordering; lint enables no layout rule.
 
 Fix the underlying issue before adding a lint exception. Every disable carries a `--` reason that
 names the contract it guards (`elmera/require-disable-reason`), and lint reports unused disables as
 errors. Use a `SAFETY:` comment where the assertion rule requires it. A file-scoped override in
 `.oxlintrc.json` carries a comment that says why the file is the boundary that needs it.
 
-Name things by [ADR 0002](packages/intl/docs/adr/0002-naming.md): the instance is an
-`IntlInstance` held in `intl`, the formatter is `format`, `use*` hooks, `get*` server-only async,
-`create*` factories, `compile*` build-time compilers, and the `elmera-` prefix in global namespaces.
-
-Put implementation rationale beside its owner. Record a decision that shapes the public API, the
-catalog format or the extraction contract as an ADR in the owning package's `docs/adr/`. Track
-unresolved work as GitHub issues, never in a backlog file, and cite the issue where code points at
-open work.
+There are no ADRs. A contract is enforced by a lint rule where lint can see it, because that is
+the fastest feedback, and otherwise by a test; its rationale lives beside its owner in code. The
+`elmera-workspace/*` rules in `tooling/lint` hold naming, the public surface, import boundaries,
+global names and side-effect-free modules, each failing with its fix, and
+`tooling/lint/test/workspace.test.ts` holds the manifests, the catalog and `.oxlintrc.json`. A new
+contract gets a rule or a test there, not a paragraph here. Track unresolved work as GitHub issues,
+never in a backlog file, and cite the issue where code points at open work.
 
 ## Tests
 
@@ -96,9 +97,9 @@ Every new or changed test passes the authoring gate in
 PR's Test value section. A fix gets a test only when one passes the gate.
 
 Assert behavior against an independently defined oracle: next-intl's hand-written expected output,
-`IntlMessageFormat` itself, the public-surface table in ADR 0002, a committed fixture, or a value the
-test states for a reason it gives. A test that computes its expectation with the code under test, or
-asserts what its own mock returns, is a tautology. A cross-check between two representations that
+`IntlMessageFormat` itself, a package's committed `test/public-surface.json`, a committed fixture,
+or a value the test states for a reason it gives. A test that computes its expectation with the
+code under test, or asserts what its own mock returns, is a tautology. A cross-check between two representations that
 must agree names both: the unit under test and the oracle its output must reproduce.
 
 A test that flakes is made deterministic or deleted in the same change, never rerun or retried;
@@ -115,6 +116,7 @@ Each kind of test lives with its owner:
   type-check runs and never executes.
 - Tools behavior, the extraction ↔ runtime differential corpus, the serializer fuzz and the lint
   rule's RuleTester cases: `packages/intl-tools/test/`.
+- The workspace's own lint rules (RuleTester cases) and manifest checks: `tooling/lint/test/`.
 - Public surface and client bundle boundary: each package's `public-surface.test.ts` and
   `packages/intl/test/bundle-boundary.test.ts`, against the built packages.
 - Host integration as consumers get it: `packages/intl-e2e`, whose script builds each fixture app on
@@ -133,10 +135,10 @@ included: the runtime's covers next-intl's relative-time rules and intl-messagef
 `type-fest` and `@types/json-schema` declarations inlined into `dist/oxlint.d.ts`. Code copied or
 bundled from another project gets an entry there (check the `//#region` paths in `dist` after a
 dependency or bundling change), or beside the files when only tests carry it
-(`test/conformance/LICENSE-next-intl`). Every runtime export
-is listed in ADR 0002's public-surface table and checked against the built package; change both
-together. `/internal/*` exists for the tools and carries no semver promise. Keep module
-initialization side-effect free (`"sideEffects": false`), so consumers can drop unused exports.
+(`test/conformance/LICENSE-next-intl`). Every runtime export is listed in its package's
+`test/public-surface.json`, which lint checks against `src` and the public-surface test against the
+built package; change both together. `/internal/*` exists for the tools and carries no semver
+promise.
 
 Bundle with tsdown and emit declarations from `src` only. Keep runtime dependencies pinned and few:
 the browser-facing runtime ships no ICU parser, and G7 proves it.
@@ -145,8 +147,8 @@ the browser-facing runtime ships no ICU parser, and G7 proves it.
 
 The workspace grows by package, not by folders inside one. A new workspace package:
 
-1. Lives in `packages/<name>` (a library or test harness) or `apps/<name>` (a deployable app), with
-   a kebab-case directory and an `@elmeragroup/<name>` name for libraries.
+1. Lives in `packages/<name>` (a library or test harness) or `tooling/<name>` (workspace tooling),
+   with a kebab-case directory and an `@elmeragroup/<name>` name.
 2. Extends a preset from `tooling/typescript` (`base.json`, `react-library.json`, `nextjs.json`,
    `internal-package.json`) and declares `tsrs` and `typescript` as `catalog:` dev dependencies.
 3. Defines the scripts turbo runs, as applicable: `build`, `dev`, `type-check`, `tcw`, `test`,
@@ -155,19 +157,11 @@ The workspace grows by package, not by folders inside one. A new workspace packa
    the root's and lists `^build` again.
 4. Takes every dependency from the catalog. A new catalog entry is an exact version past
    `minimumReleaseAge`.
-5. If published: has `"sideEffects": false`, an explicit `exports` map with `types` first, a
-   `files` allowlist, a README, a public-surface test, a place in the changeset `fixed` group, and
-   coverage in the e2e packed pass.
-6. Gets a line under [Package responsibilities](#package-responsibilities) and in the README.
-
-## Docs site
-
-A docs site, when it lands, is a Next.js app in `apps/docs` built into a container image, as Fuse's
-docs are: a root-context `apps/docs/Dockerfile` (`.dockerignore` is ready), a
-`.github/actions/push-docs-image` action that pushes a SHA-tagged image to the Azure Container
-Registry, a `deploy-prod` job in `merge.yml` after the checks on `main`, and a `preview.yml` that
-deploys one revision per PR and tears it down on close. Its pages render the packages from the
-workspace, so the site documents the code it ships with. Its own e2e specs run in the e2e job.
+5. Maps every `exports` subpath to its source under the `elmera-source` condition, listed first.
+6. If published: has `"sideEffects": false`, `types` first after the source condition, a `files`
+   allowlist, a README, a `test/public-surface.json` and the test that reads it, a place in the
+   changeset `fixed` group, and coverage in the e2e packed pass. The manifest test checks these.
+7. Gets a line under [Package responsibilities](#package-responsibilities) and in the README.
 
 ## Task references
 

@@ -63,7 +63,7 @@ export function parsePo(text: string): { readonly _tag: "Parsed"; readonly file:
 const FLAG_LINE = "#, ";
 const OBSOLETE = "#~";
 const FUZZY = "fuzzy";
-const KEYWORD = /^msg\w*/;
+const KEYWORD = /^msg\w*/u;
 
 // po-parser ends an entry only at a blank line, reads a comment-only block as a broken entry, gives an entry only its
 // last `#,` line, and gives an obsolete (`#~`) entry's comments to the next entry. GNU msgcat ends an entry where the
@@ -75,7 +75,7 @@ function toParserDialect(text: string): string {
   let comments: Array<string> = [];
   let keyword: string | undefined;
 
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/u)) {
     const trimmed = line.trim();
 
     if (trimmed.startsWith(OBSOLETE)) {

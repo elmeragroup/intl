@@ -28,10 +28,10 @@ export const VALUE_TRANSPARENT: ReadonlySet<string> = new Set(["ParenthesizedExp
 /** `VALUE_TRANSPARENT` and `await`: awaiting a translator or an IntlInstance (or a factory's promise of one) yields it. */
 export const AWAIT_TRANSPARENT: ReadonlySet<string> = new Set([...VALUE_TRANSPARENT, "AwaitExpression"]);
 
-const PACKAGE_SPECIFIER = /^@elmeragroup\/intl(\/.*)?$/;
+const PACKAGE_SPECIFIER = /^@elmeragroup\/intl(\/.*)?$/u;
 // An npm package or a Node builtin. Relative, aliased (`@/`, `~/`, `#`) and workspace (`@elmeragroup/`) modules may export
 // an IntlInstance, so their imports stay untraced.
-const FOREIGN_SPECIFIER = /^(?:node:|(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$))/i;
+const FOREIGN_SPECIFIER = /^(?:node:|(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$))/iu;
 const WORKSPACE_SCOPE = "@elmeragroup/";
 // Values written in the file that hold no other value: a primitive is data; a function or class is code, so passing one
 // to a call may make the call return anything (`useMemo(make, [])`).
@@ -345,9 +345,9 @@ export class Bindings {
 
     // Provisional while resolving, so a self-referencing initializer ends instead of recursing.
     this.kinds.set(binding, "other");
-    const kinds = binding.declarations.map((declaration) => this.kindOfDeclaration(declaration));
+    const kinds = new Set(binding.declarations.map((declaration) => this.kindOfDeclaration(declaration)));
     // A redeclared `var` holds any of its initializers: the strongest kind counts.
-    const kind = kinds.includes("t") ? "t" : kinds.includes("intl") ? "intl" : "other";
+    const kind = kinds.has("t") ? "t" : kinds.has("intl") ? "intl" : "other";
     this.kinds.set(binding, kind);
 
     return kind;
@@ -400,7 +400,7 @@ function isNpm(root: Root): boolean {
 
 // Whether a pattern has a default anywhere.
 function hasDefault(node: Node): boolean {
-  return node.type === "AssignmentPattern" || childNodes(node).some(hasDefault);
+  return node.type === "AssignmentPattern" || childNodes(node).some((child) => hasDefault(child));
 }
 
 // The one `const x = …` declaration an identifier refers to.

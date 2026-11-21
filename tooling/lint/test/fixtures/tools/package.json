@@ -1,0 +1,11 @@
+{
+  "name": "@elmeragroup/intl-tools",
+  "description": "Fixture: the published tools package, as the rules read one.",
+  "dependencies": {
+    "@elmeragroup/intl": "1.0.0",
+    "oxc-parser": "1.0.0"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.0.0"
+  }
+}

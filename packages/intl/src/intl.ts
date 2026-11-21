@@ -13,7 +13,11 @@ export type { Catalog } from "./catalog";
 export type { Format, RelativeTimeOptions } from "./format";
 export type { CompiledAst, Formats, MessageValue, RichValues } from "./icu";
 
-/** What an `IntlInstance` is built from. Serializable, so a server can hand it to a client provider. */
+/**
+ * What an `IntlInstance` is built from. Serializable, so a server can hand it to a client provider. A field takes
+ * next-intl's name where it means what next-intl's does (`locale`, `timeZone`, `formats`), so an app moving off
+ * next-intl passes the same value under the same name.
+ */
 export type IntlConfig = {
   /** Opaque locale id, passed to `Intl` as is. */
   readonly locale: string;
@@ -153,17 +157,17 @@ export function msg<const M extends string>(
 export class MessageNotExtracted extends Error {
   /** The error's tag. */
   readonly _tag = "MessageNotExtracted" as const;
+  /** The English ICU source. */
+  readonly source: string;
 
   /**
    * Name the source.
    *
    * @param source - The English ICU source.
    */
-  constructor(
-    /** The English ICU source. */
-    readonly source: string
-  ) {
+  constructor(source: string) {
     super(`not extracted yet: ${JSON.stringify(source)}; run \`elmera-intl extract\``);
+    this.source = source;
   }
 }
 

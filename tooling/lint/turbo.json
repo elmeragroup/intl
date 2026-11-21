@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The manifest test reads the root configs and every package's manifest, outside this package's files, and runs in
+    // about a second: never cached, so it cannot pass on a stale hash.
+    "test:run": {
+      "cache": false
+    },
+    "ci:checks": {
+      "cache": false
+    }
+  }
+}

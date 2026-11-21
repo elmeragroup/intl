@@ -2,9 +2,9 @@
 import { getIntl } from "@elmeragroup/intl/server";
 
 export async function receiverForms(): Promise<ReadonlyArray<string>> {
-  const i = await getIntl();
+  const intl = await getIntl();
 
   // oxfmt-ignore
   // oxlint-disable-next-line typescript/dot-notation, typescript/no-unnecessary-condition -- the computed key and the optional call are forms under test
-  return [i.t("Form dot"), i.t?.("Form optional"), (i.t)("Form paren"), i["t"]("Form computed")];
+  return [intl.t("Form dot"), intl.t?.("Form optional"), (intl.t)("Form paren"), intl["t"]("Form computed")];
 }

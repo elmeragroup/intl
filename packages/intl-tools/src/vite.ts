@@ -11,7 +11,11 @@ import { describeProblem, runCli } from "./cli-run";
 import { compileCatalog } from "./compile";
 import { catalogLocale, catalogPath, CONFIG_FILE, loadConfig, loadFormats } from "./project";
 import type { ProjectWatcher } from "./watch";
-import { nearestExisting, watchProject } from "./watch";
+import type { WatchMode } from "./watch";
+import { MAX_POLL_MS, MIN_POLL_MS, nearestExisting, pollEvery, watchProject } from "./watch";
+
+// chokidar's default interval, which Vite's `server.watch` passes on when polling sets none.
+const DEFAULT_POLL_MS = 100;
 
 /** Options for `intl()`. */
 export type IntlPluginOptions = {
@@ -48,15 +52,37 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
           return;
         }
 
-        watcher = watchProject(loaded.config, (result) => {
-          if (result._tag === "Written") {
-            logger.info(`${NAME}: wrote ${result.files.map((file) => relative(root, file)).join(", ")}`);
-          } else if (result._tag === "Failed") {
-            result.problems.forEach((problem) => {
-              logger.error(describeProblem(problem));
-            });
-          }
-        });
+        // The dev server's own watch setting: an app that polls (`server.watch.usePolling`) polls here too.
+        const { watch: serverWatch } = server.config.server;
+        const polled =
+          serverWatch?.usePolling === true ? pollEvery(serverWatch.interval ?? DEFAULT_POLL_MS) : undefined;
+
+        if (polled?._tag === "PollIntervalOutOfRange") {
+          logger.error(
+            `${NAME}: server.watch.interval ${polled.intervalMs} is outside ${MIN_POLL_MS} to ${MAX_POLL_MS} ms; polling every ${DEFAULT_POLL_MS} ms`
+          );
+        }
+
+        const mode: WatchMode =
+          polled === undefined
+            ? { _tag: "native" }
+            : polled._tag === "PollIntervalOutOfRange"
+              ? { _tag: "poll", intervalMs: DEFAULT_POLL_MS }
+              : polled;
+        watcher = watchProject(
+          loaded.config,
+          (result) => {
+            if (result._tag === "Written") {
+              logger.info(`${NAME}: wrote ${result.files.map((file) => relative(root, file)).join(", ")}`);
+            } else if (result._tag === "Failed") {
+              result.problems.forEach((problem) => {
+                logger.error(describeProblem(problem));
+              });
+            }
+          },
+          undefined,
+          mode
+        );
       },
       async closeBundle() {
         await watcher?.close();
@@ -73,7 +99,7 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
         const outputs = builds.map(({ outDir }) => {
           const output = canonical(resolve(root, outDir));
 
-          return new RegExp(`^${RegExp.escape(output)}(?:${RegExp.escape(sep)}|$)`);
+          return new RegExp(`^${RegExp.escape(output)}(?:${RegExp.escape(sep)}|$)`, "u");
         });
         builds.forEach((build) => {
           if (build.watch) {

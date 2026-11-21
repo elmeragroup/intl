@@ -6,8 +6,8 @@ import type { Plugin, Rule } from "@oxlint/plugins";
 
 import { extractMessages } from "./extract.ts";
 
-const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
-const DECLARATION_FILE = /\.d\.[cm]?ts$/;
+const SCRIPT_FILE = /\.[cm]?[jt]sx?$/u;
+const DECLARATION_FILE = /\.d\.[cm]?ts$/u;
 
 /** Reports every use of the package that extraction cannot resolve, at the source position the extractor names. */
 const extractable: Rule = {

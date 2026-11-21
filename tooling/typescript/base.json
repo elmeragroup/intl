@@ -21,7 +21,10 @@
     "strict": true,
     "strictNullChecks": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["node"]
+    "types": ["node"],
+    // The workspace packages' export maps carry an `elmera-source` condition that points at src, so type-check and
+    // type-aware lint read the source of every workspace package without building it first.
+    "customConditions": ["elmera-source"]
   },
   "exclude": ["node_modules"]
 }

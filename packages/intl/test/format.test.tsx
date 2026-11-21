@@ -43,9 +43,9 @@ function appCalls(format: Format): ReadonlyArray<string> {
 describe("format", () => {
   it.each([
     ["en", "March 5, 2026 at 12:30:00 AM", "1,234.567891"],
-    ["no", "5. mars 2026 kl. 00:30:00", "1\u00a0234,567891"],
-    ["sv", "5 mars 2026 kl. 00:30:00", "1\u00a0234,567891"],
-    ["fi", "5. maaliskuuta 2026 klo 0.30.00", "1\u00a0234,567891"],
+    ["no", "5. mars 2026 kl. 00:30:00", "1\u00A0234,567891"],
+    ["sv", "5 mars 2026 kl. 00:30:00", "1\u00A0234,567891"],
+    ["fi", "5. maaliskuuta 2026 klo 0.30.00", "1\u00A0234,567891"],
   ])("renders the adopting app's named formats in %s as next-intl renders them", (locale, long, currency) => {
     const format = formatIn(locale, OSLO);
 
@@ -105,7 +105,7 @@ describe("format", () => {
     const server = appCalls(await getFormat());
 
     expect({ client, server }).toEqual({
-      client: ["5. mars 2026 kl. 00:30:00", "00:30", "1\u00a0234,567891", "a, b og c", "for 2 timer siden"],
+      client: ["5. mars 2026 kl. 00:30:00", "00:30", "1\u00A0234,567891", "a, b og c", "for 2 timer siden"],
       server: client,
     });
   });

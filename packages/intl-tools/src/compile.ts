@@ -1,5 +1,6 @@
 // The one catalog compiler: PO text and a locale in, the runtime's compiled catalog out. The Turbopack and Vite
-// loaders, `loadCatalog` and `check` all call `compileCatalog`, so dev, build, tests and scripts compile alike.
+// loaders, `loadCatalog` and `check` all call `compileCatalog`, so dev, build, tests and scripts compile alike, and
+// nothing is written to disk: the PO is the only checked-in catalog, so no task needs a generate step ordered first.
 //
 // The artifact is validated, not the parse: every emitted entry goes through JSON as it ships, decodes back to the
 // parsed AST, and is dry-formatted from the decoded form through the runtime's own `formatAst` (node pass, then branch
@@ -267,11 +268,19 @@ const NUMBER_SAMPLES: ReadonlyArray<number | bigint> = [1234567.5, 0, -1, 12n];
 // Candidate differences (value minus offset) for a plural category, smallest magnitude first: integers, decimals, then
 // the magnitudes only some categories take (French `many` is 1e6 and its multiples), several of each so `=N` keys on
 // some cannot use them all up.
-const MULTIPLES = Array.from({ length: 10 }, (_, i) => i + 1);
+const MULTIPLES = /* @__PURE__ */ Array.from({ length: 10 }, (_, i) => i + 1);
 const DIFFERENCES = [
-  ...Array.from({ length: 2001 }, (_, i) => i - 1000).toSorted((a, b) => Math.abs(a) - Math.abs(b)),
-  ...[0.5, 1.5, 2.5, 0.1, 1.1, 0.25, 100.5],
-  ...[1e6, 1e9].flatMap((magnitude) => MULTIPLES.map((multiple) => magnitude * multiple)),
+  .../* @__PURE__ */ Array.from({ length: 2001 }, (_, i) => i - 1000).toSorted(
+    (a, b) => Math.abs(a) - Math.abs(b)
+  ),
+  0.5,
+  1.5,
+  2.5,
+  0.1,
+  1.1,
+  0.25,
+  100.5,
+  .../* @__PURE__ */ [1e6, 1e9].flatMap((magnitude) => MULTIPLES.map((multiple) => magnitude * multiple)),
 ];
 // Inserted at the start of the arm a branch sample targets: rendered only when that arm is the one selected.
 const MARKER = "\u0001arm\u0001";
@@ -608,6 +617,7 @@ function literal(value: string): Element {
 function describe(values: Samples): string {
   return [...values]
     .flatMap(([name, value]) =>
+      // oxlint-disable-next-line unicorn/no-instanceof-builtins -- the samples are built in this module, in this realm
       value instanceof Function
         ? []
         : [`${name}=${value instanceof Date ? value.toISOString() : String(value)}`]

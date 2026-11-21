@@ -2,6 +2,12 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
+    // The fixture apps type-check as consumers do: `--customConditions null` drops the workspace's `elmera-source`
+    // condition, so they read the built declarations (the Next fixture's own build skips type errors). Lint still
+    // reads them through source.
+    "type-check": {
+      "dependsOn": ["^build"]
+    },
     // Builds each fixture on the linked packages, then on the packed ones (scripts/e2e.ts), running the Playwright
     // gates after each.
     // Uncached: the builds are what is under test. The script sets INTL_FIXTURE_RUNTIME per build and server.

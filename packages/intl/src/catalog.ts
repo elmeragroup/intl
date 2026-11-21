@@ -96,7 +96,7 @@ export function makeCatalog(
  * @returns `true` when the source is its own rendering.
  */
 export function isLiteralSource(source: string): boolean {
-  return !/[{}<>']/.test(source);
+  return !/[{}<>']/u.test(source);
 }
 
 /**
@@ -112,7 +112,7 @@ export function encodeAst(ast: ReadonlyArray<MessageFormatElement>): IrNodes {
     return first.value;
   }
 
-  return ast.map(encodeNode);
+  return ast.map((element) => encodeNode(element));
 }
 
 function encodeOptions(options: Element<typeof SELECT>["options"]): IrOptions {
@@ -163,7 +163,9 @@ function encodeNode(element: MessageFormatElement): IrNode {
  * @returns The AST.
  */
 export function decodeAst(nodes: IrNodes): Array<MessageFormatElement> {
-  return typeof nodes === "string" ? [{ type: LITERAL, value: nodes }] : nodes.map(decodeNode);
+  return typeof nodes === "string"
+    ? [{ type: LITERAL, value: nodes }]
+    : nodes.map((node) => decodeNode(node));
 }
 
 function decodeOptions(options: IrOptions): Element<typeof SELECT>["options"] {

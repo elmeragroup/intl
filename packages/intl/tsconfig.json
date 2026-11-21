@@ -6,16 +6,10 @@
     "verbatimModuleSyntax": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
-    // Tests import the package by name, as an app would; map it to source so no build is needed first.
+    // The elmera-intl lint plugin loads src/message.ts from source by Node's type stripping (the `elmera-source`
+    // condition), so the runtime's source is erasable.
+    "erasableSyntaxOnly": true,
     "paths": {
-      "@elmeragroup/intl/core": ["./src/core.ts"],
-      "@elmeragroup/intl/internal/message": ["./src/message.ts"],
-      "@elmeragroup/intl/internal/icu": ["./src/icu.ts"],
-      "@elmeragroup/intl/internal/formatter": ["./src/formatter.ts"],
-      "@elmeragroup/intl/internal/catalog": ["./src/catalog.ts"],
-      "@elmeragroup/intl/react": ["./src/react.tsx"],
-      "@elmeragroup/intl/internal/react-client": ["./src/react.tsx"],
-      "@elmeragroup/intl/server": ["./src/server.ts"],
       // The tests' catalogs come from intl-tools' compiler (vitest.config.ts aliases it the same way).
       "#compile": ["../intl-tools/src/compile.ts"]
     }

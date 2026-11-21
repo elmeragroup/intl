@@ -218,7 +218,7 @@ function toElementNode(
         }
 
         if (typeof form !== "string") {
-          throw new Error(`<Plural ${key}> needs a string literal form`);
+          throw new TypeError(`<Plural ${key}> needs a string literal form`);
         }
 
         return [[key, form]];
@@ -256,7 +256,7 @@ function selectNode(element: ReactElement<ElementProps>, name: string): MessageN
     }
 
     if (typeof text !== "string") {
-      throw new Error(`<Select ${key}> needs a string literal branch`);
+      throw new TypeError(`<Select ${key}> needs a string literal branch`);
     }
 
     if (prop._tag === "Other") {
@@ -299,7 +299,7 @@ function singleArg(
   const [name, value] = entry;
 
   if (typeof value !== "string" && typeof value !== "number") {
-    throw new Error(`<${component} ${name}> needs a string or number value`);
+    throw new TypeError(`<${component} ${name}> needs a string or number value`);
   }
 
   return [name, value];

@@ -494,6 +494,8 @@ describe("extractor and runtime agree", () => {
     expect(
       extracted._tag === "Extracted" ? extracted.messages.map((m) => m.key) : extracted.failures
     ).toEqual(expected);
-    expect(await runtimeKeys(i, row.code)).toEqual(("keys" in row ? row.keys : row.misses).map(hashKey));
+    expect(await runtimeKeys(i, row.code)).toEqual(
+      ("keys" in row ? row.keys : row.misses).map((key) => hashKey(key))
+    );
   });
 });

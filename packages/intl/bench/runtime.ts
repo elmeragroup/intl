@@ -1,7 +1,8 @@
 import type * as Compile from "#compile";
-// Benchmark, not a test: per-request translation cost over a compiled catalog and the client formatter's size, for the
-// ADRs. Run `pnpm bench` from the repository root, which builds both packages first; it reads the built runtime
-// through its exports and the built compiler by path (intl-tools depends on this package, not the reverse).
+// Benchmark, not a test: per-request translation cost over a compiled catalog and the client formatter's size, the
+// numbers a PR's G9 gate reports. Run `pnpm bench` from the repository root, which builds both packages first; it
+// reads the built runtime through its exports and the built compiler by path (intl-tools depends on this package,
+// not the reverse).
 import { existsSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";

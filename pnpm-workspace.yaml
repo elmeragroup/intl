@@ -1,5 +1,4 @@
 packages:
-  - apps/*
   - packages/*
   - tooling/*
 
@@ -14,6 +13,9 @@ catalog:
   # The version @elmeragroup/internal brings, so one copy installs.
   "@oxlint/plugins": 1.93.0
   "@types/node": 26.6.5
+  # The manifest test's parsers for the JSONC and YAML configs it checks.
+  jsonc-parser: 3.3.1
+  yaml: 2.9.1
   eslint-plugin-turbo: 2.11.10
   oxfmt: 0.78.0
   oxlint: 1.93.0

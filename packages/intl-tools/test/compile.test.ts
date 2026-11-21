@@ -65,7 +65,7 @@ describe("dry-format", () => {
     const [problem, ...others] = problems("no", [{ source, translation: "{n, number, ::currency/NOKK}" }]);
 
     expect([problem?.key, problem?.pass, others]).toEqual([source, "node", []]);
-    expect(problem?.reason).toMatch(/Invalid currency code : NOKK/);
+    expect(problem?.reason).toMatch(/Invalid currency code : NOKK/u);
     expect(problems("no", [{ source, translation: source }])).toEqual([]);
   });
 
@@ -75,7 +75,7 @@ describe("dry-format", () => {
     const [problem, ...others] = problems("no", [{ source, translation: source }]);
 
     expect([problem?.pass, others]).toEqual(["node", []]);
-    expect(problem?.reason).toMatch(/fractional scale 0.5 to bigint/);
+    expect(problem?.reason).toMatch(/fractional scale 0.5 to bigint/u);
   });
 
   // Every fixed sample selects `other` here; only a value whose offset difference is `one` in Finnish reaches the arm.
@@ -88,7 +88,7 @@ describe("dry-format", () => {
     ]);
 
     expect([problem?.pass, others]).toEqual(["node", []]);
-    expect(problem?.reason).toMatch(/Invalid currency code : NOKK/);
+    expect(problem?.reason).toMatch(/Invalid currency code : NOKK/u);
     expect(
       unreachable("fi", [
         { source, translation: "{n, plural, offset:100 one {{n, number}} other {# muuta}}" },
@@ -257,7 +257,7 @@ describe("loadCatalog", () => {
           : result.message;
 
       expect([render("nb", loadCatalog(path)), render("en", loadCatalog(path, "en"))]).toEqual([
-        "1\u00a0234,5 varer",
+        "1\u00A0234,5 varer",
         "1,234.5 items",
       ]);
       expect(loadCatalog(join(dir, "missing.po"))).toMatchObject({

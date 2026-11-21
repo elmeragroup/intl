@@ -295,11 +295,11 @@ describe("time zone", () => {
     "On {d, date, ::yyyyMMdd}",
     "At {d, time, ::Hm}"
   );
-  const oslo = createIntl({ locale: "en", catalog, timeZone: OSLO });
+  const osloIntl = createIntl({ locale: "en", catalog, timeZone: OSLO });
   const lateUtc = new Date("2026-01-01T23:30:00Z");
 
   it("types t values from the literal", () => {
-    expect(oslo.t("Order {id}", { id: "42" })).toBe("Order 42");
+    expect(osloIntl.t("Order {id}", { id: "42" })).toBe("Order 42");
   });
 
   it.each([
@@ -308,7 +308,7 @@ describe("time zone", () => {
     ["On {d, date, ::yyyyMMdd}", "On 01/02/2026"],
     ["At {d, time, ::Hm}", "At 00:30"],
   ] as const)("%s formats in the configured zone", (message, expected) => {
-    expect(oslo.t(message, { d: lateUtc })).toBe(expected);
+    expect(osloIntl.t(message, { d: lateUtc })).toBe(expected);
   });
 
   it("differs in UTC", () => {
@@ -322,7 +322,7 @@ describe("time zone", () => {
 // errors (nb groups with U+00A0 and writes dates d.M.yyyy).
 describe("plain arguments take text", () => {
   const lateUtc = new Date("2026-01-01T23:30:00Z");
-  const en = createIntl({
+  const enIntl = createIntl({
     locale: "en",
     catalog: english(
       "Total {n, number}",
@@ -335,7 +335,7 @@ describe("plain arguments take text", () => {
     ),
     timeZone: OSLO,
   });
-  const nb = createIntl({
+  const nbIntl = createIntl({
     locale: "nb",
     catalog: compiled("nb", { "Total {n, number}": "Totalt {n, number}", "On {d, date}": "Den {d, date}" }),
     timeZone: OSLO,
@@ -351,14 +351,14 @@ describe("plain arguments take text", () => {
       "1,000 items",
     ],
   ] as const)("t.from: %s", (_label, descriptor, values, expected) => {
-    expect(en.t.from(descriptor, values)).toBe(expected);
+    expect(enIntl.t.from(descriptor, values)).toBe(expected);
   });
 
   it("formats in the translation's locale and the configured zone", () => {
     expect([
-      nb.t.from(msg("Total {n, number}"), { n: 1234567.5 }),
-      nb.t.from(msg("On {d, date}"), { d: lateUtc }),
-    ]).toEqual(["Totalt 1\u00a0234\u00a0567,5", "Den 2.1.2026"]);
+      nbIntl.t.from(msg("Total {n, number}"), { n: 1234567.5 }),
+      nbIntl.t.from(msg("On {d, date}"), { d: lateUtc }),
+    ]).toEqual(["Totalt 1\u00A0234\u00A0567,5", "Den 2.1.2026"]);
   });
 
   // A widened descriptor's values are untyped, as any cast or `any` caller's are.
@@ -367,14 +367,14 @@ describe("plain arguments take text", () => {
     ["a Date", lateUtc, 'argument "n" got a Date: plain {n} takes text; use {n, number} or {n, date}'],
   ] as const)("reports %s in a plain translation argument, then throws it", (_label, value, error) => {
     const reports: Array<string> = [];
-    const translated = createIntl({
+    const translatedIntl = createIntl({
       locale: "nb",
       catalog: compiled("nb", { "Total {n}": "Totalt {n}" }),
       timeZone: OSLO,
       onError: (reported, key) => reports.push(`${key}: ${reported.message}`),
     });
     const untyped: Descriptor = msg("Total {n}");
-    expect(() => translated.t.from(untyped, { n: value })).toThrow(error);
+    expect(() => translatedIntl.t.from(untyped, { n: value })).toThrow(error);
     expect(reports).toEqual([`Total {n}: ${error}`]);
   });
 
@@ -382,14 +382,14 @@ describe("plain arguments take text", () => {
   // reports, then throws, like any caller bug.
   it("reports, then throws, when a translation shows a number plainly", () => {
     const reports: Array<string> = [];
-    const translated = createIntl({
+    const translatedIntl = createIntl({
       locale: "nb",
       catalog: compiled("nb", { "Total {n, number}": "Totalt {n}" }),
       timeZone: OSLO,
       onError: (reported) => reports.push(reported.message),
     });
     const error = 'argument "n" got a number: plain {n} takes text; use {n, number} or {n, date}';
-    expect(() => translated.t("Total {n, number}", { n: 1000 })).toThrow(error);
+    expect(() => translatedIntl.t("Total {n, number}", { n: 1000 })).toThrow(error);
     expect(reports).toEqual([error]);
   });
 
@@ -413,34 +413,34 @@ describe("plain arguments take text", () => {
       ["w", undefined],
     ]);
     // @ts-expect-error null and undefined are not message values; an untyped caller still gets text
-    expect(en.t.from(msg("[{v}|{w}]"), values)).toBe("[|]");
+    expect(enIntl.t.from(msg("[{v}|{w}]"), values)).toBe("[|]");
   });
 
   it("never calls a function value (tag renderers are <T>'s alone)", () => {
     const seen: Array<string> = [];
-    const render = (parts: Array<string>) => {
+    const renderTag = (parts: Array<string>) => {
       seen.push(...parts);
 
       return "";
     };
     // @ts-expect-error t's values are message values; an untyped caller's function must not be called
-    expect(() => en.t.from(msg("<x>Hidden</x>"), { x: render })).toThrow();
+    expect(() => enIntl.t.from(msg("<x>Hidden</x>"), { x: renderTag })).toThrow();
     expect(seen).toEqual([]);
   });
 
   it("names a missing plain argument by its own name", () => {
     // @ts-expect-error the value is missing on purpose
-    expect(() => en.t("Hi {name}", {})).toThrow('"name"');
+    expect(() => enIntl.t("Hi {name}", {})).toThrow('"name"');
   });
 
   it("does not require an argument in an unselected ICU branch", () => {
-    expect(en.t("{gender, select, female {She} other {{name}}}", { gender: "female" })).toBe("She");
+    expect(enIntl.t("{gender, select, female {She} other {{name}}}", { gender: "female" })).toBe("She");
   });
 
   it("does not format a value only an unselected branch uses", () => {
     // An invalid Date throws RangeError when formatted.
     expect(
-      en.t("{state, select, pending {Pending} other {Processed on {date, date}}}", {
+      enIntl.t("{state, select, pending {Pending} other {Processed on {date, date}}}", {
         state: "pending",
         date: new Date(""),
       })
@@ -449,7 +449,7 @@ describe("plain arguments take text", () => {
 
   it("names a missing plain argument of the selected branch by its own name", () => {
     // @ts-expect-error the selected branch's name is missing on purpose
-    expect(() => en.t("{gender, select, female {She} other {{name}}}", { gender: "other" })).toThrow(
+    expect(() => enIntl.t("{gender, select, female {She} other {{name}}}", { gender: "other" })).toThrow(
       '"name"'
     );
   });

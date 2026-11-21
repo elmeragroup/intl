@@ -4,12 +4,11 @@
   "ui": "stream",
   "globalEnv": ["NODE_ENV"],
   "tasks": {
-    // Type-aware rules read both packages' dist, and the elmera-intl plugin imports the runtime's dist; the root
-    // package depends on neither, so ^build would not order them. Uncached: Oxlint reads every package's files
+    // Reads source only: type-aware rules and the plugins resolve the workspace packages through their
+    // `elmera-source` export condition, so nothing is built first. Uncached: Oxlint reads every package's files
     // (the e2e fixtures among them), and turbo documents a task's default inputs only as its package's own files.
     "//#lint:oxlint": {
-      "cache": false,
-      "dependsOn": ["@elmeragroup/intl#build", "@elmeragroup/intl-tools#build"]
+      "cache": false
     },
     "//#type-check:scripts": {
       "inputs": ["scripts/**", "tooling/typescript/**"]
@@ -23,13 +22,19 @@
       "persistent": true,
       "dependsOn": ["^build"]
     },
+    // Has no script: it ties a package's hash to its dependencies' files, so a task that reads their source carries
+    // their changes in its cache key without waiting for their tasks.
+    "transit": {
+      "dependsOn": ["^transit"]
+    },
+    // Source only, through the `elmera-source` condition (tooling/typescript/base.json), so it builds nothing; the
+    // dependencies' source it reads is in its hash through transit.
     "type-check": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^transit"]
     },
     "tcw": {
       "cache": false,
-      "persistent": true,
-      "dependsOn": ["^build"]
+      "persistent": true
     },
     "test": {
       "cache": false,

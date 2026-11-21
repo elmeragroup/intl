@@ -8,19 +8,19 @@ import { extractMessages } from "../src/extract";
 const PKG = "@elmeragroup/intl";
 
 function keys(code: string, file = "x.tsx"): Array<string> {
-  const result = extractMessages(file, code);
+  const outcome = extractMessages(file, code);
 
-  if (result._tag === "Failed") {
-    throw new Error(result.failures.map((f) => f.message).join("\n"));
+  if (outcome._tag === "Failed") {
+    throw new Error(outcome.failures.map((f) => f.message).join("\n"));
   }
 
-  return result.messages.map((m) => m.key);
+  return outcome.messages.map((m) => m.key);
 }
 
 function failure(code: string): string {
-  const result = extractMessages("e.tsx", code);
+  const outcome = extractMessages("e.tsx", code);
 
-  return result._tag === "Failed" ? result.failures.map((f) => f.message).join("\n") : "no error";
+  return outcome._tag === "Failed" ? outcome.failures.map((f) => f.message).join("\n") : "no error";
 }
 
 describe("fixtures", () => {
@@ -45,6 +45,7 @@ describe("fixtures", () => {
     const messages = extracted._tag === "Extracted" ? extracted.messages : [];
     const broken = messages.filter((m) => {
       try {
+        // oxlint-disable-next-line no-new -- constructing is the check: it throws on a source that does not compile
         new IntlMessageFormat(m.source, "en");
 
         return false;
@@ -377,11 +378,11 @@ describe("deny by default", () => {
   });
 
   it("points a failure at the source line, not the compiled one", () => {
-    const result = extractMessages(
+    const outcome = extractMessages(
       "p.tsx",
       `${pre}\n\nfunction A() {\n  const t = useT();\n  return helper(t);\n}\n`
     );
-    const positions = result._tag === "Failed" ? result.failures.map((f) => f.position) : [];
+    const positions = outcome._tag === "Failed" ? outcome.failures.map((f) => f.position) : [];
     expect(positions).toEqual([{ line: 6, column: 16 }]);
   });
 });

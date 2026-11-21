@@ -15,6 +15,7 @@
     "oxlint": {
       "binary": {
         "env": {
+          "NODE_OPTIONS": "--conditions=elmera-source",
           "OXLINT_TSGOLINT_PATH": "node_modules/.bin/tsrs-lint"
         }
       },

@@ -71,7 +71,7 @@ function cookieFor(locale: string): string {
 
 // The corpus items of a server-rendered page, without the text separators React's streaming renderer inserts.
 function serverItems(html: string): Array<string> {
-  return [...html.matchAll(/<li data-corpus="\d+">([\s\S]*?)<\/li>/g)].map(([, item = ""]) =>
+  return [...html.matchAll(/<li data-corpus="\d+">([\s\S]*?)<\/li>/gu)].map(([, item = ""]) =>
     item.replaceAll("<!-- -->", "")
   );
 }

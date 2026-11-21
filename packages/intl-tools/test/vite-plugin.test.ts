@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BuildEnvironmentOptions, InlineConfig, Rolldown, ViteDevServer } from "vite";
-import { build, createBuilder, createServer } from "vite";
+import { build, createBuilder, createLogger, createServer } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { Catalog } from "@elmeragroup/intl/core";
@@ -15,6 +15,17 @@ import { intl, intlCatalogs } from "../src/vite";
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 // A hang guard, not a timing assertion: the dev watcher's sync outlasts poll's 1 s default on a loaded machine.
 const HANG_GUARD = { timeout: 10_000 };
+// Every watcher here polls (Rolldown's build watcher and the dev server's, which the plugin's extract watch follows),
+// so a wait ends on the edit, not on the host's file-event daemon (fseventsd on macOS delays or drops events under
+// load). Polling is the same setting an app on such a host uses; the default native events run in the e2e dev loop.
+const POLL_MS = 50;
+// Vite 8.3 builds Rolldown's watcher from `build.watch.chokidar`, which its types no longer declare, and replaces the
+// typed `build.watch.watcher` with it; both are set so the build polls whichever Vite reads.
+const BUILD_WATCH = {
+  watcher: { usePolling: true, pollInterval: POLL_MS },
+  chokidar: { usePolling: true, interval: POLL_MS },
+};
+const SERVER_WATCH = { watch: { usePolling: true, interval: POLL_MS } };
 // Probe writes spaced past the watch's 100 ms debounce, so a rewrite does not postpone the sync it waits for.
 const PROBE = { ...HANG_GUARD, interval: 500 };
 
@@ -66,7 +77,7 @@ function viteConfig(
       write: false,
       lib: { entry: "src/main.ts", formats: ["es"] },
       // The temp project has no node_modules to resolve the runtime from.
-      rolldownOptions: { external: [/^@elmeragroup\/intl/, /^react/] },
+      rolldownOptions: { external: [/^@elmeragroup\/intl/u, /^react/u] },
       ...overrides,
     },
   };
@@ -76,7 +87,7 @@ function viteConfig(
 // environment, each build's BUNDLE_START, BUNDLE_END or error message, in order.
 async function watchBuild(extra: InlineConfig = {}): Promise<Array<Array<string>>> {
   write("src/main.ts", `export { C } from "./page";\n`);
-  const builder = await createBuilder({ ...viteConfig({}, { watch: {}, write: true }), ...extra });
+  const builder = await createBuilder({ ...viteConfig({}, { watch: BUILD_WATCH, write: true }), ...extra });
 
   return Promise.all(
     Object.values(builder.environments).map(async (environment) => {
@@ -170,7 +181,7 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect.poll(() => outcomes, HANG_GUARD).toContain("BUNDLE_END");
 
     write("intl-formats.ts", moneyFormats("NOKK"));
-    await expect.poll(() => outcomes.at(-1), HANG_GUARD).toMatch(/Invalid currency code : NOKK/);
+    await expect.poll(() => outcomes.at(-1), HANG_GUARD).toMatch(/Invalid currency code : NOKK/u);
   });
 
   // The watch covers the project root, where every environment writes its output.
@@ -183,8 +194,8 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       extra: {
         builder: {},
         environments: {
-          client: { build: { outDir: "dist/client", watch: {} } },
-          ssr: { build: { outDir: "dist/server", watch: {} } },
+          client: { build: { outDir: "dist/client", watch: BUILD_WATCH } },
+          ssr: { build: { outDir: "dist/server", watch: BUILD_WATCH } },
         },
       },
     },
@@ -201,12 +212,16 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect.poll(last, HANG_GUARD).toEqual(builds.map(() => "BUNDLE_END"));
     // Rolldown 1.2 runs the repaired build twice back to back, and the first's end looks like the second's, so the
     // idle window starts once the second has had time to land.
-    // oxlint-disable-next-line tests/no-fixed-delay -- Settle: Rolldown's back-to-back second build lands within 1 s and has no distinct event to await.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => {
+      // oxlint-disable-next-line tests/no-fixed-delay -- Settle: Rolldown's back-to-back second build lands within 1 s and has no distinct event to await.
+      setTimeout(resolve, 1000);
+    });
     const built = builds.map((outcomes) => outcomes.length);
     // A rebuild loop restarts within milliseconds of each written bundle.
-    // oxlint-disable-next-line tests/no-fixed-delay -- Absence check: no rebuild may start within 1 s of the repaired builds, and an absence has no event to await.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => {
+      // oxlint-disable-next-line tests/no-fixed-delay -- Absence check: no rebuild may start within 1 s of the repaired builds, and an absence has no event to await.
+      setTimeout(resolve, 1000);
+    });
     expect(builds.map((outcomes, index) => outcomes.slice(built[index]))).toEqual(builds.map(() => []));
   });
 
@@ -244,20 +259,36 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
   // Oracle: Intl rejects the currency "NOKK". A dev server's PO load re-runs on the formats module's save.
   it("loads a catalog with the edited formats module during dev", async () => {
     useMoneyFormats("NOK");
-    server = await createServer({ root, configFile: false, logLevel: "silent", plugins: [intl()] });
-    const load = async () =>
-      server?.ssrLoadModule("/messages/nb.po").then(
-        () => "loaded",
-        (error: Error) => error.message
-      );
+    server = await createServer({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      server: SERVER_WATCH,
+      plugins: [intl()],
+    });
+    const load = async () => {
+      try {
+        await server?.ssrLoadModule("/messages/nb.po");
+
+        return "loaded";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
     await expect(load()).resolves.toBe("loaded");
 
     write("intl-formats.ts", moneyFormats("NOKK"));
-    await expect.poll(load, HANG_GUARD).toMatch(/Invalid currency code : NOKK/);
+    await expect.poll(load, HANG_GUARD).toMatch(/Invalid currency code : NOKK/u);
   });
 
   it("adds a message written during dev to the PO", async () => {
-    server = await createServer({ root, configFile: false, logLevel: "silent", plugins: [intl()] });
+    server = await createServer({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      server: SERVER_WATCH,
+      plugins: [intl()],
+    });
     // fs.watch has no ready signal, and a recursive watch misses an edit made before its stream starts (seen under
     // load). A probe is rewritten until a sync shows the watch is live, so the edit under test lands on a live watch.
     await expect
@@ -269,6 +300,28 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       .toContain(`msgid "Ready"`);
     write("src/new.tsx", component("New"));
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "New"\nmsgstr ""`);
+  });
+
+  // Oracle: the poll interval contract (10 ms to Node's timer maximum): the dev server's interval feeds the same
+  // poller as `--poll`, so one out of range is reported, and the watch polls at the default instead.
+  it("reports a dev server poll interval out of range and polls at the default", async () => {
+    const errors: Array<string> = [];
+    server = await createServer({
+      root,
+      configFile: false,
+      customLogger: {
+        ...createLogger("silent"),
+        error: (message) => {
+          errors.push(message);
+        },
+      },
+      server: { watch: { usePolling: true, interval: 1 } },
+      plugins: [intl()],
+    });
+    write("src/new.tsx", component("New"));
+    await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "New"\nmsgstr ""`);
+
+    expect(errors).toEqual([expect.stringContaining("server.watch.interval 1 is outside 10 to 2147483647")]);
   });
 });
 
@@ -325,7 +378,7 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     const render = (locale: string, catalog: Catalog) => createIntl({ locale, catalog, timeZone: "UTC" });
 
     expect([render("nb", nb).t(COUNT, { n: 1234.5 }), render("nb", nb).t("Hello")]).toEqual([
-      "1\u00a0234,5 varer",
+      "1\u00A0234,5 varer",
       "Hei",
     ]);
     expect(render("en", en).t(COUNT, { n: 1234.5 })).toBe("1,234.5 items");
@@ -341,7 +394,7 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     );
 
     await expect(buildCatalogs(`export { default } from "../messages/nb.po";\n`)).rejects.toThrow(
-      /\[node\] "\{n, number\} items": .*NOKK/
+      /\[node\] "\{n, number\} items": .*NOKK/u
     );
   });
 
@@ -361,7 +414,7 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
 
     write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
     await expect(buildCatalogs(entry)).rejects.toThrow(
-      /"\{n, number, money\}": Invalid currency code : NOKK/
+      /"\{n, number, money\}": Invalid currency code : NOKK/u
     );
   });
 

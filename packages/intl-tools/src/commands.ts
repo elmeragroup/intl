@@ -75,11 +75,11 @@ export type ExtractResult = Omit<CommandReport, "written" | "unreachable"> & {
  * @param options - Merge mode and parse cache; by default a full sync that drops unused entries.
  * @returns The problems (if any), the message count and the files written.
  */
-export function runExtract(
-  config: ProjectConfig,
-  options: ExtractOptions = { unused: "drop", cache: new Map(), concurrentSave: "overwrite" }
-): CommandReport {
-  const { problems, messages, written } = extractCatalogs(config, options);
+export function runExtract(config: ProjectConfig, options?: ExtractOptions): CommandReport {
+  const { problems, messages, written } = extractCatalogs(
+    config,
+    options ?? { unused: "drop", cache: new Map(), concurrentSave: "overwrite" }
+  );
 
   return { problems, messages, written: written.map(({ path }) => path), unreachable: [] };
 }
@@ -205,9 +205,11 @@ export function runCheck(config: ProjectConfig): CommandReport {
   }
 
   const sources = scanned.messages.map((message) => ({ message, slots: messageSlots(message.source, "en") }));
-  const problems: Array<Problem> = [...scanned.unmatched];
-  problems.push(...keyCollisions(scanned.messages));
-  problems.push(...sources.flatMap(({ message, slots }) => checkSource(message, slots)));
+  const problems: Array<Problem> = [
+    ...scanned.unmatched,
+    ...keyCollisions(scanned.messages),
+    ...sources.flatMap(({ message, slots }) => checkSource(message, slots)),
+  ];
   for (const locale of config.locales) {
     problems.push(...checkLocale(config, locale, sources));
   }

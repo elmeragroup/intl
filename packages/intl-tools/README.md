@@ -1,6 +1,6 @@
 # @elmeragroup/intl-tools
 
-Build-time tools for [`@elmeragroup/intl`](../intl/README.md): the deny-by-default extractor, the `elmera-intl` CLI that writes and checks PO catalogs, the catalog compiler and the loaders that run it on `*.po` imports (Next, Vite, Node), the `elmera-intl/extractable` oxlint rule and a Vitest global setup. Everything here parses source or ICU, so none of it ships to a browser. It shares the runtime's serializer, wire-key hash and catalog codec (`/internal/*`), so the extracted keys are the runtime's keys and a catalog that checks compiles and formats as the runtime will. Why the shape: [ADR 0003](../intl/docs/adr/0003-compiled-catalogs.md).
+Build-time tools for [`@elmeragroup/intl`](../intl/README.md): the deny-by-default extractor, the `elmera-intl` CLI that writes and checks PO catalogs, the catalog compiler and the loaders that run it on `*.po` imports (Next, Vite, Node), the `elmera-intl/extractable` oxlint rule and a Vitest global setup. Everything here parses source or ICU, so none of it ships to a browser. It shares the runtime's serializer, wire-key hash and catalog codec (`/internal/*`), so the extracted keys are the runtime's keys and a catalog that checks compiles and formats as the runtime will.
 
 ## Extraction contract (deny-by-default)
 
@@ -37,7 +37,7 @@ Residuals (not caught):
 
 ## CLI
 
-`elmera-intl extract | check [--json] [--config <path>]` and `elmera-intl extract --watch [--config <path>]`, configured by `elmera-intl.json` in the working directory:
+`elmera-intl extract | check [--json] [--config <path>]` and `elmera-intl extract --watch [--poll <ms>] [--config <path>]`, configured by `elmera-intl.json` in the working directory:
 
 ```json
 {
@@ -57,6 +57,7 @@ Residuals (not caught):
 - `check` fails (exit 1) on: an extraction failure, a catalog missing or unreadable, a serializer version mismatch, a message missing from or obsolete in a catalog, an untranslated entry, a translation identical to its source (`TranslationIdenticalToSource`, compared exactly: an msgstr left in English renders English; an entry flagged `#, ignore-same`, Weblate's flag for the same check, is English on purpose, and that flag on a translation that differs fails as `IgnoreSameUnused`), a msgid or msgstr that does not compile, placeholder or tag mismatch, an argument formatted as another kind than in the source (`ArgumentKindMismatch`: an argument the source uses as text, plain `{x}` or select, stays text; a number stays number, plural or selectordinal; a date stays date or time. `{name}` as `{name, number}` renders NaN, and a plain `{x}` takes text only, so a number or date shown plainly fails at runtime), an argument one message (source or translation) uses as two kinds of value, such as `{n}` in one branch and `{n, number}` in another (`ArgumentKindConflict`: no one value renders in every use; `{n, number}` everywhere or `#` passes), two messages whose wire keys collide (`KeyCollision`: give one a context), an include pattern that matches no file, and, once all of that passes, each locale's compiled catalog (and the English one) failing to compile or dry-format with the configured `formats` (`TranslationUnformattable`, `SourceUnformattable`: an option `Intl` rejects, such as an unknown currency in a skeleton or a style; `ArmProbeMismatch`: a branch sample rendered another arm than the one it was derived for, an `@elmeragroup/intl` defect to report). An arm the branch pass does not reach is information, not a problem (see [Catalogs](#catalogs)). `--json` prints only `{ ok, problems: [{ code, message, fix, file?, line?, column?, locale?, key? }], messages, written, unreachable: [{ locale, key, arm, reason }] }` to stdout. Usage errors and unexpected failures (stack on stderr, prefixed `elmera-intl failed:`) exit 2. A style name (`{d, date, short}`, `{n, number, currency}`) that no configured style defines is not an error: next-intl, like the runtime, renders it as the kind's default format.
 
 - `extract --watch` syncs the catalogs on every save (debounced), add-only: it never removes an entry or a translation, and on a parse error it prints the error and keeps the last catalogs. Run `extract` before committing so unused entries go (`check` fails on them).
+- `extract --watch` listens for the platform's file events. `--poll <ms>` (10 to 2147483647) walks the watched files every `<ms>` instead, skipping `node_modules` and excluded directories and reporting one it cannot read, for a host whose events arrive late or not at all (a container's bind mount, a network drive, a macOS whose `fseventsd` is saturated); `vite dev` polls the same way when the server's `server.watch.usePolling` is set, at its `interval` (one out of that range is reported, and the default 100 ms is used).
 
 ## Catalogs
 

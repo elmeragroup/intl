@@ -36,7 +36,7 @@ export const fixtures: ReadonlyArray<Fixture> = [
   { el: <T>Line one<br />line two</T>, key: "Line one<x0></x0>line two", html: "Line one<br/>line two" },
   { el: <T>Price {"<"} 100 {"#1"}</T>, key: "Price '<' 100 #1", html: "Price &lt; 100 #1" },
   { el: <T>The <b>players'</b> cards</T>, key: "The <x0>players''</x0> cards", html: "The <b>players&#x27;</b> cards" },
-  { el: <T>100&nbsp;kr</T>, key: "100\u00a0kr", html: "100\u00a0kr" },
+  { el: <T>100&nbsp;kr</T>, key: "100\u00A0kr", html: "100\u00A0kr" },
   { el: <T>Item '#1' or a'|b</T>, key: "Item ''#1' or a''|b", html: "Item &#x27;#1&#x27; or a&#x27;|b" },
   { el: <T>Got <Plural count={count} one="# user's {name}" other="# users' <b>{x}</b>" /></T>, key: "Got {count, plural, one {# user's '{'name'}'} other {# users' '<'b'>{'x'}<'/b'>'}}", html: "Got 2 users&#x27; &lt;b&gt;{x}&lt;/b&gt;" },
 ];

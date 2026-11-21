@@ -137,9 +137,10 @@ function catalogPathPattern(config: ProjectConfig, root: string): RegExp {
     .map((part) => escape(part))
     .join("[^/]+");
 
+  // oxlint-disable-next-line require-unicode-regexp -- Turbopack evaluates this pattern's source in its own engine, not as a JS RegExp, so a JS flag is not part of what it reads
   return new RegExp(`^${pattern}$`);
 }
 
 function escape(text: string): string {
-  return text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

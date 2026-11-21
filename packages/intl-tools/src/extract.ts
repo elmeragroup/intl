@@ -51,7 +51,7 @@ export type ExtractResult =
   | { readonly _tag: "Failed"; readonly failures: ReadonlyArray<ExtractFailure> };
 
 const JSX_RUNTIMES = new Set(["react/jsx-runtime", "react/jsx-dev-runtime"]);
-const HOOK_NAME = /^use[A-Z]/;
+const HOOK_NAME = /^use[A-Z]/u;
 // Only t-returning factories must be bound: a bare t is called by name, so a wrapper would hide it. IntlInstance objects
 // may flow, but a `.t(…)` call on one the file cannot trace to its factory fails.
 const T_FACTORIES = ["useT", "getT"];
@@ -93,7 +93,7 @@ export function extractMessages(filename: string, code: string): ExtractResult {
     throw new Error(`oxc-transform returned no source map for ${filename}`);
   }
 
-  const { program } = parseSync(filename.replace(/\.[cm]?[jt]sx?$/, ".js"), compiled.code);
+  const { program } = parseSync(filename.replace(/\.[cm]?[jt]sx?$/u, ".js"), compiled.code);
   // Type-only imports are erased by the compiler, so whether a file uses the package is read from the source.
   const importsPackage = importsPackageIn(parseSync(filename, code).program);
   const toSource = createSourceMapper(compiled.map.mappings);
@@ -381,13 +381,16 @@ class Extraction {
     }
 
     // Reflect reads properties by a key it is passed; only a direct `Reflect.x(…)` call is checked (by checkCall).
-    if (this.importsPackage && name === "Reflect" && resolveName(this.scope, name) === undefined) {
-      if (member === undefined || grand?.type !== "CallExpression" || grand.callee !== parent) {
-        this.fail(
-          node,
-          "`Reflect` is passed or stored; call `Reflect.x(…)` directly so its key can be checked"
-        );
-      }
+    if (
+      this.importsPackage &&
+      name === "Reflect" &&
+      resolveName(this.scope, name) === undefined &&
+      (member === undefined || grand?.type !== "CallExpression" || grand.callee !== parent)
+    ) {
+      this.fail(
+        node,
+        "`Reflect` is passed or stored; call `Reflect.x(…)` directly so its key can be checked"
+      );
     }
 
     if (

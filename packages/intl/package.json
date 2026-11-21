@@ -32,50 +32,64 @@
   ],
   "exports": {
     "./core": {
+      "elmera-source": "./src/core.ts",
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js"
     },
     "./react": {
       "react-server": {
+        "elmera-source": "./src/react-server.tsx",
         "types": "./dist/react-server.d.ts",
         "import": "./dist/react-server.js"
       },
+      "elmera-source": "./src/react.tsx",
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js"
     },
     "./server": {
+      "elmera-source": "./src/server.ts",
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
     },
     "./next": {
+      "elmera-source": "./src/next.tsx",
       "types": "./dist/next.d.ts",
       "import": "./dist/next.js"
     },
     "./next/server": {
+      "elmera-source": "./src/next-server.ts",
       "types": "./dist/next-server.d.ts",
       "import": "./dist/next-server.js"
     },
     "./start": {
+      "elmera-source": "./src/start.tsx",
       "types": "./dist/start.d.ts",
       "import": "./dist/start.js"
     },
     "./internal/formatter": {
+      "elmera-source": {
+        "types": "./src/formatter.ts"
+      },
       "types": "./dist/internal/formatter.d.ts",
       "import": "./dist/internal/formatter.js"
     },
     "./internal/catalog": {
+      "elmera-source": "./src/catalog.ts",
       "types": "./dist/internal/catalog.d.ts",
       "import": "./dist/internal/catalog.js"
     },
     "./internal/icu": {
+      "elmera-source": "./src/icu.ts",
       "types": "./dist/internal/icu.d.ts",
       "import": "./dist/internal/icu.js"
     },
     "./internal/message": {
+      "elmera-source": "./src/message.ts",
       "types": "./dist/internal/message.d.ts",
       "import": "./dist/internal/message.js"
     },
     "./internal/react-client": {
+      "elmera-source": "./src/react.tsx",
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js"
     }

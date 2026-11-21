@@ -1,0 +1,12 @@
+{
+  "extends": "@elmeragroup/typescript-config/base.json",
+  "compilerOptions": {
+    "verbatimModuleSyntax": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    // Oxlint loads the plugin from source by Node's type stripping.
+    "erasableSyntaxOnly": true,
+    "lib": ["ESNext"]
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

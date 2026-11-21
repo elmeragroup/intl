@@ -7,7 +7,8 @@ import type { CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
 import type { Problem, ProjectConfig } from "./project";
 import { CONFIG_FILE, loadConfig } from "./project";
-import { watchProject } from "./watch";
+import type { WatchMode } from "./watch";
+import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
 
 /** Where the CLI writes and resolves paths from. */
 export type CliIo = {
@@ -18,7 +19,7 @@ export type CliIo = {
 };
 
 const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to ${CONFIG_FILE}>]
-       elmera-intl extract --watch [--config <path to ${CONFIG_FILE}>]`;
+       elmera-intl extract --watch [--poll <ms>] [--config <path to ${CONFIG_FILE}>]`;
 
 /**
  * Run `elmera-intl extract | check [--json] [--config <path>]`.
@@ -64,7 +65,7 @@ export async function runMain(args: ReadonlyArray<string>, io: CliIo): Promise<n
       return 1;
     }
 
-    await watchUntilSignal(loaded.config, io);
+    await watchUntilSignal(loaded.config, parsed.mode, io);
 
     return 0;
   } catch (error) {
@@ -72,20 +73,25 @@ export async function runMain(args: ReadonlyArray<string>, io: CliIo): Promise<n
   }
 }
 
-async function watchUntilSignal(config: ProjectConfig, io: CliIo): Promise<void> {
+async function watchUntilSignal(config: ProjectConfig, mode: WatchMode, io: CliIo): Promise<void> {
   // Before the ready line: a signal sent on seeing it must find the handlers.
   const stop = Promise.withResolvers<void>();
   process.once("SIGINT", stop.resolve);
   process.once("SIGTERM", stop.resolve);
-  const watcher = watchProject(config, (result) => {
-    if (result._tag === "Written") {
-      io.stdout(`wrote ${result.files.map((file) => relative(config.root, file)).join(", ")}\n`);
-    } else if (result._tag === "Failed") {
-      result.problems.forEach((problem) => {
-        io.stderr(`${describeProblem(problem)}\n`);
-      });
-    }
-  });
+  const watcher = watchProject(
+    config,
+    (result) => {
+      if (result._tag === "Written") {
+        io.stdout(`wrote ${result.files.map((file) => relative(config.root, file)).join(", ")}\n`);
+      } else if (result._tag === "Failed") {
+        result.problems.forEach((problem) => {
+          io.stderr(`${describeProblem(problem)}\n`);
+        });
+      }
+    },
+    undefined,
+    mode
+  );
   io.stdout(`watching ${config.root} for message changes; Ctrl-C stops\n`);
   await stop.promise;
   process.off("SIGINT", stop.resolve);
@@ -171,7 +177,7 @@ type OnceArgs = {
 
 type ParsedArgs =
   | OnceArgs
-  | { readonly _tag: "Watch"; readonly config: string | undefined }
+  | { readonly _tag: "Watch"; readonly config: string | undefined; readonly mode: WatchMode }
   | { readonly _tag: "UsageError"; readonly reason: string };
 
 // Every argument is accounted for before anything runs: a typo'd flag must not pass as a clean check.
@@ -185,6 +191,7 @@ function parseArgs(args: ReadonlyArray<string>): ParsedArgs {
   let json = false;
   let watch = false;
   let config: string | undefined;
+  let poll: WatchMode | undefined;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
 
@@ -201,6 +208,23 @@ function parseArgs(args: ReadonlyArray<string>): ParsedArgs {
 
       config = value;
       i += 1;
+    } else if (arg === "--poll" && poll === undefined) {
+      const value = rest[i + 1] ?? "";
+      const mode = /^\d+$/u.test(value) ? pollEvery(Number(value)) : undefined;
+
+      if (mode === undefined) {
+        return { _tag: "UsageError", reason: "--poll needs an interval in milliseconds, such as --poll 200" };
+      }
+
+      if (mode._tag === "PollIntervalOutOfRange") {
+        return {
+          _tag: "UsageError",
+          reason: `--poll ${value}: the interval must be between ${MIN_POLL_MS} and ${MAX_POLL_MS} milliseconds`,
+        };
+      }
+
+      poll = mode;
+      i += 1;
     } else {
       return { _tag: "UsageError", reason: `unexpected argument: ${arg ?? ""}` };
     }
@@ -210,5 +234,15 @@ function parseArgs(args: ReadonlyArray<string>): ParsedArgs {
     return { _tag: "UsageError", reason: "--watch goes with extract only, without --json" };
   }
 
-  return watch ? { _tag: "Watch", config } : { _tag: "Once", command, json, config };
+  if (poll !== undefined && !watch) {
+    return { _tag: "UsageError", reason: "--poll goes with extract --watch only" };
+  }
+
+  return watch
+    ? {
+        _tag: "Watch",
+        config,
+        mode: poll ?? { _tag: "native" },
+      }
+    : { _tag: "Once", command, json, config };
 }
