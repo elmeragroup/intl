@@ -29,11 +29,11 @@ class PoSyntaxError
 
 type Keyword = "msgctxt" | "msgid" | "msgstr";
 
-// A message while its lines are read: each keyword is set once its line is.
+// A message while its lines are read, its strings under the keywords that set them (`finish` names them): each is
+// set once its keyword's line is read.
 type Draft = {
-  context?: string;
-  id?: string;
-  translation?: string;
+  -readonly [K in Keyword]?: string;
+} & {
   references: Array<Reference>;
   extractedComments: Array<string>;
   flags: Array<string>;
@@ -136,7 +136,7 @@ class MessageReader {
       return undefined;
     }
 
-    if (draft.id === undefined || draft.translation === undefined) {
+    if (draft.msgid === undefined || draft.msgstr === undefined) {
       return new PoSyntaxError({
         reason: "Incomplete message entry: both msgid and msgstr are required",
         line,
@@ -144,13 +144,13 @@ class MessageReader {
     }
 
     const message: Message = {
-      id: draft.id,
-      translation: draft.translation,
+      id: draft.msgid,
+      translation: draft.msgstr,
       references: draft.references,
       extractedComments: draft.extractedComments,
       flags: draft.flags,
     };
-    this.messages.push(draft.context === undefined ? message : { ...message, context: draft.context });
+    this.messages.push(draft.msgctxt === undefined ? message : { ...message, context: draft.msgctxt });
 
     return undefined;
   }
@@ -254,20 +254,11 @@ class MessageReader {
     }
 
     const draft = this.draftOf();
-    const unescaped = unescape(value.success);
-
-    if (keyword === "msgctxt") {
-      draft.context = unescaped;
-    } else if (keyword === "msgid") {
-      draft.id = unescaped;
-    } else {
-      draft.translation = unescaped;
-    }
-
+    draft[keyword] = unescape(value.success);
     this.lastKeyword = keyword;
 
     // The header: the first message with an empty msgid and msgstr. Its comments are dropped.
-    if (this.messages.length === 0 && draft.id === "" && draft.translation === "") {
+    if (this.messages.length === 0 && draft.msgid === "" && draft.msgstr === "") {
       this.inHeader = true;
       this.draft = undefined;
       this.lastKeyword = undefined;
@@ -278,8 +269,7 @@ class MessageReader {
 
   private continueString(text: string): string | undefined {
     const { draft, lastKeyword } = this;
-    const current =
-      lastKeyword === "msgctxt" ? draft?.context : lastKeyword === "msgid" ? draft?.id : draft?.translation;
+    const current = lastKeyword === undefined ? undefined : draft?.[lastKeyword];
 
     if (draft === undefined || lastKeyword === undefined || current === undefined) {
       return `Encountered unexpected quoted line:\n> ${text}`;
@@ -291,15 +281,7 @@ class MessageReader {
       return value.failure;
     }
 
-    const joined = current + unescape(value.success);
-
-    if (lastKeyword === "msgctxt") {
-      draft.context = joined;
-    } else if (lastKeyword === "msgid") {
-      draft.id = joined;
-    } else {
-      draft.translation = joined;
-    }
+    draft[lastKeyword] = current + unescape(value.success);
 
     return undefined;
   }

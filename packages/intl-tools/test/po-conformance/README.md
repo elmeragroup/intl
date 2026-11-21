@@ -15,7 +15,7 @@ three oracles:
   it differs from that, po-parser on the text `parsePo` rewrote it to (`toParserDialect`, the function the codec
   replaces); `current`, what `parsePo` returned; and `msgcat`, GNU msgcat 1.0's exit status and output (for the GNU
   cases, run on the input with a UTF-8 charset header, as `msgcat.input` records, so msgcat reads every entry and exits
-  0). Each input is decoded once. The GNU cases' entries, with their comments and the flags msgcat knows, must equal `msgcat.entries`: msgcat's output with obsolete entries removed by GNU msgattrib, read by po-parser 2.2.0, never by this codec. It also records po-parser's `serialize` of 6 catalogs and `formatPo`'s output for 2 entry sets.
+  0). Each input is decoded once. Every GNU case, and only a GNU case, carries `msgcat.entries`, and the entries read from its input, with their comments and flags (less `ignore-same`, which msgcat drops; flags in code-point order), must equal them: msgcat's output with obsolete entries removed by GNU msgattrib, read by po-parser 2.2.0, never by this codec. It also records po-parser's `serialize` of 6 catalogs and `formatPo`'s output for 2 entry sets.
 - `../po-text.test.ts`: a round-trip property over documents `Arbitrary.schema` generates: written and read back, each
   comes back unchanged (500 runs).
 

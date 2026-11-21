@@ -57,9 +57,10 @@ describe("CurrentIntl.provide", () => {
 
       return { locale, catalog: CATALOGS[locale], timeZone: "UTC" };
     });
+    // Both requests have their translators before either reads one.
     const handler = Effect.gen(function* () {
-      const { t } = yield* CurrentIntl;
       yield* barrier.arrive;
+      const { t } = yield* CurrentIntl;
 
       return t("Hello, {name}", { name: "Ada" });
     }).pipe(CurrentIntl.provide(intlOptions));

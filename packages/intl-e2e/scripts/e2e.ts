@@ -109,6 +109,29 @@ function installPacked(
   });
 }
 
+// The archive keeps `effect` an optional peer, so an app that never imports `/effect` installs nothing more: a declared
+// peer, marked optional, and in neither `dependencies` nor `optionalDependencies`. The consumer below links it as an
+// app that uses `/effect` installs it, which would hide a peer that is no longer optional.
+function assertOptionalEffectPeer(target: string): void {
+  // SAFETY: the package.json `pnpm pack` wrote into the archive; a field it lacks reads as absent.
+  const packed = JSON.parse(readFileSync(join(target, "package.json"), "utf8")) as {
+    readonly dependencies?: Readonly<Record<string, string>>;
+    readonly optionalDependencies?: Readonly<Record<string, string>>;
+    readonly peerDependencies?: Readonly<Record<string, string>>;
+    readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>;
+  };
+  const optional =
+    packed.peerDependencies?.effect !== undefined &&
+    packed.peerDependenciesMeta?.effect?.optional === true &&
+    packed.dependencies?.effect === undefined &&
+    packed.optionalDependencies?.effect === undefined;
+
+  if (!optional) {
+    process.stderr.write("effect consumer: the packed runtime does not keep effect an optional peer\n");
+    process.exit(1);
+  }
+}
+
 // The Effect consumer's own directory, as an app that installs the runtime and its optional peer: the packed runtime as
 // a real copy with its dependencies linked (without @schummar/icu-type-parser the type-check would accept any ICU
 // argument), `effect` linked from the runtime's devDependency (never this package's, which the Next and Start fixtures
@@ -120,6 +143,7 @@ function installEffectConsumer(runtimeTarball: string): string {
   mkdirSync(target, { recursive: true });
   run("tar", ["-xzf", runtimeTarball, "-C", target, "--strip-components=1"], root, {});
   linkDependencies(target, runtimeSource);
+  assertOptionalEffectPeer(target);
   symlinkSync(
     realpathSync(join(runtimeSource, "node_modules", "effect")),
     join(dir, "node_modules", "effect")

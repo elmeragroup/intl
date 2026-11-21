@@ -106,16 +106,21 @@ function poParserOutcome(recorded: Recording["parse"][number]): Outcome {
   return "throws" in recorded ? { throws: recorded.throws } : { parsed: recorded.parsed };
 }
 
-// The active entries as GNU msgcat keeps them: the flags it knows (`fuzzy`, `*-format`; it drops others such as
-// `ignore-same`), in code-point order, which its output does not keep.
-function asGnuKeepsThem(entries: ReadonlyArray<Entry>): ReadonlyArray<Entry> {
+// Flags in code-point order: GNU msgcat writes them in its own order.
+function withSortedFlags(entries: ReadonlyArray<Entry>): ReadonlyArray<Entry> {
+  return entries.map((entry) =>
+    entry.flags === undefined ? entry : { ...entry, flags: entry.flags.toSorted() }
+  );
+}
+
+// The reader's entries as GNU msgcat writes them back: without `ignore-same`, the one flag in this corpus msgcat does
+// not know and drops.
+function withoutIgnoreSame(entries: ReadonlyArray<Entry>): ReadonlyArray<Entry> {
   return entries.map((entry) => {
-    const flags = (entry.flags ?? [])
-      .filter((flag) => flag === "fuzzy" || flag.endsWith("-format"))
-      .toSorted();
+    const flags = entry.flags?.filter((flag) => flag !== "ignore-same");
     const { flags: _all, ...rest } = entry;
 
-    return flags.length === 0 ? rest : { ...rest, flags };
+    return flags === undefined || flags.length === 0 ? rest : { ...rest, flags };
   });
 }
 
@@ -137,11 +142,15 @@ describe("reads as parsePo read it, and as po-parser 2.2.0 does unless GNU msgca
 
     // The `gnu` inputs: each comment and flag belongs to the entry GNU gives it. Oracle: `msgcat.entries`, GNU msgcat
     // 1.0's output with obsolete entries removed by GNU msgattrib and read by po-parser 2.2.0, never by this codec.
-    if (recorded.msgcat.entries !== undefined) {
+    // Every `gnu` row carries the expectation, and only those rows do.
+    const gnu = recorded.name.startsWith("gnu");
+    expect(recorded.msgcat.entries !== undefined).toBe(gnu);
+
+    if (gnu) {
       expect(recorded.msgcat.status).toBe(0);
-      expect("parsed" in actual ? asGnuKeepsThem(actual.parsed.messages ?? []) : actual).toEqual(
-        asGnuKeepsThem(recorded.msgcat.entries)
-      );
+      expect(
+        "parsed" in actual ? withSortedFlags(withoutIgnoreSame(actual.parsed.messages ?? [])) : actual
+      ).toEqual(withSortedFlags(recorded.msgcat.entries ?? []));
     }
   });
 });
