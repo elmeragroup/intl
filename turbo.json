@@ -1,0 +1,65 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "agentGuidance": false,
+  "ui": "stream",
+  "globalEnv": ["NODE_ENV"],
+  "tasks": {
+    // Reads source only: type-aware rules and the plugins resolve the workspace packages through their
+    // `elmera-source` export condition, so nothing is built first. Uncached: Oxlint reads every package's files
+    // (the e2e fixtures among them), and turbo documents a task's default inputs only as its package's own files.
+    "//#lint:oxlint": {
+      "cache": false
+    },
+    "//#type-check:scripts": {
+      "inputs": ["scripts/**", "tooling/typescript/**"]
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    // Has no script: it ties a package's hash to its dependencies' files, so a task that reads their source carries
+    // their changes in its cache key without waiting for their tasks.
+    "transit": {
+      "dependsOn": ["^transit"]
+    },
+    // Source only, through the `elmera-source` condition (tooling/typescript/base.json), so it builds nothing; the
+    // dependencies' source it reads is in its hash through transit.
+    "type-check": {
+      "dependsOn": ["^transit"]
+    },
+    "tcw": {
+      "cache": false,
+      "persistent": true
+    },
+    "test": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    "test:run": {
+      "dependsOn": ["^build"]
+    },
+    // The e2e fixture apps build on the workspace-linked packages and then on their packed archives,
+    // so the builds are what is under test: never cached.
+    "e2e": {
+      "cache": false,
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["CI", "PLAYWRIGHT_BROWSERS_PATH", "INTL_FIXTURE_RUNTIME", "INTL_FIXTURE_SERVER"]
+    },
+    "bench": {
+      "cache": false,
+      "dependsOn": ["build"]
+    },
+    "clean": {
+      "cache": false
+    },
+    "ci:checks": {
+      "dependsOn": ["^build", "//#lint:oxlint", "//#type-check:scripts"]
+    }
+  }
+}

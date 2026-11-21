@@ -1,0 +1,5 @@
+{
+  "name": "@elmeragroup/intl-e2e",
+  "private": true,
+  "description": "Fixture: the private e2e harness."
+}

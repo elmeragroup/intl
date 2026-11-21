@@ -1,0 +1,11 @@
+{
+  "extends": "@elmeragroup/typescript-config/react-library.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "jsx": "react-jsx",
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src", "vite.config.ts"]
+}

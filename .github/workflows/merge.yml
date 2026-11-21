@@ -1,0 +1,123 @@
+name: Merge
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Every job runs dependency code on every PR and push, so the token is read-only. The release jobs
+# declare their own permissions, which replace this default for that job.
+permissions:
+  contents: read
+
+jobs:
+  # Format, lint, type-check and every package's ci:checks (its type-check and unit, conformance,
+  # differential, fuzz, public-surface and bundle-boundary tests). CONTRIBUTING.md#verification
+  # names what each gate proves.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # changeset status --since reads the base branch's history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      # setup-node already provides the devEngines.runtime pin, so pnpm skips downloading it again.
+      - name: Install
+        run: pnpm install --frozen-lockfile --no-runtime
+
+      - name: Check workspace
+        run: pnpm ci:checks
+        env:
+          TURBO_RUN_SUMMARY: "true"
+
+      - name: Changeset presence
+        if: ${{ github.event_name == 'pull_request' && !startsWith(github.head_ref, 'changeset-release/') && !contains(github.event.pull_request.labels.*.name, 'no-changeset') }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: pnpm exec changeset status --since="origin/$BASE_REF"
+
+  # The fixture apps (Next.js and TanStack Start) built and served on the workspace-linked packages,
+  # then on their packed archives installed as real copies, with the Playwright gates over each
+  # pass. A job of its own, so a unit or type failure does not wait on the builds.
+  e2e:
+    runs-on: ubuntu-latest
+    # The e2e script builds four fixture apps and starts their servers; a hung server would
+    # otherwise hold the runner for GitHub's 360-minute default.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --no-runtime
+
+      - name: Set up Playwright
+        uses: ./.github/actions/setup-playwright
+        with:
+          browsers: chromium
+
+      - name: turbo e2e
+        run: pnpm test:e2e
+        env:
+          TURBO_RUN_SUMMARY: "true"
+
+      # Traces, screenshots and the HTML report of a red run, for diagnosis without a rerun.
+      - name: Upload Playwright output
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/*/test-results/
+            packages/*/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Canary or stable publication of the checked commit (CONTRIBUTING.md#releases). npm's trusted
+  # publishing validates the calling workflow's filename for a workflow_call, so the npm entries name
+  # merge.yml. The called workflow cannot hold more than this grant.
+  release:
+    needs: [checks, e2e]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/publish-release.yml
+
+  version:
+    needs: [checks, e2e]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/version-packages.yml

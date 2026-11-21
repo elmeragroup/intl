@@ -1,0 +1,25 @@
+.ref/
+.DS_Store
+node_modules/
+.pnpm-store/
+.turbo/
+dist/
+.artifacts/
+coverage/
+.cache/
+*.tsbuildinfo
+.idea/
+.env
+# Next.js and TanStack Start output of the e2e fixture apps.
+.next/
+.next-*/
+.output/
+.nitro/
+.tanstack/
+next-env.d.ts
+# Playwright output.
+test-results/
+playwright-report/
+blob-report/
+# Local scratch output.
+.scratch/

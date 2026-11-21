@@ -1,0 +1,144 @@
+{
+  "name": "@elmeragroup/intl",
+  "version": "0.0.0",
+  "description": "Source-keyed i18n for React: <T>, useT, msg() and the parser-free runtime that formats compiled catalogs. Extraction, catalog compiling and lint live in @elmeragroup/intl-tools.",
+  "keywords": [
+    "i18n",
+    "intl",
+    "react",
+    "next",
+    "tanstack-start",
+    "icu",
+    "messageformat",
+    "translation"
+  ],
+  "homepage": "https://github.com/elmeragroup/intl/tree/main/packages/intl#readme",
+  "bugs": {
+    "url": "https://github.com/elmeragroup/intl/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elmeragroup/intl.git",
+    "directory": "packages/intl"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "exports": {
+    "./core": {
+      "elmera-source": "./src/core.ts",
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./react": {
+      "react-server": {
+        "elmera-source": "./src/react-server.tsx",
+        "types": "./dist/react-server.d.ts",
+        "import": "./dist/react-server.js"
+      },
+      "elmera-source": "./src/react.tsx",
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./server": {
+      "elmera-source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./next": {
+      "elmera-source": "./src/next.tsx",
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
+    },
+    "./next/server": {
+      "elmera-source": "./src/next-server.ts",
+      "types": "./dist/next-server.d.ts",
+      "import": "./dist/next-server.js"
+    },
+    "./start": {
+      "elmera-source": "./src/start.tsx",
+      "types": "./dist/start.d.ts",
+      "import": "./dist/start.js"
+    },
+    "./internal/formatter": {
+      "elmera-source": {
+        "types": "./src/formatter.ts"
+      },
+      "types": "./dist/internal/formatter.d.ts",
+      "import": "./dist/internal/formatter.js"
+    },
+    "./internal/catalog": {
+      "elmera-source": "./src/catalog.ts",
+      "types": "./dist/internal/catalog.d.ts",
+      "import": "./dist/internal/catalog.js"
+    },
+    "./internal/icu": {
+      "elmera-source": "./src/icu.ts",
+      "types": "./dist/internal/icu.d.ts",
+      "import": "./dist/internal/icu.js"
+    },
+    "./internal/message": {
+      "elmera-source": "./src/message.ts",
+      "types": "./dist/internal/message.d.ts",
+      "import": "./dist/internal/message.js"
+    },
+    "./internal/react-client": {
+      "elmera-source": "./src/react.tsx",
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    }
+  },
+  "scripts": {
+    "bench": "node bench/runtime.ts",
+    "build": "tsdown",
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "dev": "tsdown --watch --no-clean",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --watch",
+    "type-check": "tsrs --noEmit"
+  },
+  "dependencies": {
+    "@schummar/icu-type-parser": "catalog:",
+    "intl-messageformat": "catalog:"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": ">=1.170.0",
+    "next": ">=16.4.0",
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/react-router": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@tanstack/react-router": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:react19",
+    "@types/react-dom": "catalog:react19",
+    "jsdom": "catalog:",
+    "next": "catalog:",
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19",
+    "rolldown": "catalog:",
+    "tsdown": "catalog:",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

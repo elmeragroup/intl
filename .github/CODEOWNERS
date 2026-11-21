@@ -1,0 +1,3 @@
+# Only these owners can merge a pull request into main; the "Protect main" ruleset restricts pushes to them.
+# No approval is required.
+* @tommybarvaag @oddhus

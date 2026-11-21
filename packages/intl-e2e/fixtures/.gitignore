@@ -1,0 +1,6 @@
+# Fixture build and run output. The Start fixture's routeTree.gen.ts stays tracked, as in a TanStack Start host
+# app: type-aware lint reads it on a clean checkout.
+.next*/
+.output*/
+.nitro/
+.tanstack/

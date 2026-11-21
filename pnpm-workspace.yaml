@@ -1,0 +1,72 @@
+packages:
+  - packages/*
+  - tooling/*
+
+# Every version is exact: a range could resolve a release younger than minimumReleaseAge, and the
+# packages publish with these pins. The intl entries are the versions the packages were last verified
+# against. Bump an entry deliberately, in its own PR.
+catalog:
+  # Workspace tooling.
+  "@changesets/cli": 3.0.3
+  # First-party lint plugins (`@elmeragroup/internal/oxlint*`); bump with the exclude entry below.
+  "@elmeragroup/internal": 0.2.0-canary.22
+  # The version @elmeragroup/internal brings, so one copy installs.
+  "@oxlint/plugins": 1.93.0
+  "@types/node": 26.6.5
+  # The manifest test's parsers for the JSONC and YAML configs it checks.
+  jsonc-parser: 3.3.1
+  yaml: 2.9.1
+  eslint-plugin-turbo: 2.11.10
+  oxfmt: 0.78.0
+  oxlint: 1.93.0
+  turbo: 2.11.10
+  vitest: 5.0.5
+  jsdom: 29.1.1
+  # tsrs runs every type-check, declaration emit and the type-aware lint rules (tsrs-lint). It pins
+  # TypeScript 7.1-beta semantics; typescript stays installed for tsdown and the frameworks' own
+  # type generation. Bump both together.
+  tsrs: 0.25.0-ts7.1.0-beta
+  typescript: 7.0.2
+  tsdown: 0.23.1
+
+  # Runtime dependencies of @elmeragroup/intl and @elmeragroup/intl-tools. oxc-parser and
+  # oxc-transform ship together; bump in lockstep.
+  "@jridgewell/trace-mapping": 0.3.31
+  "@schummar/icu-type-parser": 1.27.2
+  intl-messageformat: 12.1.5
+  oxc-parser: 0.158.0
+  oxc-transform: 0.158.0
+  po-parser: 2.2.0
+
+  # Host frameworks: the adapters' peers, and the e2e fixture apps that run on them.
+  "@mdx-js/loader": 3.1.1
+  # Keep in lockstep with next.
+  "@next/mdx": 16.4.6
+  "@playwright/test": 1.64.1
+  "@tanstack/react-router": 1.170.45
+  "@tanstack/react-start": 1.169.3
+  "@vitejs/plugin-react": 5.2.0
+  next: 16.4.6
+  nitro: 3.0.260903-beta
+  rolldown: 1.2.13
+  vite: 8.3.4
+
+catalogs:
+  react19:
+    "@types/react": 19.3.0
+    "@types/react-dom": 19.3.0
+    react: 19.3.1
+    react-dom: 19.3.1
+
+autoInstallPeers: true
+
+allowBuilds:
+  esbuild: true
+  "@parcel/watcher": true
+  sharp: true
+
+minimumReleaseAge: 4320
+
+minimumReleaseAgeExclude:
+  # Canary line of the in-house tooling package; bump this exact entry with the catalog pin.
+  - "@elmeragroup/internal@0.2.0-canary.22"

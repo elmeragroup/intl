@@ -1,0 +1,6 @@
+{
+  // Declarations come from src only: tsdown's tsgo pass writes a declaration beside any included file outside this
+  // package, and the tests reach intl-tools' compiler (`#compile`).
+  "extends": "./tsconfig.json",
+  "include": ["src"]
+}

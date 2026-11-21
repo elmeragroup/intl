@@ -1,0 +1,4 @@
+{
+  "./core": ["createIntl", "msg"],
+  "./react": ["T", "useT"]
+}

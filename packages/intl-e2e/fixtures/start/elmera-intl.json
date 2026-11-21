@@ -1,0 +1,7 @@
+{
+  "include": ["src/**/*.{ts,tsx}"],
+  "exclude": ["**/*.d.ts", "src/routeTree.gen.ts"],
+  "catalogs": "src/intl/{locale}.po",
+  "locales": ["nb"],
+  "formats": "src/intl/formats.ts"
+}

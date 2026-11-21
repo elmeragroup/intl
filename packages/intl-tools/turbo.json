@@ -1,0 +1,16 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // test/public-surface.test.ts reads dist. An override replaces the root's dependsOn, so ^build is listed again.
+    "test": {
+      "dependsOn": ["build", "^build"]
+    },
+    "test:run": {
+      "dependsOn": ["build", "^build"]
+    },
+    "ci:checks": {
+      "dependsOn": ["build", "^build"]
+    }
+  }
+}

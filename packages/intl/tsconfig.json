@@ -1,0 +1,19 @@
+{
+  "extends": "@elmeragroup/typescript-config/react-library.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    // The elmera-intl lint plugin loads src/message.ts from source by Node's type stripping (the `elmera-source`
+    // condition), so the runtime's source is erasable.
+    "erasableSyntaxOnly": true,
+    "paths": {
+      // The tests' catalogs come from intl-tools' compiler (vitest.config.ts aliases it the same way).
+      "#compile": ["../intl-tools/src/compile.ts"]
+    }
+  },
+  "include": ["src", "test", "bench", "vitest.config.ts", "tsdown.config.ts"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -1,0 +1,118 @@
+# @elmeragroup/intl-tools
+
+Build-time tools for [`@elmeragroup/intl`](../intl/README.md): the deny-by-default extractor, the `elmera-intl` CLI that writes and checks PO catalogs, the catalog compiler and the loaders that run it on `*.po` imports (Next, Vite, Node), the `elmera-intl/extractable` oxlint rule and a Vitest global setup. Everything here parses source or ICU, so none of it ships to a browser. It shares the runtime's serializer, wire-key hash and catalog codec (`/internal/*`), so the extracted keys are the runtime's keys and a catalog that checks compiles and formats as the runtime will.
+
+## Extraction contract (deny-by-default)
+
+In a file that imports `@elmeragroup/intl` (including `import type`), only these forms are allowed; anything else fails extraction and lint, with a message naming the fix. Names resolve lexically, as JavaScript does (function, block, loop head, catch, class and switch scopes; `var` hoisted to its function body or static block; parameter defaults and a switch's discriminant resolve outside the body and cases next to them), so a shadowing `t`, `T`, `msg` or `Fragment` is not the package's. A computed key that resolves statically (a string or number literal, an expression-free template, or a `const` bound to one) is the named key: `i["t"]("x")` is `i.t("x")`.
+
+| Binding                                                | Allowed                                                                                                                                                                                                                                                                                      | Fails                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package imports                                        | named static import; call; JSX element type                                                                                                                                                                                                                                                  | `import * as`, re-export, alias, `import()`, `require()`                                                                                                                                                                                                                                                                                                                                |
+| `t` (from `useT()` / `await getT()`)                   | bound where created; `t("literal")`; `t.from(d)`; `const tr = t`; `[t]` as a hook's dependency array                                                                                                                                                                                         | wrapper, `useT()(…)`, `useT().call/bind`, `getT().then`, passing, exporting, non-literal argument, a `t(…)` call on a `t` not bound from a factory or written in the file                                                                                                                                                                                                               |
+| An `IntlInstance` (`createIntl`, `getIntl`, `useIntl`) | bound in this file: `x.t("literal")`; `const { t } = <bound IntlInstance>`; `const tr = <IntlInstance>.t`. Anywhere: `x.t.from(d)`                                                                                                                                                           | `x.t(…)` on a receiver not traced to a factory (below), non-literal `x.t(…)`, `t` key in any pattern from an unresolved value (any spelling, any depth, params, assignment, for-of targets, catch, arrays), `.t.bind/.call`, `i[key]` or `Reflect.get(i, key)` with an unresolved key                                                                                                   |
+| `msg(text, { context })`                               | literal text; object-literal options with literal `context` (any key spelling)                                                                                                                                                                                                               | non-literal text, options variable or spread, a computed key (other than a string literal), dynamic context                                                                                                                                                                                                                                                                             |
+| `<T>`                                                  | text, elements, fragments (`<>`, `Fragment`/`React.Fragment` from react), `<Val>`, `<Plural>` with literal forms (plain text: only `#`, the count, is special), `<Select>` with literal branches (`_<key>` cases in written order, then the required `other`; plain text), literal `context` | `{expr}`, spread props on `<T>` or any element inside it, a `children` attribute plus children, non-literal plural forms or select branches, a `<Select>` without `other`, a select case that is no ICU key (`_a-b`, `_other`), an argument named `x<n>` (reserved for tags), one argument name with two different value expressions, calling `T`/`Val`/`Plural`/`Select` as a function |
+
+A `.t(…)` call is checked by its receiver's provenance, in every file, importing or not (an IntlInstance may arrive as a parameter):
+
+- Traced: bound from `useIntl()`, `(await) getIntl()` or `createIntl()` in this file, or an alias of one. Extracted.
+- Unrelated, only when proven: a value written in this file (a function or class, a primitive, or an object or array literal without getters holding only unrelated values), or an npm package's import itself (`i18next.t("k")`), through `await` and `const` initializers. Ignored, and a `{ t }` pattern over it is allowed.
+- Derived: an npm package's import read through members, destructured without defaults, or called with only inline data arguments (primitives, and object or array literals of them). It may hold an IntlInstance handed to it elsewhere (`setI(createIntl(cfg))`, `r.current = createIntl(cfg)`), so a `.t(…)` on it is untraced. It never holds a translator, which cannot be passed, so a `{ t }` pattern over it and a bare `t(…)` bound from it are allowed (`const { t } = useTranslation()`).
+- Untraced: anything else: a parameter, a global, `this`, a `let` or `var`, a value derived from an npm import (above), a binding with a default (`const { i = createIntl(cfg) } = o`), a local function's result, a member or projection of a local object (`box.i = createIntl(cfg)`, then `box.i` or `const { i } = box`), an npm call given a function, a named container or any other non-data argument (`useMemo(() => createIntl(cfg))`, `useMemo(make, [])`), and a relative, aliased or `@elmeragroup/*` import, which may export an IntlInstance. Fails, naming the receiver: bind the instance in the file, or translate a `msg()` descriptor with `.t.from(d)`, which is allowed on any receiver.
+
+In an importing file a bare `t(…)` call is checked the same way against `useT()`/`getT()`. Elsewhere it is not: a package translator reaches another file only by being passed or exported, which fails where it is bound.
+
+In an importing file, a computed key that does not resolve statically may be `t`. In a destructuring pattern it fails. On a member access it fails when the receiver is an IntlInstance the extractor infers: bound from `useIntl()`, `createIntl()` or `(await) getIntl()`, or an alias of one (`i[key]`, `createIntl(cfg)[key]`, `Reflect.get(i, key)`). On any other receiver (a record lookup such as `LABELS[key]`, `criteria[field] = v`, `const { logo } = BRANDS[brand]`) the read is allowed. `Reflect` may only be called directly, and `Reflect.get(x, "t")` fails on any receiver. An IntlInstance's `t` is not enumerable, so spreads, rests, `Object.assign`, `Object.values` and `Object.entries` never carry it. Destructuring defaults and computed keys are checked like any other code.
+
+Residuals (not caught):
+
+| Form                                                                                                                                                                                                                        | Why it is left                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A file that never imports the package (not even a type) reads `t` off an IntlInstance without calling it (destructures, aliases, stores or returns `.t`)                                                                    | The extractor checks `t` bindings only in importing files; a `.t(…)` call is checked everywhere                                                                                                                   |
+| An unresolved computed read (`x[key]`) on a receiver whose kind the extractor does not infer: a parameter (even one typed `IntlInstance`: types are erased before extraction), a property (`box.i[key]`), a function result | Extraction sees the compiled JavaScript, so it knows an IntlInstance only by where it was bound; following values instead failed ordinary record lookups in most app files. It needs the key to be `t` at runtime |
+| Reflection through another global (`Object.getOwnPropertyDescriptor(intl, "t").value(…)`, `globalThis.Reflect`)                                                                                                             | Reaches a non-enumerable property by reflection; no app code has a reason to                                                                                                                                      |
+| A `.t(…)` on a local object literal whose prototype is set to an IntlInstance (`Object.setPrototypeOf(o, createIntl(cfg)); o.t("X")`)                                                                                       | Proving an object was never rewired needs alias and escape analysis; writing `.t` itself onto it already fails at the read                                                                                        |
+| A `{ t }` pattern over a value derived from an npm import that was handed an IntlInstance (`const [s, set] = useState(null); set(createIntl(cfg)); const { t } = s; t("X")`)                                                | Failing it would also fail `const { t } = useTranslation()` in a file that imports the package; a `.t(…)` on such a value fails                                                                                   |
+
+## CLI
+
+`elmera-intl extract | check [--json] [--config <path>]` and `elmera-intl extract --watch [--poll <ms>] [--config <path>]`, configured by `elmera-intl.json` in the working directory:
+
+```json
+{
+  "include": ["src/**/*.{ts,tsx}"],
+  "exclude": ["**/*.test.tsx"],
+  "catalogs": "messages/{locale}.po",
+  "locales": ["nb", "sv"],
+  "formats": "src/intl-formats.ts"
+}
+```
+
+`formats` (optional) names the module whose `formats` export is the app's `formats`: `export const formats = { … } satisfies Formats`, with type-only imports and JSON option values (a separate Node process evaluates it). A value JSON does not carry (`Infinity`, `NaN`, `undefined`, a function, symbol, bigint, `Date` or class instance) fails with `FormatsInvalid` naming its path, because the formats reach the runtime through JSON. The app's adapter imports it, and `check` and every loader load it (Node, with type stripping), so all three format with one definition. Each load reads the module again and re-evaluates it when its content changed, so a running dev server or watch build picks up an edit.
+
+`include` decides which files reach the catalogs: a `<T>` in a file it does not match is never extracted, `check` stays green, and the page renders English. Keep it as wide as the app's source directories, not a hand-kept list of files. Each include pattern must match at least one file (`IncludeUnmatched`), so a renamed directory fails instead of dropping its messages; directories matching a pattern (a folder named `x.tsx`) are skipped.
+
+- `extract` writes one PO per locale (msgid = English source, msgctxt = context, `#.` = what each tag stands for, `#:` = files, without line numbers), and nothing else: the PO is the only checked-in catalog. Translations and flags are kept; entries no source uses are dropped; nothing is written when any source fails or an include pattern matches no file.
+- `check` fails (exit 1) on: an extraction failure, a catalog missing or unreadable, a serializer version mismatch, a message missing from or obsolete in a catalog, an untranslated entry, a translation identical to its source (`TranslationIdenticalToSource`, compared exactly: an msgstr left in English renders English; an entry flagged `#, ignore-same`, Weblate's flag for the same check, is English on purpose, and that flag on a translation that differs fails as `IgnoreSameUnused`), a msgid or msgstr that does not compile, placeholder or tag mismatch, an argument formatted as another kind than in the source (`ArgumentKindMismatch`: an argument the source uses as text, plain `{x}` or select, stays text; a number stays number, plural or selectordinal; a date stays date or time. `{name}` as `{name, number}` renders NaN, and a plain `{x}` takes text only, so a number or date shown plainly fails at runtime), an argument one message (source or translation) uses as two kinds of value, such as `{n}` in one branch and `{n, number}` in another (`ArgumentKindConflict`: no one value renders in every use; `{n, number}` everywhere or `#` passes), two messages whose wire keys collide (`KeyCollision`: give one a context), an include pattern that matches no file, and, once all of that passes, each locale's compiled catalog (and the English one) failing to compile or dry-format with the configured `formats` (`TranslationUnformattable`, `SourceUnformattable`: an option `Intl` rejects, such as an unknown currency in a skeleton or a style; `ArmProbeMismatch`: a branch sample rendered another arm than the one it was derived for, an `@elmeragroup/intl` defect to report). An arm the branch pass does not reach is information, not a problem (see [Catalogs](#catalogs)). `--json` prints only `{ ok, problems: [{ code, message, fix, file?, line?, column?, locale?, key? }], messages, written, unreachable: [{ locale, key, arm, reason }] }` to stdout. Usage errors and unexpected failures (stack on stderr, prefixed `elmera-intl failed:`) exit 2. A style name (`{d, date, short}`, `{n, number, currency}`) that no configured style defines is not an error: next-intl, like the runtime, renders it as the kind's default format.
+
+- `extract --watch` syncs the catalogs on every save (debounced), add-only: it never removes an entry or a translation, and on a parse error it prints the error and keeps the last catalogs. Run `extract` before committing so unused entries go (`check` fails on them).
+- `extract --watch` listens for the platform's file events. `--poll <ms>` (10 to 2147483647) walks the watched files every `<ms>` instead, skipping `node_modules` and excluded directories and reporting one it cannot read, for a host whose events arrive late or not at all (a container's bind mount, a network drive, a macOS whose `fseventsd` is saturated); `vite dev` polls the same way when the server's `server.watch.usePolling` is set, at its `interval` (one out of that range is reported, and the default 100 ms is used).
+
+## Catalogs
+
+`compileCatalog(po, locale, { formats })` (`/compile`) is the one compiler; the loaders, `loadCatalog` and `check` all call it. It returns the catalog or a `CatalogCompileError` listing every problem:
+
+- Keys are `hashKey(keyOf(source, context))`, seven base-36 characters; a collision fails.
+- Each entry is the parsed ICU as a compact tuple IR (plural offsets, skeletons and named styles kept). Every entry is shipped through JSON, decoded and compared with the parse, then dry-formatted from the decoded form through the runtime's own formatter: every number, date and time node alone with each legal value type, then a value per plural and select arm (`=N` values skipped for a category, the intended arm confirmed by a probe). A throw fails the compile, and so does a probe that finds another arm rendered.
+- An arm the branch pass does not reach is listed in `Compiled.unreachable` (and `check --json`'s `unreachable`) as `{ locale, key, arm, reason }`, `arm` with its enclosing arms (`n:one>n:other`), and never fails: the node pass formatted its nodes. `reason` is `category-absent` (the locale has no such plural category: Finnish `few`), `shadowed` (proven dead by its path: an enclosing selector on the same argument, as the inner `other` under an outer `one` of the same plural, which ICU requires, or exact `=N` keys), or `not-sampled` (the search found no value without proving none exists, such as English `one` behind `=1` and `=-1`).
+- `en` compiles every msgid (any locale's PO: they share msgids). Another locale's catalog is complete: an untranslated entry is its English source, marked so it formats in `en`. An entry that renders as its own source is left out (the runtime's `isLiteralSource`), and the runtime renders a missing key's plain source as is.
+
+The app imports a locale's PO, and the host compiles it:
+
+```ts
+const CATALOGS = {
+  en: () => import("./intl/nb.po?source"),
+  nb: () => import("./intl/nb.po"),
+} as const;
+```
+
+Types: reference `@elmeragroup/intl-tools/po` once (`/// <reference types="@elmeragroup/intl-tools/po" />` in a `.d.ts`). Only the configured locales' POs compile; another `.po`, or a missing one, fails the build. Node scripts and tests without a bundler call `loadCatalog(path, locale?)` (`/compile`) and pass the catalog to the provider like any other.
+
+## Hosts
+
+The server picks the request locale's compiled catalog and hands it to `<IntlProvider>`; nothing is aliased or transformed.
+
+Vite (TanStack Start):
+
+```ts
+import { intl } from "@elmeragroup/intl-tools/vite";
+
+plugins: [intl(), tanstackStart() /* ... */];
+```
+
+`intl()` compiles `*.po` imports; `vite dev` runs `extract --watch` in-process and, on a PO save, invalidates the catalog's modules and sends open tabs an event; `vite build` runs `check` first. The root route renders `createCatalogReload(import.meta.hot)`'s component (`@elmeragroup/intl/start`), created at module level, which turns the event into `router.invalidate()`. A Vitest config takes `intlCatalogs()` alone: the `*.po` compile without the watcher or the check.
+
+Next (Turbopack): `withIntl(config, { dir: import.meta.dirname })` (`/next`), outermost, adds the `*.po` rule. `dir` is the Next project directory, which `process.cwd()` is not under `next build <dir>`: `elmera-intl.json` (or `config`, relative to it), the installed `next` and Next's root detection all resolve from it. The rule is scoped to the configured catalogs' one path below Turbopack's root (`outputFileTracingRoot`, else `turbopack.root`, else Next's own root detection from `dir`; catalogs outside that root fail `withIntl`) and appended beside any other `*.po` rule (such as next-intl's, in an app still migrating). A PO save recompiles its module, and Next refreshes open tabs. Check and the watcher run as scripts, because Next loads its config in more than one process:
+
+```json
+{
+  "dev": "concurrently \"next dev\" \"elmera-intl extract --watch\"",
+  "build": "elmera-intl check && next build"
+}
+```
+
+## Vitest
+
+`globalSetup: ["@elmeragroup/intl-tools/vitest"]` runs `check` in the vitest project root and fails the run on any problem it finds. The installed package ships built; where a workspace links it from source instead, build it first (turbo `^build`), or vitest stops with "Failed to load url @elmeragroup/intl-tools/vitest".
+
+## Lint
+
+```json
+{
+  "jsPlugins": [{ "name": "elmera-intl", "specifier": "@elmeragroup/intl-tools/oxlint" }],
+  "rules": { "elmera-intl/extractable": "error" }
+}
+```
+
+The rule runs the extractor itself on every script file, with no text pre-filter, so lint and `extract` agree on every file.

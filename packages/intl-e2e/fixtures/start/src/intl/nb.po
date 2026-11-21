@@ -1,0 +1,2112 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nb\n"
+"X-Elmera-Serializer: 1\n"
+
+#: src/components/corpus.tsx
+msgid "100 kr"
+msgstr "100 kroner"
+
+#: src/routes/three.tsx
+msgid "Bulk message 001"
+msgstr "Massemelding 001"
+
+#: src/routes/three.tsx
+msgid "Bulk message 002"
+msgstr "Massemelding 002"
+
+#: src/routes/three.tsx
+msgid "Bulk message 003"
+msgstr "Massemelding 003"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 004"
+msgstr "Massemelding 004"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 005"
+msgstr "Massemelding 005"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 006"
+msgstr "Massemelding 006"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 007"
+msgstr "Massemelding 007"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 008"
+msgstr "Massemelding 008"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 009"
+msgstr "Massemelding 009"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 010"
+msgstr "Massemelding 010"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 011"
+msgstr "Massemelding 011"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 012"
+msgstr "Massemelding 012"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 013"
+msgstr "Massemelding 013"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 014"
+msgstr "Massemelding 014"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 015"
+msgstr "Massemelding 015"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 016"
+msgstr "Massemelding 016"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 017"
+msgstr "Massemelding 017"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 018"
+msgstr "Massemelding 018"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 019"
+msgstr "Massemelding 019"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 020"
+msgstr "Massemelding 020"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 021"
+msgstr "Massemelding 021"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 022"
+msgstr "Massemelding 022"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 023"
+msgstr "Massemelding 023"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 024"
+msgstr "Massemelding 024"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 025"
+msgstr "Massemelding 025"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 026"
+msgstr "Massemelding 026"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 027"
+msgstr "Massemelding 027"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 028"
+msgstr "Massemelding 028"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 029"
+msgstr "Massemelding 029"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 030"
+msgstr "Massemelding 030"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 031"
+msgstr "Massemelding 031"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 032"
+msgstr "Massemelding 032"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 033"
+msgstr "Massemelding 033"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 034"
+msgstr "Massemelding 034"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 035"
+msgstr "Massemelding 035"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 036"
+msgstr "Massemelding 036"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 037"
+msgstr "Massemelding 037"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 038"
+msgstr "Massemelding 038"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 039"
+msgstr "Massemelding 039"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 040"
+msgstr "Massemelding 040"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 041"
+msgstr "Massemelding 041"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 042"
+msgstr "Massemelding 042"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 043"
+msgstr "Massemelding 043"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 044"
+msgstr "Massemelding 044"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 045"
+msgstr "Massemelding 045"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 046"
+msgstr "Massemelding 046"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 047"
+msgstr "Massemelding 047"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 048"
+msgstr "Massemelding 048"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 049"
+msgstr "Massemelding 049"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 050"
+msgstr "Massemelding 050"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 051"
+msgstr "Massemelding 051"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 052"
+msgstr "Massemelding 052"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 053"
+msgstr "Massemelding 053"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 054"
+msgstr "Massemelding 054"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 055"
+msgstr "Massemelding 055"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 056"
+msgstr "Massemelding 056"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 057"
+msgstr "Massemelding 057"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 058"
+msgstr "Massemelding 058"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 059"
+msgstr "Massemelding 059"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 060"
+msgstr "Massemelding 060"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 061"
+msgstr "Massemelding 061"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 062"
+msgstr "Massemelding 062"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 063"
+msgstr "Massemelding 063"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 064"
+msgstr "Massemelding 064"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 065"
+msgstr "Massemelding 065"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 066"
+msgstr "Massemelding 066"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 067"
+msgstr "Massemelding 067"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 068"
+msgstr "Massemelding 068"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 069"
+msgstr "Massemelding 069"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 070"
+msgstr "Massemelding 070"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 071"
+msgstr "Massemelding 071"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 072"
+msgstr "Massemelding 072"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 073"
+msgstr "Massemelding 073"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 074"
+msgstr "Massemelding 074"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 075"
+msgstr "Massemelding 075"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 076"
+msgstr "Massemelding 076"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 077"
+msgstr "Massemelding 077"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 078"
+msgstr "Massemelding 078"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 079"
+msgstr "Massemelding 079"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 080"
+msgstr "Massemelding 080"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 081"
+msgstr "Massemelding 081"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 082"
+msgstr "Massemelding 082"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 083"
+msgstr "Massemelding 083"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 084"
+msgstr "Massemelding 084"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 085"
+msgstr "Massemelding 085"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 086"
+msgstr "Massemelding 086"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 087"
+msgstr "Massemelding 087"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 088"
+msgstr "Massemelding 088"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 089"
+msgstr "Massemelding 089"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 090"
+msgstr "Massemelding 090"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 091"
+msgstr "Massemelding 091"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 092"
+msgstr "Massemelding 092"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 093"
+msgstr "Massemelding 093"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 094"
+msgstr "Massemelding 094"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 095"
+msgstr "Massemelding 095"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 096"
+msgstr "Massemelding 096"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 097"
+msgstr "Massemelding 097"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 098"
+msgstr "Massemelding 098"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 099"
+msgstr "Massemelding 099"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 100"
+msgstr "Massemelding 100"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 101"
+msgstr "Massemelding 101"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 102"
+msgstr "Massemelding 102"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 103"
+msgstr "Massemelding 103"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 104"
+msgstr "Massemelding 104"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 105"
+msgstr "Massemelding 105"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 106"
+msgstr "Massemelding 106"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 107"
+msgstr "Massemelding 107"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 108"
+msgstr "Massemelding 108"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 109"
+msgstr "Massemelding 109"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 110"
+msgstr "Massemelding 110"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 111"
+msgstr "Massemelding 111"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 112"
+msgstr "Massemelding 112"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 113"
+msgstr "Massemelding 113"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 114"
+msgstr "Massemelding 114"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 115"
+msgstr "Massemelding 115"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 116"
+msgstr "Massemelding 116"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 117"
+msgstr "Massemelding 117"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 118"
+msgstr "Massemelding 118"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 119"
+msgstr "Massemelding 119"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 120"
+msgstr "Massemelding 120"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 121"
+msgstr "Massemelding 121"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 122"
+msgstr "Massemelding 122"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 123"
+msgstr "Massemelding 123"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 124"
+msgstr "Massemelding 124"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 125"
+msgstr "Massemelding 125"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 126"
+msgstr "Massemelding 126"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 127"
+msgstr "Massemelding 127"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 128"
+msgstr "Massemelding 128"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 129"
+msgstr "Massemelding 129"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 130"
+msgstr "Massemelding 130"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 131"
+msgstr "Massemelding 131"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 132"
+msgstr "Massemelding 132"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 133"
+msgstr "Massemelding 133"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 134"
+msgstr "Massemelding 134"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 135"
+msgstr "Massemelding 135"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 136"
+msgstr "Massemelding 136"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 137"
+msgstr "Massemelding 137"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 138"
+msgstr "Massemelding 138"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 139"
+msgstr "Massemelding 139"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 140"
+msgstr "Massemelding 140"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 141"
+msgstr "Massemelding 141"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 142"
+msgstr "Massemelding 142"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 143"
+msgstr "Massemelding 143"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 144"
+msgstr "Massemelding 144"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 145"
+msgstr "Massemelding 145"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 146"
+msgstr "Massemelding 146"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 147"
+msgstr "Massemelding 147"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 148"
+msgstr "Massemelding 148"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 149"
+msgstr "Massemelding 149"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 150"
+msgstr "Massemelding 150"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 151"
+msgstr "Massemelding 151"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 152"
+msgstr "Massemelding 152"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 153"
+msgstr "Massemelding 153"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 154"
+msgstr "Massemelding 154"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 155"
+msgstr "Massemelding 155"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 156"
+msgstr "Massemelding 156"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 157"
+msgstr "Massemelding 157"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 158"
+msgstr "Massemelding 158"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 159"
+msgstr "Massemelding 159"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 160"
+msgstr "Massemelding 160"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 161"
+msgstr "Massemelding 161"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 162"
+msgstr "Massemelding 162"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 163"
+msgstr "Massemelding 163"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 164"
+msgstr "Massemelding 164"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 165"
+msgstr "Massemelding 165"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 166"
+msgstr "Massemelding 166"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 167"
+msgstr "Massemelding 167"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 168"
+msgstr "Massemelding 168"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 169"
+msgstr "Massemelding 169"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 170"
+msgstr "Massemelding 170"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 171"
+msgstr "Massemelding 171"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 172"
+msgstr "Massemelding 172"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 173"
+msgstr "Massemelding 173"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 174"
+msgstr "Massemelding 174"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 175"
+msgstr "Massemelding 175"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 176"
+msgstr "Massemelding 176"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 177"
+msgstr "Massemelding 177"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 178"
+msgstr "Massemelding 178"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 179"
+msgstr "Massemelding 179"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 180"
+msgstr "Massemelding 180"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 181"
+msgstr "Massemelding 181"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 182"
+msgstr "Massemelding 182"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 183"
+msgstr "Massemelding 183"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 184"
+msgstr "Massemelding 184"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 185"
+msgstr "Massemelding 185"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 186"
+msgstr "Massemelding 186"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 187"
+msgstr "Massemelding 187"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 188"
+msgstr "Massemelding 188"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 189"
+msgstr "Massemelding 189"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 190"
+msgstr "Massemelding 190"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 191"
+msgstr "Massemelding 191"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 192"
+msgstr "Massemelding 192"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 193"
+msgstr "Massemelding 193"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 194"
+msgstr "Massemelding 194"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 195"
+msgstr "Massemelding 195"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 196"
+msgstr "Massemelding 196"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 197"
+msgstr "Massemelding 197"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 198"
+msgstr "Massemelding 198"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 199"
+msgstr "Massemelding 199"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 200"
+msgstr "Massemelding 200"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 201"
+msgstr "Massemelding 201"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 202"
+msgstr "Massemelding 202"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 203"
+msgstr "Massemelding 203"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 204"
+msgstr "Massemelding 204"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 205"
+msgstr "Massemelding 205"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 206"
+msgstr "Massemelding 206"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 207"
+msgstr "Massemelding 207"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 208"
+msgstr "Massemelding 208"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 209"
+msgstr "Massemelding 209"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 210"
+msgstr "Massemelding 210"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 211"
+msgstr "Massemelding 211"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 212"
+msgstr "Massemelding 212"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 213"
+msgstr "Massemelding 213"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 214"
+msgstr "Massemelding 214"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 215"
+msgstr "Massemelding 215"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 216"
+msgstr "Massemelding 216"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 217"
+msgstr "Massemelding 217"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 218"
+msgstr "Massemelding 218"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 219"
+msgstr "Massemelding 219"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 220"
+msgstr "Massemelding 220"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 221"
+msgstr "Massemelding 221"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 222"
+msgstr "Massemelding 222"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 223"
+msgstr "Massemelding 223"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 224"
+msgstr "Massemelding 224"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 225"
+msgstr "Massemelding 225"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 226"
+msgstr "Massemelding 226"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 227"
+msgstr "Massemelding 227"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 228"
+msgstr "Massemelding 228"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 229"
+msgstr "Massemelding 229"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 230"
+msgstr "Massemelding 230"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 231"
+msgstr "Massemelding 231"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 232"
+msgstr "Massemelding 232"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 233"
+msgstr "Massemelding 233"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 234"
+msgstr "Massemelding 234"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 235"
+msgstr "Massemelding 235"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 236"
+msgstr "Massemelding 236"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 237"
+msgstr "Massemelding 237"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 238"
+msgstr "Massemelding 238"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 239"
+msgstr "Massemelding 239"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 240"
+msgstr "Massemelding 240"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 241"
+msgstr "Massemelding 241"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 242"
+msgstr "Massemelding 242"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 243"
+msgstr "Massemelding 243"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 244"
+msgstr "Massemelding 244"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 245"
+msgstr "Massemelding 245"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 246"
+msgstr "Massemelding 246"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 247"
+msgstr "Massemelding 247"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 248"
+msgstr "Massemelding 248"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 249"
+msgstr "Massemelding 249"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 250"
+msgstr "Massemelding 250"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 251"
+msgstr "Massemelding 251"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 252"
+msgstr "Massemelding 252"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 253"
+msgstr "Massemelding 253"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 254"
+msgstr "Massemelding 254"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 255"
+msgstr "Massemelding 255"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 256"
+msgstr "Massemelding 256"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 257"
+msgstr "Massemelding 257"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 258"
+msgstr "Massemelding 258"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 259"
+msgstr "Massemelding 259"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 260"
+msgstr "Massemelding 260"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 261"
+msgstr "Massemelding 261"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 262"
+msgstr "Massemelding 262"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 263"
+msgstr "Massemelding 263"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 264"
+msgstr "Massemelding 264"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 265"
+msgstr "Massemelding 265"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 266"
+msgstr "Massemelding 266"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 267"
+msgstr "Massemelding 267"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 268"
+msgstr "Massemelding 268"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 269"
+msgstr "Massemelding 269"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 270"
+msgstr "Massemelding 270"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 271"
+msgstr "Massemelding 271"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 272"
+msgstr "Massemelding 272"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 273"
+msgstr "Massemelding 273"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 274"
+msgstr "Massemelding 274"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 275"
+msgstr "Massemelding 275"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 276"
+msgstr "Massemelding 276"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 277"
+msgstr "Massemelding 277"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 278"
+msgstr "Massemelding 278"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 279"
+msgstr "Massemelding 279"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 280"
+msgstr "Massemelding 280"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 281"
+msgstr "Massemelding 281"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 282"
+msgstr "Massemelding 282"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 283"
+msgstr "Massemelding 283"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 284"
+msgstr "Massemelding 284"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 285"
+msgstr "Massemelding 285"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 286"
+msgstr "Massemelding 286"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 287"
+msgstr "Massemelding 287"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 288"
+msgstr "Massemelding 288"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 289"
+msgstr "Massemelding 289"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 290"
+msgstr "Massemelding 290"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 291"
+msgstr "Massemelding 291"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 292"
+msgstr "Massemelding 292"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 293"
+msgstr "Massemelding 293"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 294"
+msgstr "Massemelding 294"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 295"
+msgstr "Massemelding 295"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 296"
+msgstr "Massemelding 296"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 297"
+msgstr "Massemelding 297"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 298"
+msgstr "Massemelding 298"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 299"
+msgstr "Massemelding 299"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 300"
+msgstr "Massemelding 300"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 301"
+msgstr "Massemelding 301"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 302"
+msgstr "Massemelding 302"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 303"
+msgstr "Massemelding 303"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 304"
+msgstr "Massemelding 304"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 305"
+msgstr "Massemelding 305"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 306"
+msgstr "Massemelding 306"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 307"
+msgstr "Massemelding 307"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 308"
+msgstr "Massemelding 308"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 309"
+msgstr "Massemelding 309"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 310"
+msgstr "Massemelding 310"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 311"
+msgstr "Massemelding 311"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 312"
+msgstr "Massemelding 312"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 313"
+msgstr "Massemelding 313"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 314"
+msgstr "Massemelding 314"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 315"
+msgstr "Massemelding 315"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 316"
+msgstr "Massemelding 316"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 317"
+msgstr "Massemelding 317"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 318"
+msgstr "Massemelding 318"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 319"
+msgstr "Massemelding 319"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 320"
+msgstr "Massemelding 320"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 321"
+msgstr "Massemelding 321"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 322"
+msgstr "Massemelding 322"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 323"
+msgstr "Massemelding 323"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 324"
+msgstr "Massemelding 324"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 325"
+msgstr "Massemelding 325"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 326"
+msgstr "Massemelding 326"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 327"
+msgstr "Massemelding 327"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 328"
+msgstr "Massemelding 328"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 329"
+msgstr "Massemelding 329"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 330"
+msgstr "Massemelding 330"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 331"
+msgstr "Massemelding 331"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 332"
+msgstr "Massemelding 332"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 333"
+msgstr "Massemelding 333"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 334"
+msgstr "Massemelding 334"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 335"
+msgstr "Massemelding 335"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 336"
+msgstr "Massemelding 336"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 337"
+msgstr "Massemelding 337"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 338"
+msgstr "Massemelding 338"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 339"
+msgstr "Massemelding 339"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 340"
+msgstr "Massemelding 340"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 341"
+msgstr "Massemelding 341"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 342"
+msgstr "Massemelding 342"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 343"
+msgstr "Massemelding 343"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 344"
+msgstr "Massemelding 344"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 345"
+msgstr "Massemelding 345"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 346"
+msgstr "Massemelding 346"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 347"
+msgstr "Massemelding 347"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 348"
+msgstr "Massemelding 348"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 349"
+msgstr "Massemelding 349"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 350"
+msgstr "Massemelding 350"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 351"
+msgstr "Massemelding 351"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 352"
+msgstr "Massemelding 352"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 353"
+msgstr "Massemelding 353"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 354"
+msgstr "Massemelding 354"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 355"
+msgstr "Massemelding 355"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 356"
+msgstr "Massemelding 356"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 357"
+msgstr "Massemelding 357"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 358"
+msgstr "Massemelding 358"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 359"
+msgstr "Massemelding 359"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 360"
+msgstr "Massemelding 360"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 361"
+msgstr "Massemelding 361"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 362"
+msgstr "Massemelding 362"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 363"
+msgstr "Massemelding 363"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 364"
+msgstr "Massemelding 364"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 365"
+msgstr "Massemelding 365"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 366"
+msgstr "Massemelding 366"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 367"
+msgstr "Massemelding 367"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 368"
+msgstr "Massemelding 368"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 369"
+msgstr "Massemelding 369"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 370"
+msgstr "Massemelding 370"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 371"
+msgstr "Massemelding 371"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 372"
+msgstr "Massemelding 372"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 373"
+msgstr "Massemelding 373"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 374"
+msgstr "Massemelding 374"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 375"
+msgstr "Massemelding 375"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 376"
+msgstr "Massemelding 376"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 377"
+msgstr "Massemelding 377"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 378"
+msgstr "Massemelding 378"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 379"
+msgstr "Massemelding 379"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 380"
+msgstr "Massemelding 380"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 381"
+msgstr "Massemelding 381"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 382"
+msgstr "Massemelding 382"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 383"
+msgstr "Massemelding 383"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 384"
+msgstr "Massemelding 384"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 385"
+msgstr "Massemelding 385"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 386"
+msgstr "Massemelding 386"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 387"
+msgstr "Massemelding 387"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 388"
+msgstr "Massemelding 388"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 389"
+msgstr "Massemelding 389"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 390"
+msgstr "Massemelding 390"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 391"
+msgstr "Massemelding 391"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 392"
+msgstr "Massemelding 392"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 393"
+msgstr "Massemelding 393"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 394"
+msgstr "Massemelding 394"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 395"
+msgstr "Massemelding 395"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 396"
+msgstr "Massemelding 396"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 397"
+msgstr "Massemelding 397"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 398"
+msgstr "Massemelding 398"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 399"
+msgstr "Massemelding 399"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 400"
+msgstr "Massemelding 400"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 401"
+msgstr "Massemelding 401"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 402"
+msgstr "Massemelding 402"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 403"
+msgstr "Massemelding 403"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 404"
+msgstr "Massemelding 404"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 405"
+msgstr "Massemelding 405"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 406"
+msgstr "Massemelding 406"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 407"
+msgstr "Massemelding 407"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 408"
+msgstr "Massemelding 408"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 409"
+msgstr "Massemelding 409"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 410"
+msgstr "Massemelding 410"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 411"
+msgstr "Massemelding 411"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 412"
+msgstr "Massemelding 412"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 413"
+msgstr "Massemelding 413"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 414"
+msgstr "Massemelding 414"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 415"
+msgstr "Massemelding 415"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 416"
+msgstr "Massemelding 416"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 417"
+msgstr "Massemelding 417"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 418"
+msgstr "Massemelding 418"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 419"
+msgstr "Massemelding 419"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 420"
+msgstr "Massemelding 420"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 421"
+msgstr "Massemelding 421"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 422"
+msgstr "Massemelding 422"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 423"
+msgstr "Massemelding 423"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 424"
+msgstr "Massemelding 424"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 425"
+msgstr "Massemelding 425"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 426"
+msgstr "Massemelding 426"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 427"
+msgstr "Massemelding 427"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 428"
+msgstr "Massemelding 428"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 429"
+msgstr "Massemelding 429"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 430"
+msgstr "Massemelding 430"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 431"
+msgstr "Massemelding 431"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 432"
+msgstr "Massemelding 432"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 433"
+msgstr "Massemelding 433"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 434"
+msgstr "Massemelding 434"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 435"
+msgstr "Massemelding 435"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 436"
+msgstr "Massemelding 436"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 437"
+msgstr "Massemelding 437"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 438"
+msgstr "Massemelding 438"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 439"
+msgstr "Massemelding 439"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 440"
+msgstr "Massemelding 440"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 441"
+msgstr "Massemelding 441"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 442"
+msgstr "Massemelding 442"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 443"
+msgstr "Massemelding 443"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 444"
+msgstr "Massemelding 444"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 445"
+msgstr "Massemelding 445"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 446"
+msgstr "Massemelding 446"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 447"
+msgstr "Massemelding 447"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 448"
+msgstr "Massemelding 448"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 449"
+msgstr "Massemelding 449"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 450"
+msgstr "Massemelding 450"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 451"
+msgstr "Massemelding 451"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 452"
+msgstr "Massemelding 452"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 453"
+msgstr "Massemelding 453"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 454"
+msgstr "Massemelding 454"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 455"
+msgstr "Massemelding 455"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 456"
+msgstr "Massemelding 456"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 457"
+msgstr "Massemelding 457"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 458"
+msgstr "Massemelding 458"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 459"
+msgstr "Massemelding 459"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 460"
+msgstr "Massemelding 460"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 461"
+msgstr "Massemelding 461"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 462"
+msgstr "Massemelding 462"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 463"
+msgstr "Massemelding 463"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 464"
+msgstr "Massemelding 464"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 465"
+msgstr "Massemelding 465"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 466"
+msgstr "Massemelding 466"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 467"
+msgstr "Massemelding 467"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 468"
+msgstr "Massemelding 468"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 469"
+msgstr "Massemelding 469"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 470"
+msgstr "Massemelding 470"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 471"
+msgstr "Massemelding 471"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 472"
+msgstr "Massemelding 472"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 473"
+msgstr "Massemelding 473"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 474"
+msgstr "Massemelding 474"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 475"
+msgstr "Massemelding 475"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 476"
+msgstr "Massemelding 476"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 477"
+msgstr "Massemelding 477"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 478"
+msgstr "Massemelding 478"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 479"
+msgstr "Massemelding 479"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 480"
+msgstr "Massemelding 480"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 481"
+msgstr "Massemelding 481"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 482"
+msgstr "Massemelding 482"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 483"
+msgstr "Massemelding 483"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 484"
+msgstr "Massemelding 484"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 485"
+msgstr "Massemelding 485"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 486"
+msgstr "Massemelding 486"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 487"
+msgstr "Massemelding 487"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 488"
+msgstr "Massemelding 488"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 489"
+msgstr "Massemelding 489"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 490"
+msgstr "Massemelding 490"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 491"
+msgstr "Massemelding 491"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 492"
+msgstr "Massemelding 492"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 493"
+msgstr "Massemelding 493"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 494"
+msgstr "Massemelding 494"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 495"
+msgstr "Massemelding 495"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 496"
+msgstr "Massemelding 496"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 497"
+msgstr "Massemelding 497"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 498"
+msgstr "Massemelding 498"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 499"
+msgstr "Massemelding 499"
+
+#: src/routes/bulk.tsx
+msgid "Bulk message 500"
+msgstr "Massemelding 500"
+
+#: src/components/unused.tsx
+msgid "Catalog only sentinel"
+msgstr "KATALOGVAKT-7Q2"
+
+#: src/components/corpus.tsx
+msgid "Copyright © Elmera — 2026…"
+msgstr "Opphavsrett © Elmera — 2026…"
+
+#: src/messages.ts
+msgid "Declared message"
+msgstr "Deklarert melding"
+
+#: src/components/corpus.tsx
+msgid "Delete ''{name}'?"
+msgstr "Slett ''{name}'?"
+
+#: src/components/corpus.tsx
+msgid "Don't lose your cart"
+msgstr "Ikke mist handlekurven"
+
+#: src/routes/index.tsx
+msgid "Due {d, date, short}"
+msgstr "Forfaller {d, date, short}"
+
+#: src/components/unused.tsx
+msgid "English catalog sentinel ENVAKT-4X8 {name}"
+msgstr "Engelsk katalogvakt {name}"
+
+#: src/components/corpus.tsx
+msgid "Got {count, plural, one {# user's '{'name'}'} other {# users' '<'b'>{'x'}<'/b'>'}}"
+msgstr "Fikk {count, plural, one {# brukers '{'name'}'} other {# brukeres '<'b'>{'x'}<'/b'>'}}"
+
+#: src/routes/index.tsx
+msgid "Hello from a call"
+msgstr "Hei fra et kall"
+
+#: src/routes/index.tsx
+msgid "Hello from an element"
+msgstr "Hei fra et element"
+
+#. <x0> = <b>
+#: src/components/corpus.tsx
+msgid "Hi <x0>dear {name}</x0>!"
+msgstr "Hei <x0>kjære {name}</x0>!"
+
+#: src/components/corpus.tsx
+msgid "Item ''#1' or a''|b"
+msgstr "Vare ''#1' eller a''|b"
+
+#: src/components/locale-switcher.tsx
+msgid "Language"
+msgstr "Språk"
+
+#. <x0> = <br>
+#: src/components/corpus.tsx
+msgid "Line one<x0></x0>line two"
+msgstr "Linje en<x0></x0>linje to"
+
+#: src/components/corpus.tsx
+msgid "Literal '{}' braces"
+msgstr "Bokstavelige '{}' klammer"
+
+#: src/components/corpus.tsx
+msgid "Multi line with spaces"
+msgstr "Flere linjer med mellomrom"
+
+#: src/components/corpus.tsx
+msgctxt "verb"
+msgid "Open"
+msgstr "Åpne"
+
+#: src/components/corpus.tsx
+msgid "Price '<' 100 #1"
+msgstr "Pris '<' 100 #1"
+
+#. <x0> = <a href>
+#. <x1> = <Link href>
+#: src/components/corpus.tsx
+msgid "Read <x0>this</x0> and <x1>that</x1>"
+msgstr "Les <x0>dette</x0> og <x1>det</x1>"
+
+#: src/components/corpus.tsx
+msgid "Tab here"
+msgstr "Tabulator her"
+
+#. <x0> = <b>
+#: src/components/corpus.tsx
+msgid "The <x0>players''</x0> cards"
+msgstr "<x0>Spillernes</x0> kort"
+
+#: src/components/corpus.tsx
+msgid "Two ''' apostrophes"
+msgstr "To ''' apostrofer"
+
+#: src/components/corpus.tsx
+msgid "Wrapped fragment here"
+msgstr "Innpakket fragment her"
+
+#: src/components/corpus.tsx
+msgid "You have {count, plural, =0 {no orders} one {# order} other {# orders}}"
+msgstr "Du har {count, plural, =0 {ingen ordrer} one {# ordre} other {# ordrer}}"
