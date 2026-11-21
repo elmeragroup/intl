@@ -64,19 +64,16 @@ function uninstallPacked(): void {
   });
 }
 
-// Link a packed package's third-party dependencies to the workspace's copies; a dependency on the other packed package
-// (intl-tools on intl) resolves to that copy, beside it in the fixture's node_modules.
-function linkDependencies(
-  target: string,
-  {
-    manifest,
-    source,
-  }: {
-    readonly manifest: { readonly dependencies: Readonly<Record<string, string>> };
-    readonly source: string;
-  }
-): void {
-  Object.keys(manifest.dependencies)
+// Link the third-party dependencies a packed package's own manifest declares (as an install of the archive would) to
+// the workspace's copies; a dependency on the other packed package (intl-tools on intl) resolves to that copy, beside
+// it in the fixture's node_modules. A dependency the archive's manifest lost is not linked, so its absence fails.
+function linkDependencies(target: string, source: string): void {
+  // SAFETY: the package.json `pnpm pack` wrote into the archive; a manifest without `dependencies` declares none.
+  const packed = JSON.parse(readFileSync(join(target, "package.json"), "utf8")) as {
+    readonly dependencies?: Readonly<Record<string, string>>;
+  };
+
+  Object.keys(packed.dependencies ?? {})
     .filter((name) => !PACKAGES.some((other) => other.manifest.name === name))
     .forEach((name) => {
       const link = join(target, "node_modules", name);
@@ -107,7 +104,7 @@ function installPacked(
       const target = installed(fixture, pkg.manifest.name);
       mkdirSync(target, { recursive: true });
       run("tar", ["-xzf", tarball, "-C", target, "--strip-components=1"], root, {});
-      linkDependencies(target, pkg);
+      linkDependencies(target, pkg.source);
     });
   });
 }
@@ -122,7 +119,7 @@ function installEffectConsumer(runtimeTarball: string): string {
   const target = join(dir, "node_modules", runtimeManifest.name);
   mkdirSync(target, { recursive: true });
   run("tar", ["-xzf", runtimeTarball, "-C", target, "--strip-components=1"], root, {});
-  linkDependencies(target, PACKAGES[0]);
+  linkDependencies(target, runtimeSource);
   symlinkSync(
     realpathSync(join(runtimeSource, "node_modules", "effect")),
     join(dir, "node_modules", "effect")

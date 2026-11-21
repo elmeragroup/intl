@@ -1,9 +1,11 @@
 // The contracts that live in JSON and YAML, which oxlint does not read: package manifests, the dependency catalog, the
 // Node pin and the lint config itself. Fast and unbuilt, so it runs in the same feedback loop as lint.
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSync } from "oxc-parser";
+import type { Expression } from "oxc-parser";
+import { parseSync, Visitor } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -83,22 +85,27 @@ function sourceTargets(target: ExportTarget): ReadonlyArray<string> {
       );
 }
 
-const SKIPPED_DIRECTORIES = new Set([
-  "node_modules",
-  "dist",
-  ".cache",
-  ".turbo",
-  ".next",
-  ".output",
-  ".nitro",
-  ".tanstack",
-]);
+// A literal module specifier's value as JavaScript reads it: escapes decoded, parentheses and an expression-free
+// template literal seen through. Any other expression names no fixed module.
+function specifierValue(node: Expression): string | undefined {
+  if (node.type === "ParenthesizedExpression") {
+    return specifierValue(node.expression);
+  }
 
-// Whether a module imports effect, read from its parsed module record: a static import, a re-export, or a dynamic
-// import of a literal specifier. Text that only looks like an import (a fixture in a template literal) is none.
+  if (node.type === "Literal" && typeof node.value === "string") {
+    return node.value;
+  }
+
+  return node.type === "TemplateLiteral" && node.expressions.length === 0
+    ? (node.quasis[0]?.value.cooked ?? undefined)
+    : undefined;
+}
+
+// Whether a module imports effect: a static import or re-export (the parser's module record holds their decoded
+// specifiers), or a dynamic import of a literal specifier. Text that only looks like an import (a fixture in a
+// template literal) is none.
 function importsEffect(file: string): boolean {
-  const code = read(file);
-  const { module } = parseSync(file, code);
+  const { module, program } = parseSync(file, read(file));
   const specifiers = [
     ...module.staticImports.map((declaration) => declaration.moduleRequest.value),
     ...module.staticExports.flatMap((declaration) =>
@@ -106,25 +113,30 @@ function importsEffect(file: string): boolean {
         entry.moduleRequest === null ? [] : [entry.moduleRequest.value]
       )
     ),
-    ...module.dynamicImports.map((expression) =>
-      code.slice(expression.moduleRequest.start + 1, expression.moduleRequest.end - 1)
-    ),
   ];
+
+  new Visitor({
+    ImportExpression(node) {
+      const specifier = specifierValue(node.source);
+
+      if (specifier !== undefined) {
+        specifiers.push(specifier);
+      }
+    },
+  }).visit(program);
 
   return specifiers.some((specifier) => /^effect(?:\/|$)/u.test(specifier));
 }
 
-// A directory's source modules, outside build output and dependencies.
-function sourceFiles(directory: string): ReadonlyArray<string> {
-  return readdirSync(join(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
-    const path = `${directory}/${entry.name}`;
-
-    if (entry.isDirectory()) {
-      return SKIPPED_DIRECTORIES.has(entry.name) || entry.name.startsWith(".next") ? [] : sourceFiles(path);
-    }
-
-    return /\.[cm]?[jt]sx?$/u.test(entry.name) && !entry.name.endsWith(".d.ts") ? [path] : [];
+// The files `lint:effect` lints, as it lists them: the script itself run with `--debug=files`, so its paths and
+// oxlint's own ignores (.gitignore, build output) decide.
+function effectLintFiles(): ReadonlyArray<string> {
+  const listed = execFileSync("pnpm", ["--silent", "run", "lint:effect", "--debug=files"], {
+    cwd: ROOT,
+    encoding: "utf8",
   });
+
+  return listed.split("\n").filter((line) => line !== "" && existsSync(join(ROOT, line)));
 }
 
 // Unit under test: the committed workspace configuration. Oracle: the conventions AGENTS.md states, each case naming
@@ -348,12 +360,8 @@ describe("Effect diagnostics", () => {
   // Lint reads one file at a time and cannot see which files the second config scopes, so the list is held here: the
   // gate covers every source file that imports effect, and nothing else.
   it("covers every file that imports effect", () => {
-    // The directories `lint:effect` lints: its arguments after the config that are not flags.
-    const args = (parseManifest("package.json").scripts?.["lint:effect"] ?? "").split(/\s+/u);
-    const roots = args.slice(args.indexOf(".oxlintrc.effect.json") + 1).filter((arg) => !arg.startsWith("-"));
-    const sources = roots.flatMap((root) => sourceFiles(root)).filter((file) => importsEffect(file));
+    const sources = effectLintFiles().filter((file) => importsEffect(file));
 
-    expect(roots).toEqual(["packages"]);
     expect(sources.length).toBeGreaterThan(0);
     expect([...(override?.files ?? [])].toSorted()).toEqual(sources.toSorted());
   });

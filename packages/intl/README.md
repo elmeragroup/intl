@@ -128,8 +128,8 @@ const { handler, dispose } = HttpRouter.toWebHandler(
 );
 ```
 
-`CurrentIntl.provide` keeps the failures the options effect declares in its `E` as the handler's `E`, and its
-requirements, less `CurrentIntl`, as the handler's `R`. In the loader above a rejected import is a defect, since
+The effect `CurrentIntl.provide` returns fails with the handler's errors and the options effect's, and requires every
+service the options effect uses plus what the handler still requires once `CurrentIntl` is provided. In the loader above a rejected import is a defect, since
 `Effect.promise` declares no failure; to make a catalog that cannot load recoverable, load it with `Effect.tryPromise`
 and map the rejection to the app's own error. A catalog compiled for another catalog version throws in `createIntl`, so
 it is a defect, as on every host.

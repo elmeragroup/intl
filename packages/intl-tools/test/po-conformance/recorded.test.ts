@@ -12,7 +12,9 @@ import POParser from "./po-parser-shape.ts";
 // - `dialect`, only where it differs from `parsed`/`throws`: po-parser on the GNU msgcat entries `parsePo` rewrote its
 //   input to (`toParserDialect`), the reader the codec replaces;
 // - `current`: what `parsePo` returned;
-// - `msgcat`: GNU msgcat 1.0's output (for the `gnu` inputs, on the input with a UTF-8 charset header, `msgcat.input`).
+// - `msgcat`: GNU msgcat 1.0's output (for the `gnu` inputs, on the input with a UTF-8 charset header, `msgcat.input`,
+//   and `msgcat.entries`, its active entries: GNU msgattrib --no-obsolete over that output, read by po-parser 2.2.0).
+//   The `gnu (c-format)` inputs repeat the ones that flag `ignore-same`, which msgcat drops, with a flag it keeps.
 
 // The inputs where GNU msgcat's entries, which parsePo read, differ from po-parser's (README.md).
 const DELIBERATE = new Set([
@@ -42,7 +44,11 @@ type Recording = {
       readonly name: string;
       readonly input: string;
       readonly dialect?: Outcome;
-      readonly msgcat: { readonly status: number; readonly stdout: string };
+      readonly msgcat: {
+        readonly status: number;
+        readonly stdout: string;
+        readonly entries?: ReadonlyArray<Entry>;
+      };
     } & ({ readonly parsed: Catalog; readonly serialized: string } | { readonly throws: string }) & {
         readonly current:
           | { readonly _tag: "Parsed"; readonly file: unknown }
@@ -100,6 +106,19 @@ function poParserOutcome(recorded: Recording["parse"][number]): Outcome {
   return "throws" in recorded ? { throws: recorded.throws } : { parsed: recorded.parsed };
 }
 
+// The active entries as GNU msgcat keeps them: the flags it knows (`fuzzy`, `*-format`; it drops others such as
+// `ignore-same`), in code-point order, which its output does not keep.
+function asGnuKeepsThem(entries: ReadonlyArray<Entry>): ReadonlyArray<Entry> {
+  return entries.map((entry) => {
+    const flags = (entry.flags ?? [])
+      .filter((flag) => flag === "fuzzy" || flag.endsWith("-format"))
+      .toSorted();
+    const { flags: _all, ...rest } = entry;
+
+    return flags.length === 0 ? rest : { ...rest, flags };
+  });
+}
+
 // Each input decoded once: it reads as parsePo read it (po-parser's reading unless `dialect` records GNU msgcat's), and
 // where that is po-parser's reading, it writes back as po-parser wrote it.
 describe("reads as parsePo read it, and as po-parser 2.2.0 does unless GNU msgcat's entries win", () => {
@@ -114,6 +133,15 @@ describe("reads as parsePo read it, and as po-parser 2.2.0 does unless GNU msgca
       expect(withoutEmptyFlags(actual)).not.toEqual(withoutEmptyFlags(po));
     } else if ("parsed" in actual && "serialized" in recorded) {
       expect(POParser.serialize(actual.parsed)).toBe(recorded.serialized);
+    }
+
+    // The `gnu` inputs: each comment and flag belongs to the entry GNU gives it. Oracle: `msgcat.entries`, GNU msgcat
+    // 1.0's output with obsolete entries removed by GNU msgattrib and read by po-parser 2.2.0, never by this codec.
+    if (recorded.msgcat.entries !== undefined) {
+      expect(recorded.msgcat.status).toBe(0);
+      expect("parsed" in actual ? asGnuKeepsThem(actual.parsed.messages ?? []) : actual).toEqual(
+        asGnuKeepsThem(recorded.msgcat.entries)
+      );
     }
   });
 });
@@ -131,37 +159,6 @@ describe("projects onto the entries parsePo returned", () => {
     } else {
       expect(current).toEqual(before);
     }
-  });
-});
-
-// GNU msgcat writes each entry it read in one unambiguous form (its flags on one line, obsolete entries as `#~`, the
-// header as an entry with an empty msgid), and keeps only the flags it knows (`fuzzy`, `*-format`).
-function gnuMessages(catalog: Catalog): ReadonlyArray<Entry> {
-  const messages = (catalog.messages ?? []).filter(
-    (entry) => entry.msgid !== "" || entry.msgctxt !== undefined
-  );
-
-  return messages.map((entry) => {
-    const flags = (entry.flags ?? [])
-      .filter((flag) => flag === "fuzzy" || flag.endsWith("-format"))
-      .toSorted();
-    const { flags: _all, ...rest } = entry;
-
-    return flags.length === 0 ? rest : { ...rest, flags };
-  });
-}
-
-// Unit under test: which entry each comment and flag of the `gnu` inputs belongs to. Oracle: GNU msgcat 1.0's output
-// for the same input, each entry with its comments and flags in its own block. The `gnu (c-format)` inputs repeat the
-// ones that flag `ignore-same`, which msgcat does not know and drops, with a flag it keeps.
-describe("gives each comment and flag to the entry GNU msgcat gives it", () => {
-  it.each(RECORDED.parse.filter(({ name }) => name.startsWith("gnu")))("$name", (recorded) => {
-    const read = ours(recorded.input);
-
-    expect(recorded.msgcat.status).toBe(0);
-    expect("parsed" in read ? gnuMessages(read.parsed) : read).toEqual(
-      gnuMessages(POParser.parse(recorded.msgcat.stdout))
-    );
   });
 });
 

@@ -88,38 +88,39 @@ export const globalNames: Rule = {
         : undefined;
     }
 
-    // Whether a callee is effect's `Context.Service`, resolved through the file's imports.
+    // The export of effect a callee names, as a path from effect's root module: `Context.Service`, through a namespace
+    // or named import of `effect` or of `effect/Context`, any depth of static members. A local binding names none.
+    function effectPath(callee: ESTree.Expression): ReadonlyArray<string> | undefined {
+      const members: Array<string> = [];
+      let value = unwrap(callee);
+
+      while (value.type === "MemberExpression" && !value.computed && value.property.type === "Identifier") {
+        members.unshift(value.property.name);
+        value = unwrap(value.object);
+      }
+
+      const imported = value.type === "Identifier" ? importOf(value) : undefined;
+      const { specifier } = imported ?? {};
+      const base =
+        imported?.source === EFFECT_ROOT ? [] : imported?.source === CONTEXT_MODULE ? ["Context"] : undefined;
+
+      if (base === undefined || specifier === undefined) {
+        return undefined;
+      }
+
+      if (specifier.type === "ImportNamespaceSpecifier") {
+        return [...base, ...members];
+      }
+
+      return specifier.type === "ImportSpecifier"
+        ? [...base, moduleExportName(specifier.imported), ...members]
+        : undefined;
+    }
+
     function isContextService(callee: ESTree.Expression): boolean {
-      const value = unwrap(callee);
+      const path = effectPath(callee);
 
-      if (value.type === "Identifier") {
-        const imported = importOf(value);
-
-        return (
-          imported?.source === CONTEXT_MODULE &&
-          imported.specifier.type === "ImportSpecifier" &&
-          moduleExportName(imported.specifier.imported) === "Service"
-        );
-      }
-
-      if (
-        value.type !== "MemberExpression" ||
-        value.computed ||
-        value.property.type !== "Identifier" ||
-        value.property.name !== "Service" ||
-        value.object.type !== "Identifier"
-      ) {
-        return false;
-      }
-
-      const imported = importOf(value.object);
-
-      return (
-        (imported?.source === CONTEXT_MODULE && imported.specifier.type === "ImportNamespaceSpecifier") ||
-        (imported?.source === EFFECT_ROOT &&
-          imported.specifier.type === "ImportSpecifier" &&
-          moduleExportName(imported.specifier.imported) === "Context")
-      );
+      return path?.length === 2 && path[0] === "Context" && path[1] === "Service";
     }
 
     // The key literal of a service declaration: `Context.Service<S, A>()("key")` (the class form) or

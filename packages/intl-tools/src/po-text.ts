@@ -338,14 +338,19 @@ function readPoText(text: string): Result.Result<Document, PoSyntaxError> {
     const next = KEYWORD.exec(trimmed)?.[0];
 
     if (next === "msgctxt" || (next === "msgid" && keyword !== "msgctxt")) {
-      const failure =
-        (started ? reader.blank(line) : undefined) ??
-        pending
-          .map((comment) => reader.read(comment.text, comment.line))
-          .find((error) => error !== undefined);
+      const ended = started ? reader.blank(line) : undefined;
 
-      if (failure !== undefined) {
-        return Result.fail(failure);
+      if (ended !== undefined) {
+        return Result.fail(ended);
+      }
+
+      // Reading stops at the first comment that fails.
+      for (const comment of pending) {
+        const failure = reader.read(comment.text, comment.line);
+
+        if (failure !== undefined) {
+          return Result.fail(failure);
+        }
       }
 
       pending = [];

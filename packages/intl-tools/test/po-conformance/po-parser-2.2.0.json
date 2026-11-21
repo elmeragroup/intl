@@ -10256,7 +10256,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, ignore-same\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       }
     },
     {
@@ -10290,7 +10307,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, ignore-same\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10360,7 +10394,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10425,7 +10476,19 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, ignore-same\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Open\"\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Open\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Open"
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10496,7 +10559,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n#. trailing note\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10575,7 +10655,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n#: src/old.tsx\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10649,7 +10746,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n#, ignore-same\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10704,7 +10818,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\n\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10760,7 +10891,14 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, ignore-same\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -10799,7 +10937,18 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\"Language: nb\\n\"\n#: src/a.ts\nmsgid \"A\"\nmsgstr \"B\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\"Language: nb\\n\"\n\n#: src/a.ts\nmsgid \"A\"\nmsgstr \"B\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgid": "A",
+            "msgstr": "B",
+            "references": [
+              {
+                "path": "src/a.ts"
+              }
+            ]
+          }
+        ]
       },
       "dialect": {
         "parsed": {
@@ -12024,7 +12173,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, c-format\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n\n#, c-format\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       }
     },
     {
@@ -12079,7 +12245,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, c-format\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n\n#, c-format\n#~ msgid \"Old\"\n#~ msgstr \"Old\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       }
     },
     {
@@ -12140,7 +12323,20 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, c-format\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Open\"\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, c-format\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Open\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Open",
+            "flags": ["c-format"]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       }
     },
     {
@@ -12214,7 +12410,24 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n#, c-format\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#: src/page.tsx\nmsgctxt \"status\"\nmsgid \"Open\"\nmsgstr \"Åpen\"\n\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgctxt": "status",
+            "msgid": "Open",
+            "msgstr": "Åpen",
+            "references": [
+              {
+                "path": "src/page.tsx"
+              }
+            ]
+          },
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy"]
+          }
+        ]
       }
     },
     {
@@ -12260,7 +12473,14 @@
         "input": "msgid \"\"\nmsgstr \"\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, c-format\n#, fuzzy\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
         "status": 0,
         "stdout": "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n#, fuzzy, c-format\nmsgid \"Order {id}\"\nmsgstr \"Order {id}\"\n",
-        "stderr": ""
+        "stderr": "",
+        "entries": [
+          {
+            "msgid": "Order {id}",
+            "msgstr": "Order {id}",
+            "flags": ["fuzzy", "c-format"]
+          }
+        ]
       }
     }
   ],

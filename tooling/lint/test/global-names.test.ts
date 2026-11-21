@@ -36,6 +36,11 @@ createTester().run("global-names", globalNames, {
       code: `import { Context } from "effect";\nexport const Locale = Context.Service<string>("elmera-intl/Locale");`,
       filename: fixture("runtime/src/effect.ts"),
     },
+    // Through a namespace import of effect's root module.
+    {
+      code: `import * as Fx from "effect";\nexport class CurrentIntl extends Fx.Context.Service<CurrentIntl, number>()("elmera-intl/CurrentIntl") {}`,
+      filename: fixture("runtime/src/effect.ts"),
+    },
     // Only effect's Context.Service is a service: a local `Context`, or a test's own double, is not checked.
     {
       code: `const Context = { Service: (key: string) => key };\nexport const x = Context.Service("Locale");`,
@@ -76,6 +81,19 @@ createTester().run("global-names", globalNames, {
       errors: [
         { messageId: "serviceKey", data: { value: "elmera-session/CurrentUser", ...RUNTIME_NAMESPACE } },
       ],
+    },
+    // effect's root namespace reaches Context.Service too, in the class and the direct form.
+    {
+      code: `import * as Fx from "effect";\nexport class CurrentUser extends Fx.Context.Service<CurrentUser, string>()("elmera-session/CurrentUser") {}`,
+      filename: fixture("runtime/src/effect.ts"),
+      errors: [
+        { messageId: "serviceKey", data: { value: "elmera-session/CurrentUser", ...RUNTIME_NAMESPACE } },
+      ],
+    },
+    {
+      code: `import * as Fx from "effect";\nexport const Locale = Fx.Context.Service<string>("Locale");`,
+      filename: fixture("runtime/src/effect.ts"),
+      errors: [{ messageId: "serviceKey", data: { value: "Locale", ...RUNTIME_NAMESPACE } }],
     },
     // A key the rule cannot read is not checked, so it must be a literal at the declaration.
     {
