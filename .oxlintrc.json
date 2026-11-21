@@ -1,0 +1,374 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "oxc", "import", "unicorn"],
+  "jsPlugins": [
+    "eslint-plugin-turbo",
+    {
+      "name": "elmera",
+      "specifier": "@elmeragroup/internal/oxlint"
+    },
+    {
+      "name": "anti-slop",
+      "specifier": "@elmeragroup/internal/oxlint/anti-slop"
+    },
+    {
+      "name": "tests",
+      "specifier": "@elmeragroup/internal/oxlint/tests"
+    },
+    // Dogfoods the extraction contract on the e2e fixtures, loaded from source: the rule's module imports the
+    // runtime's src through the `elmera-source` condition, which the lint script passes to Node.
+    {
+      "name": "elmera-intl",
+      "specifier": "./packages/intl-tools/src/oxlint.ts"
+    },
+    // This workspace's own contracts (tooling/lint), loaded from source.
+    {
+      "name": "elmera-workspace",
+      "specifier": "./tooling/lint/src/plugin.ts"
+    }
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "error"
+  },
+  "rules": {
+    "turbo/no-undeclared-env-vars": "error",
+    "elmera/require-disable-reason": "error",
+    "elmera-intl/extractable": "error",
+    "elmera-workspace/export-prefixes": "error",
+    "elmera-workspace/global-names": "error",
+    "elmera-workspace/import-boundaries": "error",
+    "elmera-workspace/instance-names": "error",
+    "elmera-workspace/public-surface": "error",
+    "elmera-workspace/side-effect-free": "error",
+    "elmera-workspace/vocabulary": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-misused-promises": [
+      "error",
+      {
+        "checksVoidReturn": {
+          "attributes": false
+        }
+      }
+    ],
+    "typescript/no-unnecessary-condition": [
+      "error",
+      {
+        "allowConstantLoopConditions": true
+      }
+    ],
+    "typescript/no-non-null-assertion": "error",
+    "typescript/dot-notation": "error",
+    "typescript/prefer-find": "error",
+    "typescript/prefer-regexp-exec": "error",
+    "typescript/prefer-string-starts-ends-with": "error",
+    "typescript/prefer-optional-chain": "error",
+    "typescript/prefer-nullish-coalescing": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-empty-function": "error",
+    "typescript/require-await": "error",
+    "typescript/non-nullable-type-assertion-style": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-unused-expressions": "error",
+    "typescript/consistent-type-definitions": ["error", "type"],
+    "typescript/consistent-type-imports": [
+      "error",
+      {
+        "prefer": "type-imports",
+        "fixStyle": "separate-type-imports"
+      }
+    ],
+    "typescript/no-misused-spread": "error",
+    "typescript/require-array-sort-compare": "error",
+    "no-constant-binary-expression": "error",
+    "typescript/no-redundant-type-constituents": "error",
+    "typescript/no-confusing-void-expression": ["error", { "ignoreArrowShorthand": true }],
+    // A `default` branch is the exhaustiveness of a switch over a node's `type` among hundreds (oxc's ESTree).
+    "typescript/switch-exhaustiveness-check": ["error", { "considerDefaultExhaustiveForUnions": true }],
+    // `Array<T>` and `ReadonlyArray<T>`, as the code writes them.
+    "typescript/array-type": ["error", { "default": "generic", "readonly": "generic" }],
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "curly": "error",
+    // Deep readonly parameters: the parameters' types come from React, oxc's AST and Intl, which are not readonly
+    // throughout, and immutability is held by `readonly` fields and `ReadonlyArray` where the code owns the type.
+    "typescript/prefer-readonly-parameter-types": "off",
+    // `_tag` is the discriminant of every tagged error and union, and `_` marks an unused parameter.
+    "no-underscore-dangle": "off",
+    // No arbitrary size limits: cohesion decides how long a module or function is.
+    "max-lines": "off",
+    "max-lines-per-function": "off",
+    "max-classes-per-file": "off",
+    "import/max-dependencies": "off",
+    // A trailing comment labels the line it sits on (a test case, an IR tag).
+    "no-inline-comments": "off",
+    // Values are immutable: a map that builds a new object or array per element is the point.
+    "oxc/no-map-spread": "off",
+    // A narrowing assertion is allowed with its SAFETY reason, which anti-slop/require-safety-comment-for-type-assertion
+    // requires.
+    "typescript/no-unsafe-type-assertion": "off",
+    // A `T | undefined` parameter takes an explicit `undefined` argument, and `return undefined` says a lookup missed.
+    "unicorn/no-useless-undefined": "off",
+    // TypeScript checks that every path of a function with a declared return type returns (TS2366), and sees an
+    // exhaustive switch; this rule does not.
+    "typescript/consistent-return": "off",
+    // typescript/no-misused-promises catches the harmful case, a promise where void is expected; any other value
+    // returned to a void callback is discarded harmlessly.
+    "typescript/strict-void-return": "off",
+    // The public `Format` type declares next-intl's overloaded methods (one signature per call form, each documenting
+    // its parameters), which only method signatures express.
+    "typescript/method-signature-style": "off",
+    "typescript/unified-signatures": "off",
+    // typescript/require-await is the type-aware version, which accepts an async function returning a promise.
+    "require-await": "off",
+    "import/consistent-type-specifier-style": ["error", "prefer-top-level"],
+    "import/no-cycle": "error",
+    "unicorn/filename-case": [
+      "error",
+      {
+        "case": "kebabCase",
+        "ignore": ["^[a-z]{2}-[A-Z]{2}\\."]
+      }
+    ],
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-widen-then-assert": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-unknown-returns": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-module-mocking": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-shape-in-symbol-names": "error",
+    "anti-slop/no-slop-comments": [
+      "error",
+      {
+        "ticketPattern": "ELM-\\d+"
+      }
+    ],
+    "anti-slop/no-narration-comments": "error"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/coverage/**",
+    "**/.turbo/**",
+    "**/.next/**",
+    "**/.output/**",
+    "**/.nitro/**",
+    "**/.tanstack/**",
+    "**/routeTree.gen.ts",
+    "**/next-env.d.ts",
+    "**/test-results/**",
+    "**/playwright-report/**",
+    "**/.artifacts/**",
+    "**/.cache/**",
+    "**/node_modules/**",
+    ".ref/**",
+    ".scratch/**",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**"
+  ],
+  "options": {
+    "typeAware": true
+  },
+  "settings": {
+    "react": {
+      "version": "19"
+    }
+  },
+  "overrides": [
+    // The e2e fixture apps: React rules. The runtime's React code is held by its tests and the conformance suite
+    // instead, which render keyless child arrays on purpose. The fixtures use the automatic JSX runtime; their <T>
+    // children are message sources written as an app writes them, apostrophes included; and a page imports
+    // `../intl/configure` for its effect (the fixture's `sideEffects: true`).
+    {
+      "files": ["packages/intl-e2e/**/*.{ts,tsx}"],
+      "plugins": ["typescript", "oxc", "unicorn", "import", "react", "jsx-a11y"],
+      "rules": {
+        "react/react-in-jsx-scope": "off",
+        "react/no-unescaped-entities": "off",
+        "import/no-unassigned-import": "off",
+        "react/exhaustive-deps": "error",
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "error",
+        "react/no-unstable-nested-components": "error"
+      }
+    },
+    // @elmeragroup/intl and intl-tools are self-contained: they may import no other @elmeragroup package. Their source
+    // implements the API the extraction contract restricts, and their tests break it on purpose.
+    {
+      "files": ["packages/intl/**", "packages/intl-tools/**"],
+      "rules": {
+        "elmera-intl/extractable": "off",
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@elmeragroup/*", "!@elmeragroup/intl", "!@elmeragroup/intl/*"],
+                "message": "@elmeragroup/intl and intl-tools are self-contained: they may import no other @elmeragroup package, so consumers install nothing else of ours."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // oxc's ESTree types share one `type` ("Literal") across string, number, boolean, regexp and bigint literals,
+    // so `typeof value` is the discriminant; ast-children walks the fields `visitorKeys` names, which TypeScript
+    // cannot index, and checks each is a node.
+    {
+      "files": ["packages/intl-tools/src/extract-message.ts", "packages/intl-tools/src/ast-children.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // ast-children takes the node's field values, which oxc types as unknown, and checks each is a node.
+    {
+      "files": ["packages/intl-tools/src/ast-children.ts"],
+      "rules": {
+        "anti-slop/no-unknown-parameters": "off"
+      }
+    },
+    // The workspace plugin's JSON and AST boundary: workspace.ts parses package.json and public-surface.json, the
+    // manifest test's config-files.ts parses the JSON and YAML configs it checks, and ast.ts tells string literals
+    // apart (oxc's one "Literal" type) and walks a node's unknown fields.
+    {
+      "files": [
+        "tooling/lint/src/ast.ts",
+        "tooling/lint/src/workspace.ts",
+        "tooling/lint/test/workspace.test.ts",
+        "tooling/lint/test/config-files.ts"
+      ],
+      "rules": {
+        "anti-slop/no-unknown-returns": "off",
+        "anti-slop/no-runtime-typeof": "off",
+        "anti-slop/no-unknown-parameters": "off",
+        "anti-slop/no-unsafe-dictionary-type": "off"
+      }
+    },
+    // The `elmera-intl` bin's entry module: running at import is its job, and nothing imports it (the bin shim
+    // spawns it), so no bundler can drop it.
+    {
+      "files": ["packages/intl-tools/src/cli.ts"],
+      "rules": {
+        "elmera-workspace/side-effect-free": "off"
+      }
+    },
+    // The compiled catalog's IR uses the JS type as its tag (a literal is a plain string, `#` the number 0, structure
+    // a tuple), so typeof is how a node is decoded; the compiler's dry-format proves every entry decodes.
+    {
+      "files": ["packages/intl/src/catalog.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // The IR's tags are intl-messageformat's element TYPE values as plain numbers (catalog.ts's LITERAL = 0 and on), so
+    // the codec, the formatter and the compiler's dry-format compare and build those numbers against the enum.
+    {
+      "files": [
+        "packages/intl/src/catalog.ts",
+        "packages/intl/src/icu.ts",
+        "packages/intl-tools/src/compile.ts"
+      ],
+      "rules": {
+        "typescript/no-unsafe-enum-comparison": "off",
+        "typescript/no-unsafe-enum-assignment": "off"
+      }
+    },
+    // A webpack/Turbopack loader receives its context as `this`.
+    {
+      "files": ["packages/intl-tools/src/po-loader.ts"],
+      "rules": {
+        "oxc/no-this-in-exported-function": "off"
+      }
+    },
+    // The release script's JSON boundary: package.json and `changeset status` output are read here, with no schema
+    // library in the workspace scripts, so typeof is how their fields are checked before use.
+    {
+      "files": ["scripts/release.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // Config boundary of the intl CLI: elmera-intl.json and the app's formats module are parsed here.
+    {
+      "files": ["packages/intl-tools/src/project.ts"],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // <T> reads React children and element props, which have no static type: typeof is how text, numbers and
+    // <Val>/<Plural> values are told apart from elements, and anything else is rejected. A message value is an
+    // open primitive union (icu.ts): typeof picks the formatter a plain {x} renders it with. next-intl's formatter
+    // overloads (format.ts) take a format name or options, a `now` or options, in one position: typeof tells them apart.
+    {
+      "files": [
+        "packages/intl/src/resolve.tsx",
+        "packages/intl/src/intl.ts",
+        "packages/intl/src/icu.ts",
+        "packages/intl/src/format.ts"
+      ],
+      "rules": {
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    // Tests: the shared test rules. A test keeps a helper or component beside the case that uses it.
+    {
+      "files": ["**/*.{test,spec}{,-d}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+      "rules": {
+        "unicorn/consistent-function-scoping": "off",
+        "tests/no-class-assertions": "error",
+        "tests/no-fixed-delay": "error",
+        "tests/no-geometry-assertions": "error",
+        "tests/no-source-reading-tests": "error",
+        "tests/no-test-retry": "error",
+        "tests/no-wall-clock": "error"
+      }
+    },
+    {
+      "files": ["**/test/**/*.{ts,tsx,mts,mjs,js}", "**/tests/**/*.{ts,tsx,mts,mjs,js}"],
+      "rules": {
+        "tests/no-fixed-delay": "error",
+        "tests/no-wall-clock": "error"
+      }
+    },
+    {
+      "files": ["**/vitest.config.*", "**/vitest.*.config.*", "**/playwright.config.*"],
+      "rules": {
+        "tests/no-test-retry": "error"
+      }
+    }
+  ]
+}

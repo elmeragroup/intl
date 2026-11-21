@@ -1,0 +1,27 @@
+{
+  "./core": [
+    "SERIALIZER_VERSION",
+    "createIntl",
+    "createLocaleSwitcher",
+    "keyOf",
+    "msg",
+    "resolveIntlConfig",
+    "serialize"
+  ],
+  "./react": [
+    "IntlProvider",
+    "Plural",
+    "Select",
+    "T",
+    "Val",
+    "createIntl",
+    "msg",
+    "useFormat",
+    "useIntl",
+    "useT"
+  ],
+  "./server": ["configureRequestIntl", "getFormat", "getIntl", "getT"],
+  "./next": ["useLocaleSwitch"],
+  "./next/server": ["configureNextIntl"],
+  "./start": ["createCatalogReload", "loadIntlConfig", "useLocaleSwitch"]
+}

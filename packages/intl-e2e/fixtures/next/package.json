@@ -1,0 +1,7 @@
+{
+  "name": "intl-fixture-next",
+  "private": true,
+  "description": "The Next.js fixture app. Not a workspace package: dependencies resolve through @elmeragroup/intl-e2e. sideEffects: true keeps `import \"../intl/configure\"` from being dropped.",
+  "type": "module",
+  "sideEffects": true
+}

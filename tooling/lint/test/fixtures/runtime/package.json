@@ -1,0 +1,37 @@
+{
+  "name": "@elmeragroup/intl",
+  "description": "Fixture: a published runtime package, as the rules read one.",
+  "sideEffects": false,
+  "exports": {
+    "./core": {
+      "elmera-source": "./src/core.ts",
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./react": {
+      "react-server": {
+        "elmera-source": "./src/react-server.tsx",
+        "import": "./dist/react-server.js"
+      },
+      "elmera-source": "./src/react.tsx",
+      "import": "./dist/react.js"
+    },
+    "./unlisted": {
+      "elmera-source": "./src/unlisted.ts",
+      "import": "./dist/unlisted.js"
+    },
+    "./internal/message": {
+      "elmera-source": "./src/message.ts",
+      "import": "./dist/internal/message.js"
+    }
+  },
+  "dependencies": {
+    "intl-messageformat": "1.0.0"
+  },
+  "peerDependencies": {
+    "react": "19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.0"
+  }
+}

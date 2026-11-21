@@ -1,0 +1,9 @@
+{
+  "extends": "@elmeragroup/typescript-config/base.json",
+  "compilerOptions": {
+    // `node` runs these scripts by stripping types, which cannot run enums or parameter properties.
+    "erasableSyntaxOnly": true,
+    "lib": ["ESNext"]
+  },
+  "include": ["**/*.ts"]
+}

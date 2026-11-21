@@ -1,0 +1,21 @@
+{
+  "extends": "@elmeragroup/typescript-config/react-library.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    // The oxlint plugin's import graph is loaded from source by Node's type stripping.
+    "erasableSyntaxOnly": true,
+    // The committed bin shim is plain JS (it must run before a build); type-check it like the source.
+    "allowJs": true,
+    "checkJs": true,
+    // The message corpus lives with the runtime's tests (vitest.config.ts aliases it the same way).
+    "paths": {
+      "#corpus": ["../intl/test/fixtures.tsx"]
+    }
+  },
+  "include": ["bin", "src", "test", "vitest.config.ts", "tsdown.config.ts"],
+  "exclude": ["dist", "node_modules"]
+}

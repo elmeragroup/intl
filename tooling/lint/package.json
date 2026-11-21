@@ -1,0 +1,28 @@
+{
+  "name": "@elmeragroup/workspace-lint",
+  "version": "0.0.0",
+  "private": true,
+  "description": "This workspace's own contracts as lint: the elmera-workspace oxlint plugin, loaded from source by .oxlintrc.json, and the manifest checks oxlint cannot run on JSON.",
+  "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "clean": "git clean -xdf .cache .turbo node_modules",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --watch",
+    "type-check": "tsrs --noEmit"
+  },
+  "devDependencies": {
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@oxlint/plugins": "catalog:",
+    "@types/node": "catalog:",
+    "jsonc-parser": "catalog:",
+    "oxlint": "catalog:",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "yaml": "catalog:"
+  }
+}

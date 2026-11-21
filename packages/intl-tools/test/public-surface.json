@@ -1,0 +1,8 @@
+{
+  "./vite": ["intl", "intlCatalogs"],
+  "./next": ["withIntl"],
+  "./compile": ["CatalogCompileError", "compileCatalog", "loadCatalog"],
+  "./oxlint": ["default"],
+  "./vitest": ["default"],
+  "./po": []
+}
