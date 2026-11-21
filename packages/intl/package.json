@@ -1,6 +1,6 @@
 {
   "name": "@elmeragroup/intl",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Source-keyed i18n for React: <T>, useT, msg() and the parser-free runtime that formats compiled catalogs. Extraction, catalog compiling and lint live in @elmeragroup/intl-tools.",
   "keywords": [
     "i18n",
