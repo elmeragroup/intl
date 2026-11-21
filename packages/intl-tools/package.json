@@ -104,6 +104,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:react19",
     "@types/react-dom": "catalog:react19",
+    "effect": "catalog:",
     "next": "catalog:",
     "oxlint": "catalog:",
     "react": "catalog:react19",

@@ -2,8 +2,8 @@ import { importBoundaries } from "../src/rules/import-boundaries.ts";
 import { createTester, fixture } from "./rule-tester.ts";
 
 // Unit under test: elmera-workspace/import-boundaries. Oracle: the dependency direction intl-e2e → intl-tools → intl
-// and the fixture manifests (runtime: intl-messageformat, peer react, dev @types/react; tools: @elmeragroup/intl,
-// oxc-parser, dev @oxlint/plugins), per case.
+// and the fixture manifests (runtime: intl-messageformat, peers react and effect, dev @types/react; tools:
+// @elmeragroup/intl, oxc-parser, dev @oxlint/plugins), per case.
 createTester().run("import-boundaries", importBoundaries, {
   valid: [
     {
@@ -22,6 +22,15 @@ createTester().run("import-boundaries", importBoundaries, {
     {
       code: `import { keyOf } from "@elmeragroup/intl/internal/message";\nimport { parseSync } from "oxc-parser";\nimport type { Rule } from "@oxlint/plugins";\nimport { readFileSync } from "node:fs";`,
       filename: fixture("tools/src/extract.ts"),
+    },
+    // The /effect entry imports the optional peer, by its root and its modules; the runtime's tests may too.
+    {
+      code: `import * as Effect from "effect/Effect";\nimport { Layer } from "effect";\nimport { createIntl } from "./intl";`,
+      filename: fixture("runtime/src/effect.ts"),
+    },
+    {
+      code: `import * as ManagedRuntime from "effect/ManagedRuntime";`,
+      filename: fixture("runtime/test/effect.test.ts"),
     },
     // Tests may use what their package's test config provides.
     {
@@ -68,6 +77,17 @@ createTester().run("import-boundaries", importBoundaries, {
       code: `import { corpus } from "#corpus";`,
       filename: fixture("tools/src/a.ts"),
       errors: [{ messageId: "outside" }],
+    },
+    // Any other runtime module would make the optional peer required: by a module path, the root, or types alone.
+    {
+      code: `import * as Effect from "effect/Effect";`,
+      filename: fixture("runtime/src/server.ts"),
+      errors: [{ messageId: "effect", data: { specifier: "effect/Effect" } }],
+    },
+    {
+      code: `import type { Effect } from "effect";`,
+      filename: fixture("runtime/src/effect/helpers.ts"),
+      errors: [{ messageId: "effect", data: { specifier: "effect" } }],
     },
     {
       code: `import { createRoot } from "react-dom/client";`,

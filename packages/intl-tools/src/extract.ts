@@ -263,7 +263,12 @@ class Extraction {
 
   // The nearest ancestor of the visited node that is not one of `transparent`, and its child on the way down.
   private useOf(transparent: ReadonlySet<string>): Use {
-    for (let i = this.ancestors.length - 2; i >= 0; i -= 1) {
+    return this.useAt(this.ancestors.length - 1, transparent);
+  }
+
+  // The same for the ancestor at `index` (the visited node is the last).
+  private useAt(index: number, transparent: ReadonlySet<string>): Use {
+    for (let i = index - 1; i >= 0; i -= 1) {
       const ancestor = this.ancestors[i];
 
       if (ancestor && !transparent.has(ancestor.type)) {
@@ -342,8 +347,37 @@ class Extraction {
     this.ancestors.pop();
   }
 
+  // `CurrentIntl` is read only as `yield* CurrentIntl` and provided only by calling `.layer(…)` or `.provide(…)`: any
+  // other read (`.use`, `Effect.map(CurrentIntl, …)`, an alias) reaches the translator where extraction cannot see it.
+  private checkService(name: string, node: Node): void {
+    const { parent, child } = this.useOf(VALUE_TRANSPARENT);
+    const yielded = parent?.type === "YieldExpression" && parent.delegate && parent.argument === child;
+    const member =
+      parent?.type === "MemberExpression" && parent.object === child
+        ? this.staticMemberName(parent)
+        : undefined;
+    const call =
+      member === "layer" || member === "provide"
+        ? this.useAt(this.ancestors.lastIndexOf(parent ?? node), VALUE_TRANSPARENT)
+        : undefined;
+    const provided = call?.parent?.type === "CallExpression" && call.parent.callee === call.child;
+
+    if (!yielded && !provided) {
+      this.fail(
+        node,
+        `\`${name}\` is only read with \`yield* ${name}\` and provided with \`.layer(…)\` or \`.provide(…)\`, so extraction sees every translator; read the translator with \`const { t } = yield* CurrentIntl\``
+      );
+    }
+  }
+
   // A package binding or a bound t may only be called, aliased or (for t) used as t.from; IntlInstance objects may flow.
   private checkIdentifier(name: string, node: Node, parent: Node): void {
+    if (this.bindings.isService(node, this.scope)) {
+      this.checkService(name, node);
+
+      return;
+    }
+
     const called =
       parent.type === "CallExpression" &&
       (parent.callee === node || (this.isJsxCall(parent) && parent.arguments[0] === node));
@@ -667,7 +701,7 @@ class Extraction {
       const receiver = this.code.slice(callee.object.start, callee.object.end);
       this.fail(
         node,
-        `cannot trace \`${receiver}\` to useIntl(), getIntl() or createIntl() in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``
+        `cannot trace \`${receiver}\` to useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\` in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``
       );
 
       return;

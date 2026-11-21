@@ -29,6 +29,7 @@
     "intl-messageformat": "1.0.0"
   },
   "peerDependencies": {
+    "effect": "4.1.3",
     "react": "19.0.0"
   },
   "devDependencies": {

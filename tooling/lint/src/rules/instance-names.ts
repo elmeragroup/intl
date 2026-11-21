@@ -2,7 +2,8 @@
 // `t`: the names the API's own fields and hooks use, so a call site reads the same in every file. A scope holding
 // several (a test comparing locales) names each with the role as its suffix, such as nbIntl or osloFormat. A factory
 // is the runtime's only when its binding resolves to an import from `@elmeragroup/intl/*` (an alias or a namespace
-// member counts; a local or shadowing function of the same name does not), as the extractor traces it.
+// member counts; a local or shadowing function of the same name does not), as the extractor traces it. On Effect,
+// `yield* CurrentIntl` (the service imported from `@elmeragroup/intl/effect`) holds an instance too.
 import type { ESTree, Rule } from "@oxlint/plugins";
 
 import { moduleExportName, resolveVariable, unwrap } from "../ast.ts";
@@ -28,6 +29,10 @@ const SUFFIX = {
 } as const satisfies Readonly<Record<Role, RegExp>>;
 
 type Found = { readonly role: Role; readonly source: string };
+
+// The Effect service whose `yield*` reads the instance, and the subpath it comes from.
+const SERVICE = "CurrentIntl";
+const SERVICE_SOURCE = `${RUNTIME}/effect`;
 
 // Whether an import declaration's source is the runtime: a `@elmeragroup/intl` subpath, or, inside the runtime's own
 // source, a relative module.
@@ -92,9 +97,37 @@ export const instanceNames: Rule = {
       return undefined;
     }
 
-    // The role a runtime factory's call (awaited or not) gives the value it returns.
+    // Whether an expression is the runtime's Effect service: its import (aliased or not), or, inside the runtime's own
+    // source, the import of a relative module.
+    function isService(expression: ESTree.Expression): boolean {
+      const value = unwrap(expression);
+
+      if (value.type !== "Identifier") {
+        return false;
+      }
+
+      const definition = resolveVariable(sourceCode.getScope(value), value.name)?.defs[0];
+      const declaration = definition?.type === "ImportBinding" ? definition.parent : null;
+
+      return (
+        definition?.type === "ImportBinding" &&
+        declaration?.type === "ImportDeclaration" &&
+        (declaration.source.value === SERVICE_SOURCE ||
+          (runtimeSource && declaration.source.value.startsWith("."))) &&
+        definition.node.type === "ImportSpecifier" &&
+        moduleExportName(definition.node.imported) === SERVICE
+      );
+    }
+
+    // The role a runtime factory's call (awaited or not) gives the value it returns, or `yield* CurrentIntl` its read.
     function factoryRole(init: ESTree.Expression): Found | undefined {
       const value = unwrap(init);
+
+      if (value.type === "YieldExpression") {
+        return value.delegate && value.argument !== null && isService(value.argument)
+          ? { role: "intl", source: `yield* ${SERVICE}` }
+          : undefined;
+      }
       const called = value.type === "AwaitExpression" ? unwrap(value.argument) : value;
 
       if (called.type !== "CallExpression" || called.callee.type === "Super") {

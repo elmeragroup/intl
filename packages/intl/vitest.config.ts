@@ -16,6 +16,7 @@ export default defineConfig({
       { find: /^@elmeragroup\/intl\/internal\/formatter$/u, replacement: path("dist/internal/formatter.js") },
       { find: /^@elmeragroup\/intl\/(react|internal\/react-client)$/u, replacement: path("src/react.tsx") },
       { find: /^@elmeragroup\/intl\/server$/u, replacement: path("src/server.ts") },
+      { find: /^@elmeragroup\/intl\/effect$/u, replacement: path("src/effect.ts") },
       // Catalogs come from the one compiler, as apps get them. Not a package dependency: intl-tools depends on this
       // package, so the tests reach its source directly (as its tests reach the corpus here).
       { find: /^#compile$/u, replacement: path("../intl-tools/src/compile.ts") },

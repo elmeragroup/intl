@@ -23,5 +23,6 @@
   "./server": ["configureRequestIntl", "getFormat", "getIntl", "getT"],
   "./next": ["useLocaleSwitch"],
   "./next/server": ["configureNextIntl"],
-  "./start": ["createCatalogReload", "loadIntlConfig", "useLocaleSwitch"]
+  "./start": ["createCatalogReload", "loadIntlConfig", "useLocaleSwitch"],
+  "./effect": ["CurrentIntl"]
 }

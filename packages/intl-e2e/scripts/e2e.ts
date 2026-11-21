@@ -3,13 +3,26 @@
 // (Start) are the fixtures', so two passes' servers cannot run side by side. The linked pass consumes the
 // workspace-linked packages, as the apps do. The packed pass installs `pnpm pack` of packages/intl and
 // packages/intl-tools into each fixture as real copies, as npm users get them: bundlers treat an installed package
-// differently from a linked one (Vite's SSR externalizes it), and a file missing from either tarball fails there.
+// differently from a linked one (Vite's SSR externalizes it), and a file missing from either tarball fails there. The
+// packed pass also runs the Effect consumer (effect/server.ts) on the packed runtime in a directory of its own.
 import type { SpawnSyncReturns } from "node:child_process";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { compileCatalog } from "@elmeragroup/intl-tools/compile";
 
 import toolsManifest from "../../intl-tools/package.json" with { type: "json" };
 import runtimeManifest from "../../intl/package.json" with { type: "json" };
@@ -19,17 +32,15 @@ const FIXTURES = ["next", "start"] as const;
 const root = fileURLToPath(new URL("../", import.meta.url));
 // Each package, its workspace source, and a module of it every fixture resolves.
 const toolsSource = fileURLToPath(new URL("../../intl-tools/", import.meta.url));
+const runtimeSource = fileURLToPath(new URL("../../intl/", import.meta.url));
 const PACKAGES = [
-  {
-    manifest: runtimeManifest,
-    source: fileURLToPath(new URL("../../intl/", import.meta.url)),
-    probe: "/react",
-  },
+  { manifest: runtimeManifest, source: runtimeSource, probe: "/react" },
   { manifest: toolsManifest, source: toolsSource, probe: "/vite" },
 ] as const;
 const bin = (name: string) => fileURLToPath(new URL(`../node_modules/.bin/${name}`, import.meta.url));
 const fixtureDir = (fixture: string) => `${root}fixtures/${fixture}`;
 const installed = (fixture: string, name: string) => `${fixtureDir(fixture)}/node_modules/${name}`;
+const effectConsumer = fileURLToPath(new URL("../effect/", import.meta.url));
 
 function run(
   command: string,
@@ -53,28 +64,137 @@ function uninstallPacked(): void {
   });
 }
 
-// Each tarball's contents as a real directory. Third-party dependencies link to the workspace's copies; a dependency
-// on the other packed package (intl-tools on intl) resolves to that copy, beside it in the fixture's node_modules.
-// Peers (react, next, the router, vite) resolve through this package as the fixtures' own do.
-function installPacked(): void {
-  const packDir = mkdtempSync(join(tmpdir(), "intl-pack-"));
-  PACKAGES.forEach(({ manifest, source }, index) => {
+// Link a packed package's third-party dependencies to the workspace's copies; a dependency on the other packed package
+// (intl-tools on intl) resolves to that copy, beside it in the fixture's node_modules.
+function linkDependencies(
+  target: string,
+  {
+    manifest,
+    source,
+  }: {
+    readonly manifest: { readonly dependencies: Readonly<Record<string, string>> };
+    readonly source: string;
+  }
+): void {
+  Object.keys(manifest.dependencies)
+    .filter((name) => !PACKAGES.some((other) => other.manifest.name === name))
+    .forEach((name) => {
+      const link = join(target, "node_modules", name);
+      mkdirSync(dirname(link), { recursive: true });
+      symlinkSync(realpathSync(join(source, "node_modules", name)), link);
+    });
+}
+
+// Each package's `pnpm pack` archive, in `packDir`.
+function packAll(
+  packDir: string
+): ReadonlyArray<{ readonly pkg: (typeof PACKAGES)[number]; readonly tarball: string }> {
+  return PACKAGES.map((pkg, index) => {
     const tarball = join(packDir, `${index}.tgz`);
-    run("pnpm", ["pack", "--out", tarball], source, {});
+    run("pnpm", ["pack", "--out", tarball], pkg.source, {});
+
+    return { pkg, tarball };
+  });
+}
+
+// Each tarball's contents as a real directory, its dependencies linked. Peers (react, next, the router, vite) resolve
+// through this package as the fixtures' own do.
+function installPacked(
+  packed: ReadonlyArray<{ readonly pkg: (typeof PACKAGES)[number]; readonly tarball: string }>
+): void {
+  packed.forEach(({ pkg, tarball }) => {
     FIXTURES.forEach((fixture) => {
-      const target = installed(fixture, manifest.name);
+      const target = installed(fixture, pkg.manifest.name);
       mkdirSync(target, { recursive: true });
       run("tar", ["-xzf", tarball, "-C", target, "--strip-components=1"], root, {});
-      Object.keys(manifest.dependencies)
-        .filter((name) => !PACKAGES.some((other) => other.manifest.name === name))
-        .forEach((name) => {
-          const link = join(target, "node_modules", name);
-          mkdirSync(dirname(link), { recursive: true });
-          symlinkSync(realpathSync(join(source, "node_modules", name)), link);
-        });
+      linkDependencies(target, pkg);
     });
   });
-  rmSync(packDir, { recursive: true, force: true });
+}
+
+// The Effect consumer's own directory, as an app that installs the runtime and its optional peer: the packed runtime as
+// a real copy with its dependencies linked (without @schummar/icu-type-parser the type-check would accept any ICU
+// argument), `effect` linked from the runtime's devDependency (never this package's, which the Next and Start fixtures
+// resolve through), the consumer and the catalogs compiled from its nb.po. Outside the workspace, so nothing else
+// resolves.
+function installEffectConsumer(runtimeTarball: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "intl-effect-"));
+  const target = join(dir, "node_modules", runtimeManifest.name);
+  mkdirSync(target, { recursive: true });
+  run("tar", ["-xzf", runtimeTarball, "-C", target, "--strip-components=1"], root, {});
+  linkDependencies(target, PACKAGES[0]);
+  symlinkSync(
+    realpathSync(join(runtimeSource, "node_modules", "effect")),
+    join(dir, "node_modules", "effect")
+  );
+  copyFileSync(join(effectConsumer, "server.ts"), join(dir, "server.ts"));
+  copyFileSync(join(effectConsumer, "catalogs.d.ts"), join(dir, "catalogs.d.ts"));
+  const po = readFileSync(join(effectConsumer, "nb.po"), "utf8");
+  const modules = (["nb", "en"] as const).map((locale) => {
+    const compiled = compileCatalog(po, locale);
+
+    if (compiled._tag !== "Compiled") {
+      process.stderr.write(`effect consumer: nb.po does not compile for ${locale}\n`);
+      process.exit(1);
+    }
+
+    return `export const ${locale} = JSON.parse(${JSON.stringify(JSON.stringify(compiled.catalog))});\n`;
+  });
+  writeFileSync(join(dir, "catalogs.js"), modules.join(""));
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ private: true, type: "module" })}\n`);
+  // The workspace's base options, without the `elmera-source` condition (the command line drops it, as the fixtures'
+  // type-check does) and without Node's types, which an Effect app on Web requests does not need.
+  writeFileSync(
+    join(dir, "tsconfig.json"),
+    `${JSON.stringify({
+      extends: fileURLToPath(new URL("../../../tooling/typescript/base.json", import.meta.url)),
+      compilerOptions: {
+        target: "es2022",
+        lib: ["ESNext", "DOM"],
+        types: [],
+        verbatimModuleSyntax: true,
+        erasableSyntaxOnly: true,
+      },
+      include: ["*.ts"],
+    })}\n`
+  );
+
+  return dir;
+}
+
+// The real path of `effect/Effect` as Node resolves it from a directory.
+function effectFrom(cwd: string): string {
+  const url = execFileSync(
+    process.execPath,
+    ["--input-type=module", "--eval", 'console.log(import.meta.resolve("effect/Effect"))'],
+    { cwd, encoding: "utf8" }
+  ).trim();
+
+  return realpathSync(fileURLToPath(url));
+}
+
+// The packed `/effect`, as a consumer gets it: one `effect` for the consumer and the package (a second copy would hold
+// its own Context), its declarations type-check the consumer, and two overlapping requests get their own locale.
+function assertEffectConsumer(dir: string): void {
+  const consumerEffect = effectFrom(dir);
+  const packageEffect = effectFrom(join(dir, "node_modules", runtimeManifest.name, "dist"));
+
+  if (consumerEffect !== packageEffect) {
+    process.stderr.write(
+      `effect consumer: effect resolves to ${consumerEffect} and, from the package, ${packageEffect}\n`
+    );
+    process.exit(1);
+  }
+
+  run(bin("tsrs"), ["--noEmit", "-p", dir, "--customConditions", "null"], root, {});
+  const answered = execFileSync(process.execPath, ["server.ts"], { cwd: dir, encoding: "utf8" }).trim();
+
+  if (answered !== JSON.stringify(["Hei, Ada", "Hello, Ada"])) {
+    process.stderr.write(`effect consumer: the nb and en requests answered ${answered}\n`);
+    process.exit(1);
+  }
+
+  process.stdout.write(`effect consumer, packed runtime: nb and en requests answer ${answered}\n`);
 }
 
 // A plain build behaves the same on either install, so the pass proves which copy it built against: every package
@@ -158,7 +278,20 @@ process.on("exit", uninstallPacked);
 
 for (const runtime of RUNTIMES) {
   if (runtime === "packed") {
-    installPacked();
+    const packDir = mkdtempSync(join(tmpdir(), "intl-pack-"));
+    const packed = packAll(packDir);
+    installPacked(packed);
+    const runtimeTarball = packed.find(({ pkg }) => pkg.manifest.name === runtimeManifest.name)?.tarball;
+
+    if (runtimeTarball === undefined) {
+      process.stderr.write("the runtime was not packed\n");
+      process.exit(1);
+    }
+
+    const consumer = installEffectConsumer(runtimeTarball);
+    rmSync(packDir, { recursive: true, force: true });
+    process.on("exit", () => rmSync(consumer, { recursive: true, force: true }));
+    assertEffectConsumer(consumer);
   }
 
   assertResolution(runtime);

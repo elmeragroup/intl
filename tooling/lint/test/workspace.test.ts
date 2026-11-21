@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
-import { catalogEntries, lintConfigFindings, parseJsonc } from "./config-files.ts";
+import { catalogEntries, effectPresetFindings, lintConfigFindings, parseJsonc } from "./config-files.ts";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -27,6 +27,7 @@ type Manifest = {
   readonly peerDependencies?: Readonly<Record<string, string>>;
   readonly publishConfig?: { readonly access?: string };
   readonly devEngines?: { readonly runtime?: { readonly version?: string } };
+  readonly scripts?: Readonly<Record<string, string>>;
 };
 type ExportTarget = string | { readonly [condition: string]: ExportTarget };
 
@@ -79,6 +80,30 @@ function sourceTargets(target: ExportTarget): ReadonlyArray<string> {
             ? Object.values(value).filter((nested): nested is string => typeof nested === "string")
             : sourceTargets(value)
       );
+}
+
+const SKIPPED_DIRECTORIES = new Set([
+  "node_modules",
+  "dist",
+  ".cache",
+  ".turbo",
+  ".next",
+  ".output",
+  ".nitro",
+  ".tanstack",
+]);
+
+// A package's TypeScript files, outside build output and dependencies.
+function sourceFiles(directory: string): ReadonlyArray<string> {
+  return readdirSync(join(ROOT, directory), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+
+    if (entry.isDirectory()) {
+      return SKIPPED_DIRECTORIES.has(entry.name) || entry.name.startsWith(".next") ? [] : sourceFiles(path);
+    }
+
+    return /\.tsx?$/u.test(entry.name) && !entry.name.endsWith(".d.ts") ? [path] : [];
+  });
 }
 
 // Unit under test: the committed workspace configuration. Oracle: the conventions AGENTS.md states, each case naming
@@ -220,5 +245,94 @@ describe(".oxlintrc.json", () => {
 
   it("parses", () => {
     expect(parseJsonc(config)).toHaveProperty("rules");
+  });
+});
+
+// The Effect diagnostics are configured twice: tooling/typescript/effect.json for the editor (the Effect language
+// service) and .oxlintrc.effect.json for `pnpm lint:effect`, the gate, whose rules exist only in the Effect-patched
+// oxlint. These hold the two to one decision per rule, and the gate to the files that use Effect.
+type EffectPreset = {
+  readonly compilerOptions: {
+    readonly plugins: ReadonlyArray<{ readonly diagnosticSeverity: Readonly<Record<string, string>> }>;
+  };
+};
+type EffectLintConfig = {
+  readonly overrides: ReadonlyArray<{
+    readonly files: ReadonlyArray<string>;
+    readonly rules: Readonly<Record<string, string>>;
+  }>;
+};
+type EffectSchema = {
+  readonly definitions: {
+    readonly effectLanguageServicePluginDiagnosticSeverityDefinition: {
+      readonly properties: Readonly<Record<string, { readonly description: string }>>;
+    };
+  };
+};
+
+describe("Effect diagnostics", () => {
+  const presetText = read("tooling/typescript/effect.json");
+  const lintText = read(".oxlintrc.effect.json");
+  // SAFETY: the committed preset and Effect lint config, and the installed @effect/tsgo's schema; a missing field fails
+  // the case that reads it.
+  const severities =
+    (parseJsonc(presetText) as EffectPreset).compilerOptions.plugins[0]?.diagnosticSeverity ?? {};
+  // SAFETY: as above.
+  const [override] = (parseJsonc(lintText) as EffectLintConfig).overrides;
+  // The oxlint name of a language-service rule (each rule's docs list both): kebab case under `effecttsgo/`.
+  const oxlintName = (rule: string) =>
+    `effecttsgo/${rule.replace("UUID", "Uuid").replaceAll(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`;
+
+  it("decides every rule in the preset: an error, or off with its reason", () => {
+    expect(effectPresetFindings(presetText)).toEqual({ unclear: [], unexplainedOffs: [] });
+  });
+
+  // A bump of @effect/tsgo that adds a rule fails here until the preset decides it; a deprecated rule is left unnamed,
+  // since naming one, even off, raises a warning of its own.
+  it("names every rule of the installed @effect/tsgo but the deprecated ones", () => {
+    // SAFETY: as above.
+    const schema = JSON.parse(read("node_modules/@effect/tsgo/schema.json")) as EffectSchema;
+    const current = Object.entries(
+      schema.definitions.effectLanguageServicePluginDiagnosticSeverityDefinition.properties
+    )
+      .filter(([, rule]) => !rule.description.startsWith("Deprecated"))
+      .map(([name]) => name);
+
+    expect(Object.keys(severities).toSorted()).toEqual(current.toSorted());
+  });
+
+  it("gates exactly the preset's errors, as errors", () => {
+    const errors = Object.entries(severities)
+      .filter(([, level]) => level === "error")
+      .map(([rule]) => oxlintName(rule));
+
+    expect(Object.keys(override?.rules ?? {}).toSorted()).toEqual(errors.toSorted());
+    expect(new Set(Object.values(override?.rules ?? {}))).toEqual(new Set(["error"]));
+    expect(lintConfigFindings(lintText)).toEqual({
+      warned: [],
+      unexplainedOffs: [],
+      unexplainedOverrides: [],
+    });
+  });
+
+  // effect-tsgo falls back silently to its newest packaged tsrs when the installed one is not supported, so the gate
+  // names its tsrs, and that is the catalog's.
+  it("lints with the catalog's tsrs", () => {
+    const tsrs = catalogEntries(read("pnpm-workspace.yaml")).find(({ name }) => name === "tsrs")?.version;
+    const script = parseManifest("package.json").scripts?.["lint:effect"];
+
+    expect(script).toContain(`--tsrs-lint=${String(tsrs)} `);
+  });
+
+  // Lint reads one file at a time and cannot see which files the second config scopes, so the list is held here: the
+  // gate covers every source file that imports effect, and nothing else.
+  it("covers every file that imports effect", () => {
+    const importsEffect = /^\s*(?:import|export)\b[^;]*?\bfrom\s+["']effect(?:\/[^"']*)?["']/mu;
+    const sources = PACKAGES.flatMap(({ path }) => sourceFiles(path)).filter((file) =>
+      importsEffect.test(read(file))
+    );
+
+    expect(sources.length).toBeGreaterThan(0);
+    expect([...(override?.files ?? [])].toSorted()).toEqual(sources.toSorted());
   });
 });

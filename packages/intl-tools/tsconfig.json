@@ -1,5 +1,9 @@
 {
-  "extends": "@elmeragroup/typescript-config/react-library.json",
+  // Its Effect files are checked by the Effect language service (tooling/typescript/effect.json).
+  "extends": [
+    "@elmeragroup/typescript-config/react-library.json",
+    "@elmeragroup/typescript-config/effect.json"
+  ],
   "compilerOptions": {
     "composite": false,
     "noEmit": true,

@@ -49,6 +49,7 @@ The public subpaths; the `/internal/*` subpaths exist for `@elmeragroup/intl-too
 | `/server`               | `configureRequestIntl`, `getIntl`, `getT`, `getFormat`.                                                                                                                                                                                                                                                     |
 | `/next`, `/next/server` | `useLocaleSwitch(persist)` (client); `configureNextIntl(adapter)` (server).                                                                                                                                                                                                                                 |
 | `/start`                | `useLocaleSwitch(persist)`, `loadIntlConfig`, `createCatalogReload(import.meta.hot)` (dev: a PO save reruns the loaders).                                                                                                                                                                                   |
+| `/effect`               | `CurrentIntl`, the translator as an Effect service: `const { t } = yield* CurrentIntl`, provided per request by `CurrentIntl.provide(options)` or for a whole program by `CurrentIntl.layer(options)` (see "Effect" below). Needs the optional peer `effect` (`^4.1.3`).                                    |
 
 `<IntlProvider locale catalog timeZone formats>` takes the serializable config, so a Next layout or a Start root loader passes it straight through. The catalog is the request locale's compiled catalog (type `Catalog`, which only the compiler makes, so a PO or a JSON of translations does not type-check): complete, with an untranslated message as its English source, formatted in `en`. A message the catalog lacks renders its source as is when it is plain text; a structured one (not extracted yet: in dev until the watcher writes the PO, about a second) renders its raw source, or `<T>`'s children, and calls `onError` with `MessageNotExtracted`. A message that fails to format (a missing or wrongly typed value: a caller bug the types and `check` rule out) calls `onError`, then throws. Every date and time formats in `timeZone`. `t` and `t.from` always return text, and never call a function value (only `<T>` renders tags). Argument values are typed as next-intl types them: a plain `{x}` (and `<Val>`) takes text only, a number goes through `{x, number}`, `plural` or `selectordinal`, a `Date` through `{x, date}` or `{x, time}`, a select takes text. `t.from` types values from its descriptor's literal; a descriptor widened to `Descriptor` takes untyped values. A number or `Date` that reaches a plain `{x}` untyped (a cast or `any`) fails like a missing argument (`onError`, then a throw), naming the argument and the fix. A present `null` or `undefined` renders as nothing, as in next-intl.
 
@@ -73,3 +74,63 @@ The client side is `persist(locale)` (the app's, e.g. a server action setting a 
 
 - Next: call `configureNextIntl(adapter)` in a server module the layout and pages import; the layout reads `const { locale, catalog, timeZone, formats } = await getIntl()` and renders `<IntlProvider locale={locale} catalog={catalog} timeZone={timeZone} formats={formats}>`; a client component calls `useLocaleSwitch(setLocaleAction)`. When the persist is a Server Action that sets the cookie (Next re-renders the page and layouts in the action's own response), pass `{ refresh: "server-action" }` to skip the redundant `router.refresh()` roundtrip.
 - Start: a root-route loader calls a server function that returns `loadIntlConfig(adapter, getRequest())`; the root component renders `<IntlProvider>` from the loader data, and `const CatalogReload = createCatalogReload(import.meta.hot)` (at the root route module's top level) rendered once; a component calls `useLocaleSwitch(setLocaleFn)`.
+
+## Effect
+
+`@elmeragroup/intl/effect` serves the translator to Effect programs: an HTTP server on `effect/http`, a queue worker, a
+CLI. Install `effect` (`^4.1.3`, an optional peer) beside the package; no other subpath imports it.
+
+`CurrentIntl` is a `Context.Service` whose value is the `IntlInstance` `createIntl` builds, so `t` is typed from its
+literal and the extractor reads it like any other: `const { t } = yield* CurrentIntl`, `(yield* CurrentIntl).t("…")`,
+`intl.t.from(d)`. Any other read of `CurrentIntl` (`.use`, `Effect.map(CurrentIntl, …)`, an alias) fails extraction.
+
+The app resolves the options, as an `Effect<CreateIntlOptions, E, R>` with its own errors and requirements (the request,
+a config service), and loads its compiled catalogs its own way. Per request, `CurrentIntl.provide(options)` resolves them
+each time the wrapped effect runs, so no translator outlives its request; it is never a layer, because `Effect.provide`
+reuses a layer an enclosing runtime already built. On `effect/http` it goes in a global `HttpRouter.middleware`:
+
+```ts
+import * as Effect from "effect/Effect";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as Layer from "effect/Layer";
+
+import type { Catalog } from "@elmeragroup/intl/core";
+import { CurrentIntl } from "@elmeragroup/intl/effect";
+
+// App-owned: compiled catalogs, loaded the app's way (here, `*.po` imports through the Vite plugin).
+const loadCatalog = (locale: "en" | "nb"): Effect.Effect<Catalog> =>
+  Effect.promise(() => (locale === "nb" ? import("./intl/nb.po") : import("./intl/nb.po?source"))).pipe(
+    Effect.map((module) => module.default)
+  );
+
+const intlOptions = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const locale = request.cookies.locale === "nb" ? "nb" : "en";
+
+  return { locale, catalog: yield* loadCatalog(locale), timeZone: "Europe/Oslo" };
+});
+
+const IntlMiddleware = HttpRouter.middleware<{ provides: CurrentIntl }>()(
+  (handler) => handler.pipe(CurrentIntl.provide(intlOptions)),
+  { global: true }
+);
+
+const greet = Effect.gen(function* () {
+  const { t } = yield* CurrentIntl;
+
+  return HttpServerResponse.text(t("Hello, {name}", { name: "Ada" }));
+});
+
+const { handler, dispose } = HttpRouter.toWebHandler(
+  HttpRouter.add("GET", "/", greet).pipe(Layer.provide(IntlMiddleware))
+);
+```
+
+The options effect's failures (a catalog that cannot load) are the handler's `E`, and its requirements its `R`, less
+`CurrentIntl`. A catalog compiled for another catalog version throws in `createIntl`, so it is a defect, as on every
+host.
+
+A program with one locale (a worker, a CLI, a test) provides a fixed translator once:
+`program.pipe(Effect.provide(CurrentIntl.layer({ locale: "nb", catalog, timeZone: "Europe/Oslo" })))`.

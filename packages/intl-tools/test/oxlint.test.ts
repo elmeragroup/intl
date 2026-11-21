@@ -13,8 +13,9 @@ if (!rule) {
 }
 
 const pre = `import { T, Val, useT } from "@elmeragroup/intl/react";\n`;
+const preEffect = `import * as Effect from "effect/Effect";\nimport { CurrentIntl } from "@elmeragroup/intl/effect";\n`;
 const UNTRACED_I =
-  "cannot trace `i` to useIntl(), getIntl() or createIntl() in this file, so `.t(…)` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with `.t.from`";
+  "cannot trace `i` to useIntl(), getIntl(), createIntl() or `yield* CurrentIntl` in this file, so `.t(…)` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with `.t.from`";
 
 // Unit under test: the elmera-intl/extractable rule. Oracle: the extraction contract per case, with the failure's message
 // and its position in the source as written (the rule maps compiled positions back).
@@ -35,8 +36,27 @@ new RuleTester({ languageOptions: { sourceType: "module", parserOptions: { lang:
         code: `import i18next from "i18next";\nconst fake = { t: (s: string) => s };\nexport const x = [fake.t("a"), i18next.t("b")];`,
         filename: "g.ts",
       },
+      // The Effect service read as the contract allows: `yield* CurrentIntl`, destructured.
+      {
+        code: `${preEffect}export const f = Effect.gen(function* () { const { t } = yield* CurrentIntl; return t("Hello"); });`,
+        filename: "effect.ts",
+      },
     ],
     invalid: [
+      // Any other read of the service, at its position in the source.
+      {
+        code: `${preEffect}export const f = CurrentIntl.use((intl) => Effect.succeed(intl.locale));\n`,
+        filename: "effect-use.ts",
+        errors: [
+          {
+            message:
+              "`CurrentIntl` is only read with `yield* CurrentIntl` and provided with `.layer(…)` or `.provide(…)`, so extraction sees every translator; read the translator with `const { t } = yield* CurrentIntl`",
+            line: 3,
+            // oxlint columns are 0-based: `CurrentIntl` after "export const f = ".
+            column: 17,
+          },
+        ],
+      },
       // Lint and extraction agree on every file: no text filter may skip a file extraction rejects.
       ...[`return i./* c */t("X");`, `return i.// c\n    t("X");`, `return i["\\u0074"]("X");`].map(
         (body, index) => ({
@@ -52,7 +72,7 @@ new RuleTester({ languageOptions: { sourceType: "module", parserOptions: { lang:
         errors: [
           {
             message:
-              "cannot trace `intl` to useIntl(), getIntl() or createIntl() in this file, so `.t(…)` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with `.t.from`",
+              "cannot trace `intl` to useIntl(), getIntl(), createIntl() or `yield* CurrentIntl` in this file, so `.t(…)` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with `.t.from`",
             line: 2,
             column: 9,
           },

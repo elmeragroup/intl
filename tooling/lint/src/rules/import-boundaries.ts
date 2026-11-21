@@ -6,6 +6,8 @@ import type { ESTree, Rule } from "@oxlint/plugins";
 // - @elmeragroup/intl/internal/* is for intl-tools (and the runtime itself): it carries no semver promise.
 // - The runtime's source imports no Node builtin: every runtime module is platform-neutral, and the client ones reach
 //   browsers.
+// - In the runtime's source only src/effect.ts, the `/effect` entry, imports `effect` (or an `effect/*` module): it is an
+//   optional peer, so every other entry must load without it.
 // - A published package's source stays inside its own `src` (a relative import out of it would be bundled into, or
 //   break, its dist), and imports a bare package only when its manifest declares it as a dependency or peer, so a
 //   consumer's install has it. A type-only import may also come from a devDependency: declarations are inlined.
@@ -14,6 +16,10 @@ import { dirname, resolve } from "node:path";
 
 import { stringLiteral } from "../ast.ts";
 import { E2E, isPublishedSource, packageOf, pathInPackage, RUNTIME, TOOLS } from "../workspace.ts";
+
+// The optional peer, and the one runtime module that may import it.
+const EFFECT = "effect";
+const EFFECT_ENTRY = "src/effect.ts";
 
 // `@scope/name/sub` → `@scope/name`; `name/sub` → `name`.
 function packageName(specifier: string): string {
@@ -37,6 +43,8 @@ export const importBoundaries: Rule = {
         "`{{specifier}}` is a Node builtin: @elmeragroup/intl's modules are platform-neutral and reach browsers. Keep Node code in @elmeragroup/intl-tools.",
       outside:
         "`{{specifier}}` leaves this package's src: a published package's source imports only its own src and its dependencies (a path outside would be bundled into its dist).",
+      effect:
+        "`{{specifier}}` is the optional peer `effect`: in @elmeragroup/intl's source only src/effect.ts (the `/effect` entry) imports it, so every other entry loads without it. Move the Effect code there.",
       undeclared:
         "`{{specifier}}` is not a dependency or peer dependency of {{package}}: a consumer's install would not have it. Declare it, or import it with `import type` when only types are needed.",
     },
@@ -55,6 +63,8 @@ export const importBoundaries: Rule = {
     const mayUseInternal = inRuntime || pkg.name === TOOLS;
     const shipped = isPublishedSource(pkg, context.filename);
     const srcRoot = resolve(pkg.root, "src");
+    const inRuntimeSource = inRuntime && pathInPackage(pkg, context.filename).startsWith("src/");
+    const isEffectEntry = inRuntime && pathInPackage(pkg, context.filename) === EFFECT_ENTRY;
 
     function check(source: ESTree.StringLiteral, typeOnly: boolean): void {
       const specifier = source.value;
@@ -89,8 +99,12 @@ export const importBoundaries: Rule = {
         context.report({ node: source, messageId: "internal", data });
       }
 
+      if (name === EFFECT && inRuntimeSource && !isEffectEntry) {
+        context.report({ node: source, messageId: "effect", data });
+      }
+
       if (isBuiltin(specifier)) {
-        if (inRuntime && pathInPackage(pkg, context.filename).startsWith("src/")) {
+        if (inRuntimeSource) {
           context.report({ node: source, messageId: "builtin", data });
         }
 

@@ -10,6 +10,24 @@
     "//#lint:oxlint": {
       "cache": false
     },
+    // The Effect lint pass over the files .oxlintrc.effect.json lists, type-aware through their tsconfigs, which extend
+    // tooling/typescript/effect.json; the lockfile carries the @effect/tsgo and effect versions.
+    "//#lint:effect": {
+      "inputs": [
+        ".oxlintrc.effect.json",
+        "pnpm-lock.yaml",
+        "tooling/typescript/**",
+        "packages/intl/src/**",
+        "packages/intl/test/**",
+        "packages/intl/package.json",
+        "packages/intl/tsconfig.json",
+        "packages/intl-tools/src/**",
+        "packages/intl-tools/test/**",
+        "packages/intl-tools/package.json",
+        "packages/intl-tools/tsconfig.json",
+        "packages/intl-e2e/effect/**"
+      ]
+    },
     "//#type-check:scripts": {
       "inputs": ["scripts/**", "tooling/typescript/**"]
     },
@@ -59,7 +77,7 @@
       "cache": false
     },
     "ci:checks": {
-      "dependsOn": ["^build", "//#lint:oxlint", "//#type-check:scripts"]
+      "dependsOn": ["^build", "//#lint:oxlint", "//#lint:effect", "//#type-check:scripts"]
     }
   }
 }

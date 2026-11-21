@@ -405,7 +405,7 @@ function result(code: string): ReadonlyArray<string> {
 }
 
 const UNTRACED_INTL = (receiver: string) =>
-  `cannot trace \`${receiver}\` to useIntl(), getIntl() or createIntl() in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``;
+  `cannot trace \`${receiver}\` to useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\` in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``;
 const UNTRACED_T =
   "cannot trace `t` to useT() or getT() in this file, so `t(…)` is not extracted; bind `const t = useT()` (or `await getT()`) here";
 
@@ -545,5 +545,80 @@ describe("receiver provenance", () => {
     expect(result(`${pre}export function D(t: (s: string) => string) { return t("Param"); }`)).toEqual([
       UNTRACED_T,
     ]);
+  });
+});
+
+const preEffect = `import * as Effect from "effect/Effect";\nimport { CurrentIntl } from "${PKG}/effect";\nimport { msg } from "${PKG}/react";\n`;
+const NOT_YIELDED =
+  "`CurrentIntl` is only read with `yield* CurrentIntl` and provided with `.layer(…)` or `.provide(…)`, so extraction sees every translator; read the translator with `const { t } = yield* CurrentIntl`";
+
+// Unit under test: extraction of the Effect service `CurrentIntl` (README, extraction contract). Oracle: the keys each
+// documented form must produce, and the one failure every other read of the service must report, written out per case.
+describe("the Effect service", () => {
+  it.each([
+    [
+      "{ t } destructured from yield* CurrentIntl",
+      `export const f = Effect.gen(function* () { const { t } = yield* CurrentIntl; return t("Hello, {name}", { name: "Ada" }); });`,
+      ["Hello, {name}"],
+    ],
+    [
+      "(yield* CurrentIntl).t(literal)",
+      `export const f = Effect.gen(function* () { return (yield* CurrentIntl).t("Inline"); });`,
+      ["Inline"],
+    ],
+    [
+      "intl.t.from of a descriptor, extracted at msg()",
+      `const D = msg("Described");\nexport const f = Effect.gen(function* () { const intl = yield* CurrentIntl; return intl.t.from(D); });`,
+      ["Described"],
+    ],
+    [
+      "a renamed import",
+      `import { CurrentIntl as Translator } from "${PKG}/effect";\nexport const f = Effect.gen(function* () { const { t } = yield* Translator; return t("Renamed"); });`,
+      ["Renamed"],
+    ],
+    [
+      "yield* in parentheses",
+      `export const f = Effect.gen(function* () { const intl = yield* (CurrentIntl); return intl.t("Parenthesized"); });`,
+      ["Parenthesized"],
+    ],
+    [
+      "an unrelated yield* beside it",
+      `export const f = Effect.gen(function* () { const n = yield* Effect.succeed(1); const { t } = yield* CurrentIntl; return [n, t("Beside")]; });`,
+      ["Beside"],
+    ],
+    [
+      "the layer and provide calls",
+      `export const layer = CurrentIntl.layer(config);\nexport const run = (program: Effect.Effect<string, never, CurrentIntl>) => program.pipe(CurrentIntl.provide(options), Effect.provide(layer));`,
+      [],
+    ],
+  ] as const)("follows %s", (_label, code, expected) => {
+    expect(keys(preEffect + code, "e.ts")).toEqual(expected);
+  });
+
+  // A local value named CurrentIntl is not the service, so `{ t }` read from it is not a bound IntlInstance.
+  it("does not trust a shadowing local", () => {
+    expect(
+      failure(
+        `${preEffect}export const f = Effect.gen(function* () { const CurrentIntl = Effect.succeed({ t: (s: string) => s }); const { t } = yield* CurrentIntl; return t("Shadowed"); });`
+      )
+    ).toContain("destructured from something that is not a bound IntlInstance");
+  });
+
+  it.each([
+    ["CurrentIntl.use", `export const f = CurrentIntl.use((intl) => Effect.succeed(intl.locale));`],
+    ["CurrentIntl.useSync", `export const f = CurrentIntl.useSync((intl) => intl.locale);`],
+    ["Effect.map(CurrentIntl, …)", `export const f = Effect.map(CurrentIntl, (intl) => intl.locale);`],
+    ["CurrentIntl.pipe(…)", `export const f = CurrentIntl.pipe(Effect.map((intl) => intl.locale));`],
+    ["CurrentIntl()", `export const f = CurrentIntl();`],
+    ["CurrentIntl.from", `export const f = CurrentIntl.from;`],
+    ["an uncalled .layer", `export const make = CurrentIntl.layer;`],
+    ["a bare member read", `export const key = CurrentIntl.key;`],
+    [
+      "a plain yield",
+      `export const f = Effect.gen(function* () { const intl = yield CurrentIntl; return intl; });`,
+    ],
+    ["an alias", `const Service = CurrentIntl;\nexport { Service };`],
+  ] as const)("rejects %s", (_label, code) => {
+    expect(failure(preEffect + code)).toContain(NOT_YIELDED);
   });
 });

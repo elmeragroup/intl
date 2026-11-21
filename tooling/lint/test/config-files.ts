@@ -1,7 +1,7 @@
 // Readers for the JSONC and YAML configs the manifest test checks: real parsers, and the comments around a node read
 // from the parser's offsets, never from line patterns.
 import type { Node, ParseError } from "jsonc-parser";
-import { getNodeValue, parse, parseTree, printParseErrorCode, visit } from "jsonc-parser";
+import { findNodeAtLocation, getNodeValue, parse, parseTree, printParseErrorCode, visit } from "jsonc-parser";
 import { parse as parseYaml } from "yaml";
 
 const JSONC_OPTIONS = { allowTrailingComma: true, disallowComments: false };
@@ -82,13 +82,9 @@ function property(object: Node | undefined, key: string): Node | undefined {
   return object?.children?.find((child) => child.children?.[0]?.value === key)?.children?.[1];
 }
 
-/**
- * Check `.oxlintrc.json`'s severities and the comments its exceptions carry.
- *
- * @param text - The file's text.
- * @returns The findings; every list is empty for a config that meets the conventions.
- */
-export function lintConfigFindings(text: string): LintConfigFindings {
+// A JSONC document's tree, and whether a comment explains a node: it sits between the node and whatever precedes it in
+// its container.
+function parseWithComments(text: string) {
   const comments: Array<{ readonly start: number; readonly end: number }> = [];
 
   visit(
@@ -97,15 +93,73 @@ export function lintConfigFindings(text: string): LintConfigFindings {
     JSONC_OPTIONS
   );
 
-  const root = parseTree(text, [], JSONC_OPTIONS);
-  // A comment explains a node when it sits between the node and whatever precedes it in its container.
-  const commentedBefore = (nodes: ReadonlyArray<Node>, index: number, container: Node): boolean => {
-    const from =
-      index === 0 ? container.offset : (nodes[index - 1]?.offset ?? 0) + (nodes[index - 1]?.length ?? 0);
-    const to = nodes[index]?.offset ?? 0;
+  return {
+    root: parseTree(text, [], JSONC_OPTIONS),
+    commentedBefore: (nodes: ReadonlyArray<Node>, index: number, container: Node): boolean => {
+      const from =
+        index === 0 ? container.offset : (nodes[index - 1]?.offset ?? 0) + (nodes[index - 1]?.length ?? 0);
+      const to = nodes[index]?.offset ?? 0;
 
-    return comments.some((comment) => comment.start >= from && comment.end <= to);
+      return comments.some((comment) => comment.start >= from && comment.end <= to);
+    },
   };
+}
+
+/** What the manifest test asks of a map of rule severities, as the rule names that break it. */
+export type SeverityFindings = {
+  /** Rules at a level other than `error` and `off`. */
+  readonly unclear: ReadonlyArray<string>;
+  /** Rules turned off with no comment above them or above their run of offs. */
+  readonly unexplainedOffs: ReadonlyArray<string>;
+};
+
+/**
+ * Check the Effect language service's severities in a tsconfig preset (`compilerOptions.plugins[0]`): every rule is
+ * an error or off, and every off carries its comment, as `.oxlintrc.json`'s rules do.
+ *
+ * @param text - The preset's text.
+ * @returns The findings; every list is empty for a preset that meets the conventions.
+ */
+export function effectPresetFindings(text: string): SeverityFindings {
+  const { root, commentedBefore } = parseWithComments(text);
+  const rules =
+    root === undefined
+      ? undefined
+      : findNodeAtLocation(root, ["compilerOptions", "plugins", 0, "diagnosticSeverity"]);
+  const entries = rules?.children ?? [];
+  const unclear: Array<string> = [];
+  const unexplainedOffs: Array<string> = [];
+
+  entries.forEach((entry, index) => {
+    const id = String(entry.children?.[0]?.value);
+    const level = severity(entry.children?.[1]);
+
+    if (level !== "error" && level !== "off") {
+      unclear.push(id);
+    }
+
+    let first = index;
+
+    while (first > 0 && severity(entries[first - 1]?.children?.[1]) === "off") {
+      first -= 1;
+    }
+
+    if (level === "off" && rules !== undefined && !commentedBefore(entries, first, rules)) {
+      unexplainedOffs.push(id);
+    }
+  });
+
+  return { unclear, unexplainedOffs };
+}
+
+/**
+ * Check `.oxlintrc.json`'s severities and the comments its exceptions carry.
+ *
+ * @param text - The file's text.
+ * @returns The findings; every list is empty for a config that meets the conventions.
+ */
+export function lintConfigFindings(text: string): LintConfigFindings {
+  const { root, commentedBefore } = parseWithComments(text);
   const warned: Array<string> = [];
   const unexplainedOffs: Array<string> = [];
   const unexplainedOverrides: Array<string> = [];

@@ -1,0 +1,30 @@
+{
+  // The Effect consumer, as lint and the editor read it in the workspace. `effect` is not a dependency of this package
+  // (it would reach the Next and Start fixtures' resolution), so its declarations come from @elmeragroup/intl's
+  // devDependency. scripts/e2e.ts type-checks the same file against the packed package instead, with real links.
+  "extends": ["@elmeragroup/typescript-config/base.json", "@elmeragroup/typescript-config/effect.json"],
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["ESNext", "DOM"],
+    "types": [],
+    "verbatimModuleSyntax": true,
+    // Node runs server.ts by type stripping.
+    "erasableSyntaxOnly": true,
+    "paths": {
+      "effect/*": ["../../intl/node_modules/effect/dist/*"]
+    },
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // The consumer serves Web requests through effect/http, which effect 4.1 marks unstable; the published
+        // packages depend on none of it.
+        "allowedUnstableApis": [
+          "effect/http/HttpRouter",
+          "effect/http/HttpServerRequest",
+          "effect/http/HttpServerResponse"
+        ]
+      }
+    ]
+  },
+  "include": ["*.ts"]
+}
