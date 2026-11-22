@@ -511,17 +511,19 @@ msgstr ""
   });
 
   // Unit under test: the watch's reporting when a Reporter write throws, as a host's may (layer 4). Oracle: layer 1's
-  // handling, written out by hand: the failed write is reported as its sync's SyncFailed, and the watch goes on.
+  // handling, written out by hand: each failed write is reported as its sync's SyncFailed, before the ready line and
+  // after it, and the watch goes on.
   it("reports a write that throws as SyncFailed, and keeps watching", async () => {
     let stdout = "";
     let stderr = "";
-    let thrown = false;
+    // The first sync's write fails, and so does the first after the ready line.
+    let failures = 2;
     const reporter = Layer.succeed(Reporter, {
       stdout: Effect.fnUntraced(function* (text: string) {
         yield* Effect.sync(() => {
-          if (!thrown && text.startsWith("wrote")) {
-            thrown = true;
-            throw new Error("disk full");
+          if (failures > 0 && text.startsWith("wrote")) {
+            failures -= 1;
+            throw new Error("stdout gone");
           }
 
           stdout += text;
@@ -539,27 +541,29 @@ msgstr ""
       )
     );
     const ready = `watching ${root} for message changes; Ctrl-C stops\n`;
+    const syncFailed =
+      "SyncFailed: stdout gone\n  fix: fix the file the error names; the next change retries\n";
     try {
       await expect.poll(() => stdout, HANG_GUARD).toBe(ready);
-      expect(stderr).toBe(
-        "SyncFailed: disk full\n  fix: fix the file the error names; the next change retries\n"
-      );
+      expect(stderr).toBe(syncFailed);
       write("src/new.tsx", component("New"));
+      await expect.poll(() => stderr, HANG_GUARD).toBe(`${syncFailed}${syncFailed}`);
+      write("src/newer.tsx", component("Newer"));
       await expect.poll(() => stdout, HANG_GUARD).toBe(`${ready}wrote messages/nb.po\n`);
     } finally {
       await Effect.runPromise(Fiber.interrupt(fiber));
     }
   });
 
-  // When the SyncFailed report cannot be written either, nothing reports the watch any more: it must end, with the
-  // failure, rather than go on writing catalogs unreported.
+  // When the SyncFailed report cannot be written either, nothing reports the watch any more: it must end with that
+  // failure, its watcher closed and its signal listeners gone, rather than go on writing catalogs unreported.
   it("ends when a failed write cannot be reported either", async () => {
     let stdout = "";
     let broken = false;
-    const failing = (append: (text: string) => void) => (text: string) =>
+    const failing = (append: (text: string) => void, error: string) => (text: string) =>
       Effect.sync(() => {
         if (broken) {
-          throw new Error("disk full");
+          throw new Error(error);
         }
 
         append(text);
@@ -567,20 +571,59 @@ msgstr ""
     const reporter = Layer.succeed(Reporter, {
       stdout: failing((text) => {
         stdout += text;
-      }),
-      stderr: failing(() => undefined),
+      }, "stdout gone"),
+      stderr: failing(() => undefined, "stderr gone"),
     });
+    const listeners = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+    const before = listeners();
     const ended = Effect.runPromiseExit(
       cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
         Effect.provide(Layer.merge(CliPlatform, reporter))
       )
     );
     await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
+    expect(listeners()).toEqual(before.map((count) => count + 1));
     broken = true;
     write("src/new.tsx", component("New"));
     const exit = await ended;
 
-    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
+    expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("stderr gone"));
+    expect(listeners()).toEqual(before);
+  });
+
+  // Linux only: there a recursive watch of an unreadable directory fails as it starts, where macOS's event daemon
+  // watches it all the same. Oracle: Node's default for a signal no listener takes, death by that signal, after the
+  // start failure printed as a crash; the watches started on the readable roots keep the process alive until then.
+  describe.skipIf(process.platform !== "linux")("a watcher that fails to start", () => {
+    it.each(["SIGINT", "SIGTERM"] as const)("leaves %s to Node's default", async (signal) => {
+      write(
+        "elmera-intl.json",
+        JSON.stringify({ ...CONFIG, include: [...CONFIG.include, "zz-locked/**/*.tsx"] })
+      );
+      // Separate roots, watched in order: `messages` and `src` start, then `zz-locked` fails.
+      mkdirSync(join(root, "messages"));
+      mkdirSync(join(root, "zz-locked"));
+      chmodSync(join(root, "zz-locked"), 0o000);
+      locked.push(join(root, "zz-locked"));
+      const child = spawn(execPath, [BIN, "extract", "--watch"], {
+        cwd: root,
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8").on("data", (text: string) => {
+        stderr += text;
+      });
+      const closed = new Promise<readonly [number | null, NodeJS.Signals | null]>((done) => {
+        child.on("close", (code, killedBy) => {
+          done([code, killedBy]);
+        });
+      });
+      await expect.poll(() => stderr, HANG_GUARD).toMatch(/^elmera-intl failed: Error: EACCES/u);
+      child.kill(signal);
+
+      expect(await closed).toEqual([null, signal]);
+    });
   });
 
   it("exits 0 on SIGINT", async () => {

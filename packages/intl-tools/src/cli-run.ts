@@ -32,7 +32,7 @@ import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
-import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
+import type { PollIntervalOutOfRange, ProjectWatcher, SyncResult, WatchMode } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, syncFailed, watchProject } from "./watch";
 
 /** Where the CLI writes and resolves paths from. */
@@ -294,19 +294,25 @@ const commandReport = (command: "extract" | "check", configPath: string) =>
   });
 const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
 // The watcher and the signals that stop it. The listeners go on just before the watcher starts (a one-shot command, or
-// a config still being read, keeps Node's default and ends at once), so they are on before the ready line. The first
-// signal takes both off (a second gets Node's default), closes the watcher, so no new sync starts, and ends the
-// results: a sync already running finishes, as it cannot be cut short, and every delivered result is still reported.
+// a config still being read, keeps Node's default and ends at once), so they are on before the first sync, and come off
+// again if the watcher fails to start. The first signal takes both off (a second gets Node's default), closes the
+// watcher, so no new sync starts, and ends the results: a sync already running finishes, as it cannot be cut short, and
+// every delivered result is still reported. The close's outcome is held before the results end, since ending them
+// resumes the reporting fiber at once, so the watcher closes once and a failed close is not lost.
 const startWatcher = (config: ProjectConfig, mode: WatchMode, results: Queue.Queue<SyncResult, Cause.Done>) =>
   Effect.sync(() => {
-    let closed: Promise<void> | undefined;
-    // Idempotent: the first signal, and the scope on any other exit, both stop the watch.
-    const stop = (): Promise<void> => {
+    let watcher: ProjectWatcher | undefined;
+    let closed: Promise<Exit.Exit<void>> | undefined;
+    const offSignals = () => {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    };
+    // Idempotent: the first signal, and the scope on any exit, both stop the watch.
+    const stop = (): Promise<Exit.Exit<void>> => {
       if (closed === undefined) {
-        process.off("SIGINT", onSignal);
-        process.off("SIGTERM", onSignal);
+        offSignals();
+        closed = (watcher?.close() ?? Promise.resolve()).then(() => Exit.void, Exit.die);
         Queue.endUnsafe(results);
-        closed = watcher.close();
       }
 
       return closed;
@@ -316,14 +322,19 @@ const startWatcher = (config: ProjectConfig, mode: WatchMode, results: Queue.Que
     };
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
-    const watcher = watchProject(
-      config,
-      (result) => {
-        Queue.offerUnsafe(results, result);
-      },
-      undefined,
-      mode
-    );
+    try {
+      watcher = watchProject(
+        config,
+        (result) => {
+          Queue.offerUnsafe(results, result);
+        },
+        undefined,
+        mode
+      );
+    } catch (error) {
+      offSignals();
+      throw error;
+    }
 
     return { stop };
   });
@@ -376,8 +387,9 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   // The watcher calls back from outside this fiber; this fiber reports each result, so the Reporter may be
   // asynchronous.
   const results = yield* Queue.unbounded<SyncResult, Cause.Done>();
-  const watch = yield* Effect.acquireRelease(startWatcher(config, mode, results), (started) =>
-    Effect.promise(() => started.stop())
+  // After the last report, the close's outcome: a failed close is a crash, as it always was.
+  yield* Effect.acquireRelease(startWatcher(config, mode, results), (started) =>
+    Effect.promise(() => started.stop()).pipe(Effect.flatten)
   );
   // The first sync runs as the watcher starts: its report precedes the ready line.
   yield* Effect.forEach(yield* Queue.clear(results), (result) => reportResult(config.root, result), {
@@ -390,7 +402,6 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
     Effect.forever,
     Effect.catchIf(Cause.isDone, () => Effect.void)
   );
-  yield* Effect.promise(() => watch.stop());
 }, Effect.scoped);
 
 // One result's report. A write that fails is reported as the sync's failure, `SyncFailed`, and the watch goes on, as a

@@ -78,9 +78,14 @@ type CliRun = { readonly code: number; readonly stdout: string; readonly stderr:
 // code are the CLI's contract, whatever runs behind them.
 const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
 
+// The hang guard of every spawned executable: a CLI that starts watching never exits on its own, and one that outlives
+// a signal is still blocked. A test that spawns one waits longer than its guard, so the guard decides and only a hang
+// outside a spawn fails on the test's own timeout.
+const SPAWN_GUARD_MS = 10_000;
+const BIN_TEST = { timeout: 2 * SPAWN_GUARD_MS };
+
 function bin(...args: Array<string>): CliRun {
-  // The timeout is a hang guard: a CLI that starts watching never exits on its own.
-  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8", timeout: 10_000 });
+  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8", timeout: SPAWN_GUARD_MS });
 
   return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
 }
@@ -663,7 +668,7 @@ describe("check", () => {
 
   // Oracle: the report tooling parses, written out by hand: two-space indentation, keys in the order ok, problems,
   // messages, written, unreachable, and a trailing newline.
-  it("writes only the JSON report to stdout", async () => {
+  it("writes only the JSON report to stdout", BIN_TEST, async () => {
     await cli("extract");
     const untranslated = (key: string) => `    {
       "code": "TranslationMissing",
@@ -688,7 +693,7 @@ ${[untranslated('"Hello {name}, read the <x0>terms</x0>."'), untranslated('"stat
   });
 });
 
-describe("usage", () => {
+describe("usage", BIN_TEST, () => {
   // Oracle: the usage text, written out by hand.
   const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to elmera-intl.json>]
        elmera-intl extract --watch [--poll <ms>] [--config <path to elmera-intl.json>]
@@ -882,7 +887,7 @@ describe("usage", () => {
   });
 });
 
-describe("bin", () => {
+describe("bin", BIN_TEST, () => {
   it("writes a JSON report larger than a pipe buffer in full", async () => {
     write(
       "src/many.ts",
@@ -893,6 +898,7 @@ describe("bin", () => {
     const run = spawnSync(execPath, [BIN, "check", "--json"], {
       cwd: root,
       encoding: "utf8",
+      timeout: SPAWN_GUARD_MS,
       maxBuffer: 64 * 1024 * 1024,
     });
     expect(run.stdout.length).toBeGreaterThan(65536);
@@ -922,7 +928,7 @@ describe("bin", () => {
     // A hang guard: a CLI that outlived the signal is still blocked on the config, and ends by SIGKILL instead.
     const child = spawn(execPath, [BIN, ...args, "--config", "fifo.json"], {
       cwd: root,
-      timeout: 10_000,
+      timeout: SPAWN_GUARD_MS,
       killSignal: "SIGKILL",
     });
     let output = "";
@@ -951,7 +957,7 @@ describe("bin", () => {
       `import { msg } from "@elmeragroup/intl/react";\n${Array.from({ length: 1500 }, (_, i) => `msg("Message number ${i} with some padding text");`).join("\n")}\n`
     );
     expect((await cli("extract")).code).toBe(0);
-    const child = spawn(execPath, [BIN, "check", "--json"], { cwd: root });
+    const child = spawn(execPath, [BIN, "check", "--json"], { cwd: root, timeout: SPAWN_GUARD_MS });
     let stderr = "";
     child.stderr.setEncoding("utf8").on("data", (text: string) => {
       stderr += text;
