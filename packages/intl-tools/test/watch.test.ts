@@ -23,7 +23,8 @@ import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CliPlatform, cliProgram, runCli } from "../src/cli-run";
+import { CliPlatform, cliProgram } from "../src/cli-run";
+import { runOnceInProcess } from "../src/command-run";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import { parsePo } from "../src/po";
 import { loadConfig } from "../src/project-config";
@@ -93,8 +94,13 @@ function component(text: string): string {
 
 // One-shot extract, then a msgstr for each pair.
 async function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): Promise<void> {
-  const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-  expect(await runCli(["extract"], io)).toBe(0);
+  expect(
+    await runOnceInProcess(
+      "extract",
+      { configPath: join(root, "elmera-intl.json"), crash: "reject" },
+      { stdout: () => undefined, stderr: () => undefined }
+    )
+  ).toBe(0);
   let po = read("messages/nb.po");
   for (const [source, translation] of pairs) {
     po = po.replace(`msgid "${source}"\nmsgstr ""`, `msgid "${source}"\nmsgstr "${translation}"`);
@@ -162,6 +168,13 @@ async function startWatch(): Promise<Watcher> {
   live = { stdout: stdout.length, stderr: stderr.length };
 
   return watcher;
+}
+
+// The executable's watch run in this process, reporting through `reporter`, as a host runtime runs the program.
+function watchInProcess(reporter: Layer.Layer<Reporter>) {
+  return cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root }).pipe(
+    Effect.provide(Layer.merge(CliPlatform, reporter))
+  );
 }
 
 // Unit under test: `elmera-intl extract --watch`. Oracle: the PO text written per case, by hand.
@@ -468,11 +481,7 @@ msgstr ""
         stderr += text;
       }),
     });
-    const fiber = Effect.runFork(
-      cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
-        Effect.provide(Layer.merge(CliPlatform, reporter))
-      )
-    );
+    const fiber = Effect.runFork(watchInProcess(reporter));
     const ready = `wrote messages/nb.po\nwatching ${root} for message changes; Ctrl-C stops\n`;
     try {
       await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
@@ -518,28 +527,20 @@ msgstr ""
     let stderr = "";
     // The first sync's write fails, and so does the first after the ready line.
     let failures = 2;
-    const reporter = Layer.succeed(Reporter, {
-      stdout: Effect.fnUntraced(function* (text: string) {
-        yield* Effect.sync(() => {
-          if (failures > 0 && text.startsWith("wrote")) {
-            failures -= 1;
-            throw new Error("stdout gone");
-          }
+    const reporter = Reporter.layer({
+      stdout: (text) => {
+        if (failures > 0 && text.startsWith("wrote")) {
+          failures -= 1;
+          throw new Error("stdout gone");
+        }
 
-          stdout += text;
-        });
-      }),
-      stderr: Effect.fnUntraced(function* (text: string) {
-        yield* Effect.sync(() => {
-          stderr += text;
-        });
-      }),
+        stdout += text;
+      },
+      stderr: (text) => {
+        stderr += text;
+      },
     });
-    const fiber = Effect.runFork(
-      cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
-        Effect.provide(Layer.merge(CliPlatform, reporter))
-      )
-    );
+    const fiber = Effect.runFork(watchInProcess(reporter));
     const ready = `watching ${root} for message changes; Ctrl-C stops\n`;
     const syncFailed =
       "SyncFailed: stdout gone\n  fix: fix the file the error names; the next change retries\n";
@@ -560,32 +561,33 @@ msgstr ""
   it("ends when a failed write cannot be reported either", async () => {
     let stdout = "";
     let broken = false;
-    const failing = (append: (text: string) => void, error: string) => (text: string) =>
-      Effect.sync(() => {
+    const reporter = Reporter.layer({
+      stdout: (text) => {
         if (broken) {
-          throw new Error(error);
+          throw new Error("stdout gone");
         }
 
-        append(text);
-      });
-    const reporter = Layer.succeed(Reporter, {
-      stdout: failing((text) => {
         stdout += text;
-      }, "stdout gone"),
-      stderr: failing(() => undefined, "stderr gone"),
+      },
+      stderr: () => {
+        if (broken) {
+          throw new Error("stderr gone");
+        }
+      },
     });
     const listeners = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
     const before = listeners();
-    const ended = Effect.runPromiseExit(
-      cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
-        Effect.provide(Layer.merge(CliPlatform, reporter))
-      )
-    );
-    await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
-    expect(listeners()).toEqual(before.map((count) => count + 1));
-    broken = true;
-    write("src/new.tsx", component("New"));
-    const exit = await ended;
+    const fiber = Effect.runFork(watchInProcess(reporter));
+    let exit: Exit.Exit<void, unknown>;
+    try {
+      await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
+      expect(listeners()).toEqual(before.map((count) => count + 1));
+      broken = true;
+      write("src/new.tsx", component("New"));
+      exit = await Effect.runPromise(Fiber.await(fiber));
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
 
     expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("stderr gone"));
     expect(listeners()).toEqual(before);

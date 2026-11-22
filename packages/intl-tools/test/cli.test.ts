@@ -27,7 +27,8 @@ import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CliPlatform, cliProgram, exitCodeOf, runCli } from "../src/cli-run";
+import { CliPlatform, cliProgram } from "../src/cli-run";
+import { exitCodeOf } from "../src/command-run";
 import { Reporter } from "../src/reporter";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
@@ -90,11 +91,12 @@ function bin(...args: Array<string>): CliRun {
   return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
 }
 
-async function cli(...args: Array<string>): Promise<CliRun> {
+// `cliProgram` in-process, under `settings` (a host's own effect/cli settings, as a host runtime that provides Node's
+// services may), its exit read as the executable reads it.
+async function inProcess<ROut>(args: ReadonlyArray<string>, settings: Layer.Layer<ROut>): Promise<CliRun> {
   let stdout = "";
   let stderr = "";
-  const code = await runCli(args, {
-    cwd: root,
+  const io = Reporter.layer({
     stdout: (text) => {
       stdout += text;
     },
@@ -102,8 +104,15 @@ async function cli(...args: Array<string>): Promise<CliRun> {
       stderr += text;
     },
   });
+  const exit = await Effect.runPromiseExit(
+    cliProgram(args, { cwd: root }).pipe(Effect.provide([CliPlatform, settings, io]))
+  );
 
-  return { code, stdout, stderr };
+  return { code: exitCodeOf(exit), stdout, stderr };
+}
+
+async function cli(...args: Array<string>): Promise<CliRun> {
+  return inProcess(args, Layer.empty);
 }
 
 type CheckReport = {
@@ -806,34 +815,19 @@ describe("usage", BIN_TEST, () => {
   // services may (layer 4). Oracle: the usage row for `--poll abc` above. The host's built-in flags and presenter must
   // change neither the grammar nor where the output goes: its presenter is never called.
   it("keeps its usage errors to the Reporter under a host's effect/cli settings", async () => {
-    let stdout = "";
-    let stderr = "";
     const presented: Array<string> = [];
-    const host = Layer.mergeAll(
-      CliPlatform,
+    const settings = Layer.merge(
       CliConfig.layer(),
       CliOutput.layerPresenter({
         present: (event) =>
           Effect.sync(() => {
             presented.push(event._tag);
           }),
-      }),
-      Reporter.layer({
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
       })
     );
-    const exit = await Effect.runPromiseExit(
-      cliProgram(["extract", "--watch", "--poll", "abc"], { cwd: root, host: "in-process" }).pipe(
-        Effect.provide(host)
-      )
-    );
+    const { code, stdout, stderr } = await inProcess(["extract", "--watch", "--poll", "abc"], settings);
 
-    expect([exitCodeOf(exit), presented, stdout]).toEqual([2, [], ""]);
+    expect([code, presented, stdout]).toEqual([2, [], ""]);
     expect(stderr).toBe(`--poll needs an interval in milliseconds, such as --poll 200\n${USAGE}`);
   });
 
@@ -841,29 +835,16 @@ describe("usage", BIN_TEST, () => {
   // whose flag is required. Oracle: the usage row for `check --watch` above: no setting a host provides is part of the
   // CLI's grammar.
   it("keeps its grammar under a host's own global setting", async () => {
-    let stdout = "";
-    let stderr = "";
     // A setting in the place of effect/cli's `--log-level`, with a flag of its own that every invocation would need.
     const hostSetting = GlobalFlag.Setting("log-level")({
       flag: Flag.String("region").pipe(Flag.map(() => Option.none<LogLevel.LogLevel>())),
     });
-    const host = Layer.mergeAll(
-      CliPlatform,
-      CliConfig.layer({ builtIns: [hostSetting] }),
-      Reporter.layer({
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
-      })
-    );
-    const exit = await Effect.runPromiseExit(
-      cliProgram(["check", "--watch"], { cwd: root, host: "in-process" }).pipe(Effect.provide(host))
+    const { code, stdout, stderr } = await inProcess(
+      ["check", "--watch"],
+      CliConfig.layer({ builtIns: [hostSetting] })
     );
 
-    expect([exitCodeOf(exit), stdout]).toEqual([2, ""]);
+    expect([code, stdout]).toEqual([2, ""]);
     expect(stderr).toBe(`--watch goes with extract only, without --json\n${USAGE}`);
   });
 

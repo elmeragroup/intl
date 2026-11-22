@@ -14,6 +14,11 @@ export type ReporterIo = {
   readonly stderr: (text: string) => void;
 };
 
+const writeTo = (write: (text: string) => void) => (text: string) =>
+  Effect.sync(() => {
+    write(text);
+  });
+
 /** The tools' user output: the report on stdout, problems and failures on stderr, each text written byte for byte. */
 export class Reporter
   extends /* @__PURE__ */ Context.Service<
@@ -33,18 +38,6 @@ export class Reporter
    * @returns A layer whose writes call `io` synchronously, in order.
    */
   static layer(io: ReporterIo): Layer.Layer<Reporter> {
-    // Untraced: a report writes a line per problem, and a span per line would trace nothing the command's span lacks.
-    return Layer.succeed(Reporter, {
-      stdout: Effect.fnUntraced(function* (text: string) {
-        yield* Effect.sync(() => {
-          io.stdout(text);
-        });
-      }),
-      stderr: Effect.fnUntraced(function* (text: string) {
-        yield* Effect.sync(() => {
-          io.stderr(text);
-        });
-      }),
-    });
+    return Layer.succeed(Reporter, { stdout: writeTo(io.stdout), stderr: writeTo(io.stderr) });
   }
 }

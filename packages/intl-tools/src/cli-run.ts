@@ -1,6 +1,5 @@
-// The `elmera-intl` program: effect/cli parses the arguments into a command, and the command writes its report through
-// Reporter. The executable (cli.ts) and the hosts (the Vite build check, the Vitest setup) run this one program, so they
-// print, and exit, alike.
+// The `elmera-intl` executable's program: effect/cli parses the arguments into a command, a one-shot command runs
+// through command-run.ts (which the hosts call directly), and a watch runs until a signal stops it.
 
 import * as NodePath from "@effect/platform-node-shared/NodePath";
 import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
@@ -10,12 +9,12 @@ import * as CliError from "effect/cli/CliError";
 import * as CliOutput from "effect/cli/CliOutput";
 import * as Command from "effect/cli/Command";
 import * as Flag from "effect/cli/Flag";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Queue from "effect/Queue";
 import * as Runtime from "effect/Runtime";
@@ -25,9 +24,7 @@ import * as Terminal from "effect/Terminal";
 import { relative, resolve } from "node:path";
 import process from "node:process";
 
-import type { CommandReport } from "./commands";
-import { runCheck, runExtract } from "./commands";
-import { describeProblem } from "./problem";
+import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
 import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
@@ -41,11 +38,8 @@ export type CliIo = ReporterIo & {
   readonly cwd: string;
 };
 
-/**
- * Who runs the program. Only the executable owns the process's signals, which end a watch; a host running the CLI
- * in-process gets a usage error for `--watch`.
- */
-export type CliHost = "executable" | "in-process";
+/** The directory the default config path resolves in. */
+export type CliOptions = { readonly cwd: string };
 
 const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to ${CONFIG_FILE}>]
        elmera-intl extract --watch [--poll <ms>] [--config <path to ${CONFIG_FILE}>]`;
@@ -58,67 +52,116 @@ export class UsageError
   override readonly [Runtime.errorExitCode] = 2;
 }
 
-/** The command ran and reported problems, already printed. Exit code 1. */
-export class ProblemsFound
-  extends /* @__PURE__ */ Schema.TaggedError<ProblemsFound>()("ProblemsFound", {
-    count: Schema.Finite,
-  })
-{
-  /** Problems found exit 1. */
-  override readonly [Runtime.errorExitCode] = 1;
-}
-
-/** The program died (a defect, or I/O the commands do not classify), its stack already printed. Exit code 2. */
-export class CliCrashed extends /* @__PURE__ */ Schema.TaggedError<CliCrashed>()("CliCrashed", {}) {
-  /** A crash exits 2, never 1, so it cannot read as "problems found". */
-  override readonly [Runtime.errorExitCode] = 2;
-}
-
 /** Every way the program fails, each carrying its exit code. */
 export type CliFailure = UsageError | ProblemsFound;
 
+// `--poll` parses to its watch mode. Flag.Int would take `-5` and `1e3` as numbers, where the contract takes only
+// digits; its filters' messages are the contract's reasons.
+const POLL_FLAG = /* @__PURE__ */ Flag.String("poll").pipe(
+  /* @__PURE__ */ Flag.filter(
+    (value) => /^\d+$/u.test(value),
+    () => "--poll needs an interval in milliseconds, such as --poll 200"
+  ),
+  /* @__PURE__ */ Flag.filterMap(
+    (value) => Option.liftPredicate(pollEvery(Number(value)), isPolling),
+    (value) => `--poll ${value}: the interval must be between ${MIN_POLL_MS} and ${MAX_POLL_MS} milliseconds`
+  )
+);
+
 // The flags every command parses, so that a flag used with the wrong command gets its own reason (`check --watch`),
-// not "unexpected argument". The booleans are presence-only, as the contract has them: no `--no-json`, and a value
-// never attaches (`--json false` leaves `false` an argument). `--poll` parses to its watch mode; Flag.Int would take
-// `-5` and `1e3` as numbers, where the contract takes only digits.
-const flags = () => ({
-  json: Flag.Boolean("json").pipe(
-    Flag.withoutNegation,
-    Flag.withOptionalValue("true"),
-    Flag.withDefault(false)
-  ),
-  watch: Flag.Boolean("watch").pipe(
-    Flag.withoutNegation,
-    Flag.withOptionalValue("true"),
-    Flag.withDefault(false)
-  ),
-  config: Flag.String("config").pipe(Flag.optional),
-  poll: Flag.String("poll").pipe(
-    Flag.filter(
-      (value) => /^\d+$/u.test(value),
-      () => "--poll needs an interval in milliseconds, such as --poll 200"
-    ),
-    Flag.filterMap(
-      (value) => Option.liftPredicate(pollEvery(Number(value)), isPolling),
-      (value) =>
-        `--poll ${value}: the interval must be between ${MIN_POLL_MS} and ${MAX_POLL_MS} milliseconds`
-    ),
-    Flag.optional
-  ),
-});
+// not "unexpected argument". The booleans are presence-only, as the contract has them: `scanArgs` rejects
+// `--no-json` and `--json=…`, and leaves a following `false` an argument, before effect/cli reads them.
+const FLAGS = {
+  json: /* @__PURE__ */ Flag.Boolean("json").pipe(/* @__PURE__ */ Flag.withDefault(false)),
+  watch: /* @__PURE__ */ Flag.Boolean("watch").pipe(/* @__PURE__ */ Flag.withDefault(false)),
+  config: /* @__PURE__ */ Flag.String("config").pipe(Flag.optional),
+  poll: /* @__PURE__ */ POLL_FLAG.pipe(Flag.optional),
+};
+
+// What `scanArgs` accepts as a flag: exactly the names effect/cli declares, each once.
+const FLAG_NAMES: ReadonlyArray<string> = /* @__PURE__ */ Object.keys(FLAGS).map((name) => `--${name}`);
 
 function isPolling(mode: WatchMode | PollIntervalOutOfRange): mode is WatchMode {
   return mode._tag !== "PollIntervalOutOfRange";
 }
 
-/** One parsed invocation: a command and its flags, before the rules between flags apply. */
-type Invocation = {
-  readonly command: "extract" | "check";
+/** The flags as effect/cli parses them, before the rules between flags apply. */
+type ParsedFlags = {
   readonly json: boolean;
   readonly watch: boolean;
   readonly config: Option.Option<string>;
   readonly poll: Option.Option<WatchMode>;
 };
+
+/** The directory the program resolves the default config path in, provided with the grammar. */
+class WorkingDirectory
+  extends /* @__PURE__ */ Context.Service<WorkingDirectory, { readonly cwd: string }>()(
+    "elmera-intl-tools/WorkingDirectory"
+  ) {}
+
+const WATCH_WITHOUT_EXTRACT = "--watch goes with extract only, without --json";
+const POLL_WITHOUT_WATCH = "--poll goes with extract --watch only";
+
+const configPathOf = (config: Option.Option<string>) =>
+  WorkingDirectory.use(({ cwd }) =>
+    Effect.succeed(
+      resolve(
+        cwd,
+        Option.getOrElse(config, () => CONFIG_FILE)
+      )
+    )
+  );
+
+const extract = /* @__PURE__ */ Command.make(
+  "extract",
+  FLAGS,
+  /* @__PURE__ */ Effect.fn("elmera-intl.extract")(function* (flags: ParsedFlags) {
+    const configPath = yield* configPathOf(flags.config);
+
+    if (!flags.watch) {
+      return yield* runOnce("extract", flags.json, configPath);
+    }
+
+    return yield* watchUntilSignal(
+      configPath,
+      Option.getOrElse(flags.poll, (): WatchMode => ({ _tag: "native" }))
+    );
+  })
+).pipe(
+  /* @__PURE__ */ Command.validate((flags) => {
+    if (flags.watch && flags.json) {
+      return Effect.fail(new UsageError({ reason: WATCH_WITHOUT_EXTRACT }));
+    }
+
+    return Option.isSome(flags.poll) && !flags.watch
+      ? Effect.fail(new UsageError({ reason: POLL_WITHOUT_WATCH }))
+      : Effect.void;
+  })
+);
+
+const check = /* @__PURE__ */ Command.make(
+  "check",
+  FLAGS,
+  /* @__PURE__ */ Effect.fn("elmera-intl.check")(function* (flags: ParsedFlags) {
+    return yield* runOnce("check", flags.json, yield* configPathOf(flags.config));
+  })
+).pipe(
+  /* @__PURE__ */ Command.validate((flags) => {
+    if (flags.watch) {
+      return Effect.fail(new UsageError({ reason: WATCH_WITHOUT_EXTRACT }));
+    }
+
+    return Option.isSome(flags.poll)
+      ? Effect.fail(new UsageError({ reason: POLL_WITHOUT_WATCH }))
+      : Effect.void;
+  })
+);
+
+// No --version: builtIns are off, so the version is never printed.
+const runCommandLine = /* @__PURE__ */ Command.runWith(
+  /* @__PURE__ */ Command.make("elmera-intl").pipe(/* @__PURE__ */ Command.withSubcommands([extract, check])),
+  { version: "", renderErrors: false }
+);
 
 // The grammar's own settings, provided inside the parse so that no service a host provides can change them: no
 // --help, --version, --wizard, --completions or --log-level (each would take a flag's place), and a silent presenter
@@ -128,43 +171,24 @@ const grammar = /* @__PURE__ */ Layer.merge(
   /* @__PURE__ */ CliOutput.layerPresenter({ present: () => Effect.void })
 );
 
-/**
- * Parse scanned tokens with effect/cli and run what they name. A scanned argument list fails to parse only on a
- * `--poll` value, whose filters' messages are the contract's reasons; any other parse error means the scan and
- * effect/cli disagree, a defect.
- */
-function parse<E, R>(
-  tokens: ReadonlyArray<string>,
-  run: (invocation: Invocation) => Effect.Effect<void, E, R>
-): Effect.Effect<void, E | UsageError, R | Command.Environment> {
-  const tree = Command.make("elmera-intl").pipe(
-    Command.withSubcommands([
-      Command.make("extract", flags(), (input) => run({ command: "extract", ...input })),
-      Command.make("check", flags(), (input) => run({ command: "check", ...input })),
-    ])
+// A scanned argument list fails to parse only on a `--poll` value, whose filters' messages are the contract's
+// reasons; any other parse error means the scan and effect/cli disagree, a defect.
+const pollReason = (error: CliError.CliError): Effect.Effect<never, UsageError> => {
+  const poll = (error._tag === "ShowHelp" ? error.errors : [error]).find(
+    (reason) => reason._tag === "InvalidValue" && reason.option === "poll"
   );
 
-  // No --version: builtIns are off, so the version is never printed.
-  return Command.runWith(tree, { version: "", renderErrors: false })(tokens).pipe(
-    Effect.provide(grammar),
-    Effect.catchIf(CliError.isCliError, (error) => {
-      const poll = (error._tag === "ShowHelp" ? error.errors : [error]).find(
-        (reason) => reason._tag === "InvalidValue" && reason.option === "poll"
-      );
-
-      return poll?._tag === "InvalidValue"
-        ? Effect.fail(new UsageError({ reason: poll.expected }))
-        : Effect.die(error);
-    })
-  );
-}
+  return poll?._tag === "InvalidValue"
+    ? Effect.fail(new UsageError({ reason: poll.expected }))
+    : Effect.die(error);
+};
 
 type Scanned =
   | { readonly _tag: "Tokens"; readonly tokens: ReadonlyArray<string> }
   | {
       readonly _tag: "SyntaxError";
-      /** The complete options before the error, as `Tokens` passes them; empty when the command is the error. */
-      readonly tokens: ReadonlyArray<string>;
+      /** The `--poll` value read before the error, which layer 1 judged first. */
+      readonly poll: string | undefined;
       readonly reason: string;
     };
 
@@ -178,31 +202,33 @@ function scanArgs(args: ReadonlyArray<string>): Scanned {
   const [command, ...rest] = args;
 
   if (command !== "extract" && command !== "check") {
-    return { _tag: "SyntaxError", tokens: [], reason: `unknown command: ${command ?? "(none)"}` };
+    return { _tag: "SyntaxError", poll: undefined, reason: `unknown command: ${command ?? "(none)"}` };
   }
 
   const tokens: Array<string> = [command];
-  // The flags not yet given, named from their definitions: an argument that is none of them is unknown or a repeat.
-  const remaining = new Set(Object.keys(flags()).map((name) => `--${name}`));
+  let poll: string | undefined;
+  // The flags not yet given: an argument that is none of them is unknown or a repeat.
+  const remaining = new Set(FLAG_NAMES);
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index] ?? "";
     const value = rest[index + 1];
 
     if (!remaining.delete(arg)) {
-      return { _tag: "SyntaxError", tokens, reason: `unexpected argument: ${arg}` };
+      return { _tag: "SyntaxError", poll, reason: `unexpected argument: ${arg}` };
     }
 
     if (arg === "--config") {
       // `--config` takes the next argument unless it is a flag.
       if (value === undefined || value.startsWith("--")) {
-        return { _tag: "SyntaxError", tokens, reason: "--config needs a path" };
+        return { _tag: "SyntaxError", poll, reason: "--config needs a path" };
       }
 
       tokens.push(`--config=${value}`);
       index += 1;
     } else if (arg === "--poll") {
       // `--poll` takes the next argument, or none at the end, as its value, which only its filters judge.
-      tokens.push(`--poll=${value ?? ""}`);
+      poll = value ?? "";
+      tokens.push(`--poll=${poll}`);
       index += 1;
     } else {
       tokens.push(arg);
@@ -217,81 +243,38 @@ function scanArgs(args: ReadonlyArray<string>): Scanned {
  * exception the commands do not classify) stays a defect.
  *
  * @param args - The arguments after the program name.
- * @param options - The directory the default config path resolves in, and who runs the program.
+ * @param options - The directory the default config path resolves in.
  * @returns An effect that writes the command's output and fails with `UsageError` (printed with the usage text) or
  *   `ProblemsFound` (printed by the command).
  */
-export function cliProgram(
-  args: ReadonlyArray<string>,
-  options: { readonly cwd: string; readonly host: CliHost }
-): Effect.Effect<void, CliFailure, Reporter | Command.Environment> {
-  return Effect.gen(function* () {
+export const cliProgram = /* @__PURE__ */ Effect.fn("elmera-intl")(
+  function* (args: ReadonlyArray<string>, options: CliOptions) {
     const scanned = scanArgs(args);
 
     if (scanned._tag === "Tokens") {
-      return yield* parse(scanned.tokens, (invocation) => dispatch(invocation, options));
+      return yield* runCommandLine(scanned.tokens).pipe(
+        Effect.provideService(WorkingDirectory, { cwd: options.cwd }),
+        Effect.provide(grammar),
+        Effect.catchIf(CliError.isCliError, pollReason)
+      );
     }
 
     // An invalid --poll value before the syntax error fails first, as layer 1 judged each value where it read it.
-    if (scanned.tokens.length > 0) {
-      yield* parse(scanned.tokens, () => Effect.void);
+    if (scanned.poll !== undefined) {
+      yield* POLL_FLAG.parse({ flags: { poll: [scanned.poll] }, arguments: [] }).pipe(
+        Effect.catchIf(CliError.isCliError, pollReason)
+      );
     }
 
     return yield* new UsageError({ reason: scanned.reason });
-  }).pipe(
-    Effect.tapErrorTag("UsageError", (error) =>
-      Reporter.use((reporter) => reporter.stderr(`${error.reason}\n${USAGE}\n`))
-    ),
-    Effect.withSpan("elmera-intl")
-  );
-}
+  },
+  /* @__PURE__ */ Effect.tapErrorTag("UsageError", (error) =>
+    Reporter.use((reporter) => reporter.stderr(`${error.reason}\n${USAGE}\n`))
+  )
+);
 
-const dispatch = /* @__PURE__ */ Effect.fn("elmera-intl.dispatch")(function* (
-  invocation: Invocation,
-  options: { readonly cwd: string; readonly host: CliHost }
-) {
-  if (invocation.watch && (invocation.command !== "extract" || invocation.json)) {
-    return yield* new UsageError({ reason: "--watch goes with extract only, without --json" });
-  }
-
-  if (Option.isSome(invocation.poll) && !invocation.watch) {
-    return yield* new UsageError({ reason: "--poll goes with extract --watch only" });
-  }
-
-  const configPath = resolve(
-    options.cwd,
-    Option.getOrElse(invocation.config, () => CONFIG_FILE)
-  );
-
-  if (!invocation.watch) {
-    return yield* runOnce(invocation.command, invocation.json, configPath);
-  }
-
-  if (options.host === "in-process") {
-    return yield* new UsageError({
-      reason: "--watch runs only from the elmera-intl executable, which owns the process's signals",
-    });
-  }
-
-  return yield* watchUntilSignal(
-    configPath,
-    Option.getOrElse(invocation.poll, (): WatchMode => ({ _tag: "native" }))
-  );
-});
-
-// The commands are still synchronous. These are the one place each is lifted into the program (a one-shot report;
-// the watch's config read and its watcher), until the commands and watch layers make them effects; an exception is a
-// defect, as before.
-const commandReport = (command: "extract" | "check", configPath: string) =>
-  Effect.sync((): CommandReport => {
-    const loaded = loadConfig(configPath);
-
-    if (loaded._tag === "ConfigInvalid") {
-      return { problems: [loaded.problem], messages: 0, written: [], unreachable: [] };
-    }
-
-    return command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
-  });
+// The watch lifts its still-synchronous config read and watcher into the program, until the watch layer makes them
+// effects; an exception is a defect, as before.
 const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
 // The watcher and the signals that stop it. The listeners go on just before the watcher starts (a one-shot command, or
 // a config still being read, keeps Node's default and ends at once), so they are on before the first sync, and come off
@@ -311,7 +294,8 @@ const startWatcher = (config: ProjectConfig, mode: WatchMode, results: Queue.Que
     const stop = (): Promise<Exit.Exit<void>> => {
       if (closed === undefined) {
         offSignals();
-        closed = (watcher?.close() ?? Promise.resolve()).then(() => Exit.void, Exit.die);
+        // A close that throws fails as one that rejects does, and the results still end.
+        closed = Promise.try(() => watcher?.close()).then(() => Exit.void, Exit.die);
         Queue.endUnsafe(results);
       }
 
@@ -339,37 +323,6 @@ const startWatcher = (config: ProjectConfig, mode: WatchMode, results: Queue.Que
     return { stop };
   });
 
-const runOnce = /* @__PURE__ */ Effect.fn("elmera-intl.once")(function* (
-  command: "extract" | "check",
-  json: boolean,
-  configPath: string
-) {
-  const reporter = yield* Reporter;
-  const report = yield* commandReport(command, configPath);
-
-  if (json) {
-    // stdout carries only the JSON document, so tooling can parse it.
-    yield* reporter.stdout(renderJsonReport(report));
-  } else {
-    yield* Effect.forEach(report.problems, (problem) => reporter.stderr(`${describeProblem(problem)}\n`), {
-      discard: true,
-    });
-    yield* reporter.stdout(
-      command === "extract"
-        ? `${report.messages} messages; wrote ${report.written.length} file(s)\n`
-        : `${report.messages} messages; ${report.problems.length} problem(s)\n`
-    );
-  }
-
-  if (report.problems.length > 0) {
-    return yield* new ProblemsFound({ count: report.problems.length });
-  }
-});
-
-function renderJsonReport(report: CommandReport): string {
-  return `${JSON.stringify({ ok: report.problems.length === 0, ...report }, null, 2)}\n`;
-}
-
 const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function* (
   configPath: string,
   mode: WatchMode
@@ -378,7 +331,7 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   const loaded = yield* watchConfig(configPath);
 
   if (loaded._tag === "ConfigInvalid") {
-    yield* reporter.stderr(`${describeProblem(loaded.problem)}\n`);
+    yield* printProblems([loaded.problem]);
 
     return yield* new ProblemsFound({ count: 1 });
   }
@@ -422,27 +375,9 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
   if (result._tag === "Written") {
     yield* reporter.stdout(`wrote ${result.files.map((file) => relative(root, file)).join(", ")}\n`);
   } else if (result._tag === "Failed") {
-    yield* Effect.forEach(result.problems, (problem) => reporter.stderr(`${describeProblem(problem)}\n`), {
-      discard: true,
-    });
+    yield* printProblems(result.problems);
   }
 });
-
-// A defect printed as `elmera-intl failed: ` and the thrown Error's own stack, then `CliCrashed`, so it exits 2 and never
-// reads as exit 1 ("problems found").
-function reportCrash<E, R>(
-  program: Effect.Effect<void, E, R>
-): Effect.Effect<void, E | CliCrashed, R | Reporter> {
-  return program.pipe(
-    Effect.catchDefect((defect) =>
-      Reporter.use((reporter) =>
-        reporter.stderr(
-          `elmera-intl failed: ${defect instanceof Error ? (defect.stack ?? defect.message) : String(defect)}\n`
-        )
-      ).pipe(Effect.andThen(Effect.fail(new CliCrashed())))
-    )
-  );
-}
 
 /**
  * The executable's program: the arguments from `Stdio`, the command's output on `io`, and a crash printed.
@@ -450,34 +385,15 @@ function reportCrash<E, R>(
  * @param io - The process's working directory and output streams.
  * @returns The program to run as the process's main fiber; `exitCodeOf` reads its exit.
  */
-export function executable(io: CliIo): Effect.Effect<void, CliFailure | CliCrashed> {
+export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
   return Effect.gen(function* () {
     const args = yield* Stdio.Stdio.use((stdio) => stdio.args);
-    yield* cliProgram(args, { cwd: io.cwd, host: "executable" });
+    yield* cliProgram(args, { cwd: io.cwd });
   }).pipe(reportCrash, Effect.provide(Layer.merge(CliPlatform, Reporter.layer(io))));
 }
 
-/**
- * The exit code of a finished run: 0 when clean (a watch a signal stopped included), 1 when it found problems, 2 on a
- * usage error or a crash.
- *
- * @param exit - How the program ended.
- * @returns The process exit code.
- */
-export function exitCodeOf(exit: Exit.Exit<unknown, unknown>): number {
-  if (Exit.isSuccess(exit)) {
-    return 0;
-  }
-
-  const failure = Cause.squash(exit.cause);
-
-  // Anything without its own code is a defect no one printed, or an interruption, which nothing in the CLI sends.
-  return Predicate.hasProperty(failure, Runtime.errorExitCode) ? Runtime.getErrorExitCode(failure) : 2;
-}
-
-// What effect/cli requires of every program (`Command.Environment`) but the CLI does not use: its flags read no file,
-// it prompts for nothing and spawns nothing. Each fails as a defect if reached; the layer that first uses a service
-// provides its Node implementation instead (@effect/platform-node-shared).
+// A service the CLI does not use: its flags read no file, it prompts for nothing and spawns nothing. The layer that
+// first uses one provides its Node implementation instead (@effect/platform-node-shared).
 const unused = (service: string) => Effect.die(`elmera-intl uses no ${service}`);
 
 /**
@@ -504,37 +420,3 @@ export const CliPlatform: Layer.Layer<Command.Environment> = /* @__PURE__ */ Lay
     /* @__PURE__ */ ChildProcessSpawner.make(() => unused("child process"))
   )
 );
-
-function inProcess<E>(io: CliIo, program: Effect.Effect<void, E, Reporter | Command.Environment>) {
-  return Effect.runPromiseExit(program.pipe(Effect.provide(Layer.merge(CliPlatform, Reporter.layer(io)))));
-}
-
-/**
- * Run `elmera-intl extract | check [--json] [--config <path>]` in-process, for a host that reports a crash its own way.
- *
- * @param args - The arguments after the program name.
- * @param io - Working directory and output streams.
- * @returns The exit code: 0 when clean, 1 on any problem, 2 on a usage error; rejects with the thrown Error when a
- *   command throws.
- */
-export async function runCli(args: ReadonlyArray<string>, io: CliIo): Promise<number> {
-  const exit = await inProcess(io, cliProgram(args, { cwd: io.cwd, host: "in-process" }));
-
-  if (Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
-    throw Cause.squash(exit.cause);
-  }
-
-  return exitCodeOf(exit);
-}
-
-/**
- * Run the CLI in-process, turning an unexpected exception (a defect, or I/O the CLI does not classify) into exit code 2
- * with the stack on stderr, so it never reads as exit 1 ("problems found").
- *
- * @param args - The arguments after the program name.
- * @param io - Working directory and output streams.
- * @returns The CLI's exit code, or 2 when it threw.
- */
-export async function runGuarded(args: ReadonlyArray<string>, io: CliIo): Promise<number> {
-  return exitCodeOf(await inProcess(io, reportCrash(cliProgram(args, { cwd: io.cwd, host: "in-process" }))));
-}

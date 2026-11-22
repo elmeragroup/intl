@@ -7,6 +7,7 @@ import type { Plugin } from "vite";
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { catalogModule } from "./catalog-module";
+import { runOnceInProcess } from "./command-run";
 import { compileCatalog } from "./compile";
 import { describeProblem } from "./problem";
 import { catalogLocale, catalogPath, loadFormats } from "./project";
@@ -127,7 +128,7 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
   ];
 }
 
-// The CLI itself, so the build fails with exactly what `elmera-intl check` prints.
+// The CLI's own check, so the build fails with exactly what `elmera-intl check` prints.
 async function check(
   config: string
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly output: string }> {
@@ -135,14 +136,11 @@ async function check(
   const collect = (text: string) => {
     output += text;
   };
-  // Imported on the first check: the CLI's parser (effect/cli) costs a dev server's start about 30 ms, and only a
-  // build checks.
-  const { runCli } = await import("./cli-run");
-  const code = await runCli(["check", "--config", config], {
-    cwd: resolve(config, ".."),
-    stdout: collect,
-    stderr: collect,
-  });
+  const code = await runOnceInProcess(
+    "check",
+    { configPath: config, crash: "reject" },
+    { stdout: collect, stderr: collect }
+  );
 
   return code === 0 ? { ok: true } : { ok: false, output: `${NAME} check failed:\n${output}` };
 }
