@@ -85,20 +85,25 @@ export const View = () => <T>Welcome to feature ${i}</T>;
   }
 }
 
-/** One spawned CLI process: how long it ran and its exit code. */
-type CliRun = { readonly ms: number; readonly status: number | null };
+/** One spawned CLI process: how long it ran, its exit code and what it wrote to stderr. */
+type CliRun = { readonly ms: number; readonly status: number | null; readonly stderr: string };
 
 function cli(root: string, args: ReadonlyArray<string>): CliRun {
   const start = performance.now();
   const run = spawnSync(process.execPath, [BIN, ...args], { cwd: root, env: childEnv, encoding: "utf8" });
 
-  return { ms: performance.now() - start, status: run.status };
+  return { ms: performance.now() - start, status: run.status, stderr: run.stderr };
 }
 
-function expectStatus(label: string, status: number | null, expected: number): void {
-  if (status !== expected) {
+// The child's stderr goes into the failure, so a broken fixture or build names its own cause.
+function expectStatus(
+  label: string,
+  run: { readonly status: number | null; readonly stderr: string },
+  expected: number
+): void {
+  if (run.status !== expected) {
     throw new Error(
-      `${label} exited ${String(status)}, not ${expected}: the fixture is broken, so the timing is not`
+      `${label} exited ${String(run.status)}, not ${expected}: the fixture is broken, so the timing would be invalid\n${run.stderr}`
     );
   }
 }
@@ -115,19 +120,19 @@ function translate(root: string): void {
 }
 
 function settle(root: string): void {
-  expectStatus("extract (first)", cli(root, ["extract"]).status, 0);
+  expectStatus("extract (first)", cli(root, ["extract"]), 0);
   translate(root);
-  expectStatus("extract (settle)", cli(root, ["extract"]).status, 0);
-  expectStatus("check (settle)", cli(root, ["check"]).status, 0);
+  expectStatus("extract (settle)", cli(root, ["extract"]), 0);
+  expectStatus("check (settle)", cli(root, ["check"]), 0);
 }
 
-function cliColdStart(root: string, command: "extract" | "check"): number {
+function cliColdStart(root: string, args: ReadonlyArray<string>, expected: number): number {
   return median(
     Array.from({ length: PROCESS_RUNS }, () => {
-      const { ms, status } = cli(root, [command]);
-      expectStatus(command, status, 0);
+      const run = cli(root, args);
+      expectStatus(`elmera-intl ${args.join(" ") || "(no command)"}`, run, expected);
 
-      return ms;
+      return run.ms;
     })
   );
 }
@@ -202,13 +207,13 @@ async function timeCompiles(
 
     return elapsed;
   };
-  // One at a time: overlapping compiles would time the event loop, not a compile.
-  const timeRest = async (sample: number, samples: ReadonlyArray<number>): Promise<ReadonlyArray<number>> =>
-    sample > COMPILES ? samples : timeRest(sample + 1, [...samples, await time(sample)]);
   try {
     const first = await time(0);
+    // One at a time, as Array.fromAsync awaits each sample before mapping the next: overlapping compiles would time
+    // the event loop, not a compile.
+    const rest = await Array.fromAsync({ length: COMPILES }, (_, index) => time(index + 1));
 
-    return { first, mean: mean(await timeRest(1, [])) };
+    return { first, mean: mean(rest) };
   } finally {
     writeFileSync(path, original);
   }
@@ -283,7 +288,7 @@ function coldImport(url: string): number {
         ],
         { cwd: PACKAGE, env: childEnv, encoding: "utf8" }
       );
-      expectStatus(`import ${url}`, run.status, 0);
+      expectStatus(`import ${url}`, run, 0);
 
       return Number(run.stdout);
     })
@@ -304,20 +309,13 @@ function main(): void {
   try {
     writeFixture(root);
     settle(root);
-    const extract = cliColdStart(root, "extract");
-    const check = cliColdStart(root, "check");
+    const extract = cliColdStart(root, ["extract"], 0);
+    const check = cliColdStart(root, ["check"], 0);
     const loader = compileTimes("loader", root);
     const vite = compileTimes("vite", root);
     const imports = ENTRIES.map(([entry, file]) => [entry, coldImport(distUrl(file))] as const);
     // The bin's whole startup with no command: imports, then the usage error (exit 2).
-    const usage = median(
-      Array.from({ length: PROCESS_RUNS }, () => {
-        const { ms, status } = cli(root, []);
-        expectStatus("elmera-intl (no command)", status, 2);
-
-        return ms;
-      })
-    );
+    const usage = cliColdStart(root, [], 2);
 
     console.table([
       { metric: `CLI cold start: extract, settled (median of ${PROCESS_RUNS}, ms)`, value: millis(extract) },

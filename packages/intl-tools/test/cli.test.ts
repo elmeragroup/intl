@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli-run";
-import { cliFromSource } from "./cli-source";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 const PAGE = `import { T, Val, useT, msg } from "@elmeragroup/intl/react";
@@ -764,7 +763,7 @@ describe("bin", () => {
     );
     // Every message untranslated: one problem each.
     expect((await cli("extract")).code).toBe(0);
-    const run = spawnSync(execPath, cliFromSource("check", "--json"), {
+    const run = spawnSync(execPath, [BIN, "check", "--json"], {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -776,8 +775,8 @@ describe("bin", () => {
   it("exits 2 and names the failure when the CLI throws", () => {
     // A file where the catalog directory goes: extract's mkdir throws, an I/O failure the CLI does not classify.
     write("messages", "");
-    const run = spawnSync(execPath, cliFromSource("extract"), { cwd: root, encoding: "utf8" });
-    expect(run.status).toBe(2);
+    const run = bin("extract");
+    expect(run.code).toBe(2);
     expect(run.stderr).toMatch(/^elmera-intl failed: Error:/u);
   });
 
@@ -787,7 +786,7 @@ describe("bin", () => {
       `import { msg } from "@elmeragroup/intl/react";\n${Array.from({ length: 1500 }, (_, i) => `msg("Message number ${i} with some padding text");`).join("\n")}\n`
     );
     expect((await cli("extract")).code).toBe(0);
-    const child = spawn(execPath, cliFromSource("check", "--json"), { cwd: root });
+    const child = spawn(execPath, [BIN, "check", "--json"], { cwd: root });
     let stderr = "";
     child.stderr.setEncoding("utf8").on("data", (text: string) => {
       stderr += text;

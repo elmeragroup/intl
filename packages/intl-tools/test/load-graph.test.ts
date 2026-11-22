@@ -38,7 +38,7 @@ try {
 stop();
 const rules = config.turbopack.rules;
 const rule = rules["*.po"].find((candidate) => !candidate.loaders[0].options.source);
-process.stdout.write(JSON.stringify({ loaded, result: { keys: Object.keys(rules), invalid }, loader: rule.loaders[0].loader }));
+process.stdout.write(JSON.stringify({ loaded, result: { keys: Object.keys(rules), invalid, loader: rule.loaders[0].loader } }));
 `;
 
 // A loader worker's view: the loader withIntl's rule names, loaded fresh; one compile of the nb catalog, one under a
@@ -76,8 +76,12 @@ if (compiled.code !== undefined) {
 process.stdout.write(JSON.stringify({ loaded, result: { hello, invalid: (invalid.error ?? "compiled").split(": not JSON: ")[0] } }));
 `;
 
-/** What a probe loaded, as what each module holds, and what it observed. */
-type ProbeRun = {
+/**
+ * What a probe loaded, as what each module holds, and what it observed.
+ *
+ * @template T - The shape of what the probe observed.
+ */
+type ProbeRun<T> = {
   /**
    * Each loaded module as what it holds: a built file of this package by the sources its declared source map names
    * (its own modules and any third-party code bundled into it), every other module by its URL.
@@ -86,9 +90,7 @@ type ProbeRun = {
   /** How many of this package's built files were inspected through their source maps. */
   readonly inspected: number;
   /** What the probe observed (see the probes). */
-  readonly result: unknown;
-  /** NEXT_PROBE only: the loader path withIntl's rule names. */
-  readonly loader: string | undefined;
+  readonly result: T;
 };
 
 let root = "";
@@ -146,7 +148,14 @@ function builtSources(url: string): ReadonlyArray<string> {
   const mapUrl = new URL(declared, url);
   let text: string;
   if (mapUrl.protocol === "data:") {
-    const [header = "", payload = ""] = mapUrl.pathname.split(",", 2);
+    // The whole body after the first comma: the payload may hold commas, `?` and `#`, which URL parts would split off.
+    const body = mapUrl.href.slice("data:".length);
+    const comma = body.indexOf(",");
+    if (comma === -1) {
+      throw new Error(`${file} declares an inline source map with no comma before its payload`);
+    }
+    const header = body.slice(0, comma);
+    const payload = body.slice(comma + 1);
     text = header.endsWith(";base64")
       ? Buffer.from(payload, "base64").toString("utf8")
       : decodeURIComponent(payload);
@@ -174,16 +183,16 @@ function isBuiltFile(url: string): boolean {
   return !path.startsWith("..") && !path.split(sep).includes("node_modules");
 }
 
-function probe(script: string, args: ReadonlyArray<string>): ProbeRun {
+function probe<T>(script: string, args: ReadonlyArray<string>): ProbeRun<T> {
   const output = execFileSync(process.execPath, ["--input-type=module", "--eval", script, ...args], {
     cwd: PACKAGE,
     encoding: "utf8",
   });
-  // SAFETY: both probes print exactly this shape.
-  const { loaded, result, loader } = JSON.parse(output) as {
+  // SAFETY: both probes print this shape, and each caller names the result its probe prints; the test's assertions on
+  // the result fail on any other.
+  const { loaded, result } = JSON.parse(output) as {
     readonly loaded: ReadonlyArray<string>;
-    readonly result: unknown;
-    readonly loader?: string;
+    readonly result: T;
   };
   const built = loaded.filter((url) => isBuiltFile(url));
 
@@ -196,7 +205,6 @@ function probe(script: string, args: ReadonlyArray<string>): ProbeRun {
     ],
     inspected: built.length,
     result,
-    loader,
   };
 }
 
@@ -204,12 +212,19 @@ function probe(script: string, args: ReadonlyArray<string>): ProbeRun {
 // rule names, in a fresh loader worker. Oracle: Next loads next.config in several processes, so withIntl loads no
 // extractor, oxc native binding or Effect, on a valid config or a malformed one; the loader runs in every Turbopack
 // and webpack worker, so it loads no CLI, commands or watcher, compiling or reporting. The fixture's "Hello" is "Hei"
-// in nb, and a malformed config is a ConfigInvalid problem.
+// in nb, and a malformed config is a ConfigInvalid problem. The rule names the built loader beside the built `./next`
+// entry, dist/po-loader.js, which the export map resolves to.
 it("keeps the extractor, oxc and Effect out of withIntl, and the CLI out of the loader its rule names", () => {
-  const next = probe(NEXT_PROBE, [root]);
+  const next = probe<{
+    readonly keys: ReadonlyArray<string>;
+    readonly invalid: string;
+    readonly loader: string;
+  }>(NEXT_PROBE, [root]);
+  const builtLoader = join(PACKAGE, "dist/po-loader.js");
 
   expect(next.result).toEqual({
     keys: ["*.po"],
+    loader: builtLoader,
     invalid:
       'withIntl: not JSON: …; write elmera-intl.json as { "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }',
   });
@@ -222,7 +237,7 @@ it("keeps the extractor, oxc and Effect out of withIntl, and the CLI out of the 
     )
   ).toEqual([]);
 
-  const loader = probe(LOADER_PROBE, [next.loader ?? "", root]);
+  const loader = probe(LOADER_PROBE, [next.result.loader, root]);
 
   expect(loader.result).toEqual({ hello: "Hei", invalid: `${join(root, "bad.json")}: ConfigInvalid` });
   expect(loader.inspected).toBeGreaterThan(0);
