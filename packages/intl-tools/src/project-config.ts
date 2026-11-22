@@ -66,18 +66,19 @@ export function loadConfig(path: string): ConfigLoaded {
     return configInvalid(path, `not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  return parseConfig(text, resolve(path));
+  return parseConfig(text, path, dirname(resolve(path)));
 }
 
 /**
  * Parse the project config from the file's text.
  *
  * @param text - The content of `elmera-intl.json`.
- * @param path - Its absolute path: the problem's file, and its directory is the config's root. Absolute, so the result
- *   is a function of the arguments alone, never of the working directory.
+ * @param path - Its path as the user supplied it: the problems name it verbatim.
+ * @param root - The absolute directory holding it, which the config's paths are relative to. The read boundary
+ *   resolves it, so the result is a function of the arguments alone, never of the working directory.
  * @returns The config, or the problem with it.
  */
-export function parseConfig(text: string, path: string): ConfigLoaded {
+export function parseConfig(text: string, path: string, root: string): ConfigLoaded {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -127,8 +128,6 @@ export function parseConfig(text: string, path: string): ConfigLoaded {
     return configInvalid(path, '"formats" must be the path of a .ts or .js module exporting `formats`');
   }
 
-  const root = dirname(path);
-
   return {
     _tag: "Config",
     config: {
@@ -138,6 +137,9 @@ export function parseConfig(text: string, path: string): ConfigLoaded {
       catalogs,
       locales,
       // resolve, not join: an absolute formats path stays as written; the root is absolute, so no working directory.
+      // The exception is win32's drive-relative form (`D:formats.ts`), which resolves against that drive's working
+      // directory, as it always has: node:path has no cwd-free reading of it, and rejecting it would refuse configs
+      // that load today.
       formats: formats === undefined ? undefined : resolve(root, formats),
     },
   };

@@ -16,6 +16,9 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import type { Catalog } from "@elmeragroup/intl/core";
+import { createIntl } from "@elmeragroup/intl/core";
+
 import type * as PoLoader from "../src/po-loader";
 import type * as Vite from "../src/vite";
 
@@ -148,22 +151,36 @@ function compileTimes(host: "loader" | "vite", root: string): CompileTimes {
   return parsed as CompileTimes;
 }
 
-// A sample counts only when the compile produced the catalog's module: a hook that returned nothing (skipped the
-// compile) would otherwise record a near-zero time.
-function requireModuleCode(host: string, code: string | undefined): void {
-  if (code === undefined || !code.startsWith("export default ")) {
-    throw new Error(
-      `${host} returned no catalog module (${String(code)}): the timing would not be a compile`
-    );
+// A sample counts only when the compile produced the catalog: the module it returned is imported, outside the timed
+// interval, and must translate a fixture message as the fixture's PO does. A hook that skipped the compile, or returned
+// a stub module, would otherwise record a near-zero time.
+const PROBE = "Feature 0 overview";
+const PROBE_NB = "nb Feature 0 overview";
+
+async function verifyCatalog(host: string, code: string | undefined): Promise<void> {
+  if (code === undefined) {
+    throw new Error(`${host} returned no module: the timing would not be a compile`);
+  }
+
+  // SAFETY: a compiled catalog module's default export is the catalog; a stub fails the translation check below.
+  const { default: catalog } = (await import(`data:text/javascript,${encodeURIComponent(code)}`)) as {
+    readonly default: Catalog;
+  };
+  const translated = createIntl({ locale: "nb", catalog, timeZone: "UTC" }).t(PROBE);
+
+  if (translated !== PROBE_NB) {
+    throw new Error(`${host} returned a module translating "${PROBE}" as "${translated}", not "${PROBE_NB}"`);
   }
 }
 
-async function timeCompiles(compile: () => Promise<void>): Promise<CompileTimes> {
+async function timeCompiles(host: string, compile: () => Promise<string | undefined>): Promise<CompileTimes> {
   const time = async (): Promise<number> => {
     const start = performance.now();
-    await compile();
+    const code = await compile();
+    const elapsed = performance.now() - start;
+    await verifyCatalog(host, code);
 
-    return performance.now() - start;
+    return elapsed;
   };
   // One at a time: overlapping compiles would time the event loop, not a compile.
   const timeRest = async (left: number, samples: ReadonlyArray<number>): Promise<ReadonlyArray<number>> =>
@@ -178,7 +195,7 @@ async function loaderCompile(root: string): Promise<CompileTimes> {
   // SAFETY: the module at that path is the build of src/po-loader.ts.
   const { default: poLoader } = (await import(distUrl("po-loader.js"))) as typeof PoLoader;
 
-  return timeCompiles(async () => {
+  return timeCompiles("the po-loader", async () => {
     const done = Promise.withResolvers<string | undefined>();
     poLoader.call(
       {
@@ -196,7 +213,7 @@ async function loaderCompile(root: string): Promise<CompileTimes> {
       po
     );
 
-    requireModuleCode("the po-loader", await done.promise);
+    return done.promise;
   });
 }
 
@@ -221,11 +238,11 @@ async function viteCompile(root: string): Promise<CompileTimes> {
     },
   };
 
-  return timeCompiles(async () => {
+  return timeCompiles("the vite load hook", async () => {
     // SAFETY: Vite's full plugin context is not constructible here; the hook reads only the environment's root,
     // addWatchFile and error, which this context has, and a read of anything else fails the bench.
     const loaded = await load.call(context as never, join(root, "messages/nb.po"));
-    requireModuleCode("the vite load hook", loaded instanceof Object ? loaded.code : (loaded ?? undefined));
+    return loaded instanceof Object ? loaded.code : (loaded ?? undefined);
   });
 }
 

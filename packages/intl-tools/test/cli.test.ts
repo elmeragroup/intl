@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli-run";
@@ -62,6 +63,16 @@ function read(path: string): string {
 }
 
 type CliRun = { readonly code: number; readonly stdout: string; readonly stderr: string };
+
+// The built `elmera-intl` executable, spawned as a user's shell runs it: its bytes on stdout and stderr and its exit
+// code are the CLI's contract, whatever runs behind them.
+const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
+
+function bin(...args: Array<string>): CliRun {
+  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8" });
+
+  return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
+}
 
 async function cli(...args: Array<string>): Promise<CliRun> {
   let stdout = "";
@@ -651,7 +662,7 @@ describe("check", () => {
       "locale": "nb",
       "key": ${key}
     }`;
-    const { code, stdout, stderr } = await cli("check", "--json");
+    const { code, stdout, stderr } = bin("check", "--json");
     expect([code, stderr]).toEqual([1, ""]);
     expect(stdout).toBe(`{
   "ok": false,
@@ -680,8 +691,8 @@ describe("usage", () => {
     ["--config followed by a flag", ["check", "--config", "--json"], "--config needs a path"],
     ["a stray argument", ["check", "extra"], "unexpected argument: extra"],
     ["a repeated flag", ["check", "--json", "--json"], "unexpected argument: --json"],
-  ])("exits 2 with usage on %s", async (_label, args, reason) => {
-    const { code, stdout, stderr } = await cli(...args);
+  ])("exits 2 with usage on %s", (_label, args, reason) => {
+    const { code, stdout, stderr } = bin(...args);
     expect([code, stdout]).toEqual([2, ""]);
     expect(stderr).toBe(`${reason}\n${USAGE}`);
   });
