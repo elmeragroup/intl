@@ -80,6 +80,7 @@
     "type-check": "tsrs --noEmit"
   },
   "dependencies": {
+    "@effect/platform-node-shared": "catalog:",
     "@elmeragroup/intl": "workspace:*",
     "@jridgewell/trace-mapping": "catalog:",
     "effect": "catalog:",

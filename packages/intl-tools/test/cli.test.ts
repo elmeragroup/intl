@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +11,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
@@ -694,6 +695,35 @@ describe("usage", () => {
     // Flag values only as separate arguments, and no `--` terminator: both are arguments the parser rejects.
     ["a flag with an inline value", ["check", "--json=yes"], "unexpected argument: --json=yes"],
     ["an argument terminator", ["check", "--"], "unexpected argument: --"],
+    // effect/cli's lexer would read each of these differently: a flag given its value, `--` as the end of the flags
+    // (leaving `--json` an argument), and `-hj` as two short flags. Bytes from the layer 1 parser.
+    [
+      "a value flag with an inline value",
+      ["check", "--config=x.json"],
+      "unexpected argument: --config=x.json",
+    ],
+    ["a boolean flag with an inline false", ["check", "--json=false"], "unexpected argument: --json=false"],
+    ["an argument terminator before a flag", ["check", "--", "--json"], "unexpected argument: --"],
+    ["a cluster of short flags", ["check", "-hj"], "unexpected argument: -hj"],
+    ["an inline value in the command's place", ["--json=1", "check"], "unknown command: --json=1"],
+    // The first failing argument, reading left to right, where effect/cli reports flags before arguments.
+    ["a stray argument before an unknown flag", ["check", "extra", "--jsn"], "unexpected argument: extra"],
+    [
+      "a repeated --config with no value",
+      ["check", "--config", "a", "--config"],
+      "unexpected argument: --config",
+    ],
+    [
+      "an out-of-range --poll before its repeat",
+      ["extract", "--watch", "--poll", "5", "--poll", "9"],
+      "--poll 5: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+    // effect/cli's lexer reads `-5` as a value, which a numeric flag would parse; the contract takes digits only.
+    [
+      "--poll with a negative interval",
+      ["extract", "--watch", "--poll", "-5"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
     // --watch runs instead of exiting; with check or --json it is refused before anything starts.
     ["--watch with check", ["check", "--watch"], "--watch goes with extract only, without --json"],
     [
@@ -733,6 +763,14 @@ describe("usage", () => {
     const { code, stdout, stderr } = bin(...args);
     expect([code, stdout]).toEqual([2, ""]);
     expect(stderr).toBe(`${reason}\n${USAGE}`);
+  });
+
+  // `--config` takes the next argument as its path unless it starts with `--`, so `-x` is a path (one that does not
+  // exist), where effect/cli's lexer would read a short flag and report the path missing.
+  it("takes an argument that looks like a short flag as the --config path", () => {
+    const { code, stdout, stderr } = bin("check", "--config", "-x");
+    expect([code, stdout]).toEqual([1, "0 messages; 1 problem(s)\n"]);
+    expect(stderr).toMatch(/^\S+\/-x: ConfigInvalid: \S+\/-x not found\n/u);
   });
 
   it("names the fix for a missing config", async () => {
@@ -778,6 +816,34 @@ describe("bin", () => {
     const run = bin("extract");
     expect(run.code).toBe(2);
     expect(run.stderr).toMatch(/^elmera-intl failed: Error:/u);
+  });
+
+  // Only a running watch takes SIGINT and SIGTERM; a one-shot command keeps Node's default, so a signal ends it at once,
+  // with no report. Oracle: the layer 1 executable, which installed no handler outside a watch: killed by the signal,
+  // no exit code, nothing written. The config is a FIFO, so the check is mid-run (blocked reading it) when the signal
+  // lands: the writer's open resolves once the CLI opens it to read.
+  it.each(["SIGINT", "SIGTERM"] as const)("ends a check at once on %s", async (signal) => {
+    execFileSync("mkfifo", [join(root, "fifo.json")]);
+    const child = spawn(execPath, [BIN, "check", "--config", "fifo.json"], { cwd: root });
+    let output = "";
+    child.stdout.setEncoding("utf8").on("data", (text: string) => {
+      output += text;
+    });
+    child.stderr.setEncoding("utf8").on("data", (text: string) => {
+      output += text;
+    });
+    const closed = new Promise<readonly [number | null, NodeJS.Signals | null]>((done) => {
+      child.on("close", (code, killedBy) => {
+        done([code, killedBy]);
+      });
+    });
+    const config = await open(join(root, "fifo.json"), "w");
+    child.kill(signal);
+    // A CLI that outlived the signal reads this config and runs the check to its end.
+    await config.write(JSON.stringify(CONFIG)).catch(() => undefined);
+    await config.close();
+
+    expect([...(await closed), output]).toEqual([null, signal, ""]);
   });
 
   it("exits quietly when the reader closes the pipe early", async () => {

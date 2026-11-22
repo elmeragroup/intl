@@ -7,7 +7,6 @@ import type { Plugin } from "vite";
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { catalogModule } from "./catalog-module";
-import { runCli } from "./cli-run";
 import { compileCatalog } from "./compile";
 import { describeProblem } from "./problem";
 import { catalogLocale, catalogPath, loadFormats } from "./project";
@@ -136,6 +135,9 @@ async function check(
   const collect = (text: string) => {
     output += text;
   };
+  // Imported on the first check: the CLI's parser (effect/cli) costs a dev server's start about 30 ms, and only a
+  // build checks.
+  const { runCli } = await import("./cli-run");
   const code = await runCli(["check", "--config", config], {
     cwd: resolve(config, ".."),
     stdout: collect,

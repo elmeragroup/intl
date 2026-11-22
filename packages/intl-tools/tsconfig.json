@@ -22,8 +22,8 @@
     "plugins": [
       {
         "name": "@effect/language-service",
-        // Globs resolve against this file. The PO codec's round-trip property runs on effect/Arbitrary, which effect
-        // 4.1 marks unstable; only the tests use it.
+        // Globs resolve against this file, and an override's list replaces the preset's. The PO codec's round-trip
+        // property runs on effect/Arbitrary, which effect 4.1 marks unstable; only the tests use it.
         "overrides": [
           { "include": ["test/**/*"], "options": { "allowedUnstableApis": ["effect/Arbitrary"] } }
         ]

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -101,6 +102,8 @@ function translations(): ReadonlyMap<string, string> {
 }
 
 type Watcher = {
+  /** stdout from the start until the watch was live: the first sync's report and the ready line. */
+  readonly startup: () => string;
   readonly output: () => { readonly stdout: string; readonly stderr: string };
   readonly kill: (signal: NodeJS.Signals) => Promise<number | null>;
 };
@@ -127,6 +130,7 @@ async function startWatch(): Promise<Watcher> {
   });
   let live = { stdout: 0, stderr: 0 };
   watcher = {
+    startup: () => stdout.slice(0, live.stdout),
     output: () => ({ stdout: stdout.slice(live.stdout), stderr: stderr.slice(live.stderr) }),
     kill: (signal) => {
       child.kill(signal);
@@ -418,6 +422,18 @@ msgstr ""
     rmSync(join(root, "messages/nb.po"), { recursive: true });
     write("src/second.tsx", component("Second"));
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Second"`);
+  });
+
+  // Oracle: the report lines, written out by hand: the first sync's catalogs, then the ready line naming the project
+  // root, then each later sync's catalogs, relative to the root.
+  it("prints what each sync writes, and the ready line after the first", async () => {
+    const running = await startWatch();
+    write("src/new.tsx", component("New"));
+    await expect.poll(() => running.output().stdout, HANG_GUARD).toBe("wrote messages/nb.po\n");
+
+    expect(running.startup()).toBe(
+      `wrote messages/nb.po\nwatching ${realpathSync(root)} for message changes; Ctrl-C stops\n`
+    );
   });
 
   it("exits 0 on SIGINT", async () => {

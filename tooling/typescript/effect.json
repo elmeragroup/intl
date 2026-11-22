@@ -17,6 +17,19 @@
         // `import * as Effect from "effect/Effect"`: one module per namespace, as effect's own docs and t3code write
         // it, and the form preferNamespaceImport holds.
         "namespaceImportPackages": ["effect"],
+        // The unstable APIs the workspace uses (effect marks them unstable: a minor release may break them, and the
+        // exact catalog pin means only a deliberate bump brings one). Each entry covers its submodules. The tools'
+        // CLI: effect/cli parses it, effect/Stdio gives the executable its arguments, @effect/platform-node-shared
+        // provides Node's Stdio and Path, and effect/FileSystem, effect/Terminal and effect/process build the stand-ins
+        // for the services effect/cli requires but the CLI does not use.
+        "allowedUnstableApis": [
+          "effect/cli",
+          "effect/Stdio",
+          "@effect/platform-node-shared",
+          "effect/FileSystem",
+          "effect/Terminal",
+          "effect/process"
+        ],
         // effectFnOpportunity also reports an exported arrow that returns Effect.gen, with the span name it infers.
         "effectFn": ["span", "inferred-span", "suggested-span"],
         "diagnosticSeverity": {
@@ -45,8 +58,8 @@
           "schemaLiteralNonFinite": "error",
           "schemaOpaqueInstanceMember": "error",
           "unsafeEffectTypeAssertion": "error",
-          // A published package depends on no unstable effect API; a tsconfig whose files must (the e2e consumer's
-          // effect/http) allows that module by name in its own `allowedUnstableApis`.
+          // Unstable effect APIs are welcome, each named in `allowedUnstableApis` above: a new one is a deliberate
+          // choice, made where a change first uses it.
           "unstableApiUsage": "error",
           // A tagged error is told apart by its `_tag`, so a nominal brand on every Schema class adds nothing.
           "schemaClassMissingBrand": "off",
