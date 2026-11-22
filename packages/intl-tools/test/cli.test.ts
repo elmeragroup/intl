@@ -1,3 +1,7 @@
+import * as CliConfig from "effect/cli/CliConfig";
+import * as CliOutput from "effect/cli/CliOutput";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -5,6 +9,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -18,7 +23,8 @@ import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../src/cli-run";
+import { CliPlatform, cliProgram, exitCodeOf, runCli } from "../src/cli-run";
+import { Reporter } from "../src/reporter";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 const PAGE = `import { T, Val, useT, msg } from "@elmeragroup/intl/react";
@@ -719,6 +725,17 @@ describe("usage", () => {
       "--poll 5: the interval must be between 10 and 2147483647 milliseconds",
     ],
     // effect/cli's lexer reads `-5` as a value, which a numeric flag would parse; the contract takes digits only.
+    // The booleans are presence-only: no negated form, and a value never attaches to one. Bytes from layer 1.
+    ["a negated --json", ["extract", "--no-json"], "unexpected argument: --no-json"],
+    ["a value after --json", ["extract", "--json", "false"], "unexpected argument: false"],
+    ["a value after --watch", ["extract", "--watch", "false"], "unexpected argument: false"],
+    ["a negated --watch", ["extract", "--no-watch"], "unexpected argument: --no-watch"],
+    // A --poll value is judged as an interval, whatever it reads like.
+    [
+      "--poll with words for an interval",
+      ["extract", "--watch", "--poll", "2 occurrences"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
     [
       "--poll with a negative interval",
       ["extract", "--watch", "--poll", "-5"],
@@ -769,8 +786,44 @@ describe("usage", () => {
   // exist), where effect/cli's lexer would read a short flag and report the path missing.
   it("takes an argument that looks like a short flag as the --config path", () => {
     const { code, stdout, stderr } = bin("check", "--config", "-x");
+    const path = join(realpathSync(root), "-x");
     expect([code, stdout]).toEqual([1, "0 messages; 1 problem(s)\n"]);
-    expect(stderr).toMatch(/^\S+\/-x: ConfigInvalid: \S+\/-x not found\n/u);
+    expect(stderr.split("\n")[0]).toBe(`${path}: ConfigInvalid: ${path} not found`);
+  });
+
+  // Unit under test: `cliProgram` under a host's own effect/cli settings, as a host runtime that provides Node's
+  // services may (layer 4). Oracle: the usage row for `--poll abc` above. The host's built-in flags and presenter must
+  // change neither the grammar nor where the output goes: its presenter is never called.
+  it("keeps its usage errors to the Reporter under a host's effect/cli settings", async () => {
+    let stdout = "";
+    let stderr = "";
+    const presented: Array<string> = [];
+    const host = Layer.mergeAll(
+      CliPlatform,
+      CliConfig.layer(),
+      CliOutput.layerPresenter({
+        present: (event) =>
+          Effect.sync(() => {
+            presented.push(event._tag);
+          }),
+      }),
+      Reporter.layer({
+        stdout: (text) => {
+          stdout += text;
+        },
+        stderr: (text) => {
+          stderr += text;
+        },
+      })
+    );
+    const exit = await Effect.runPromiseExit(
+      cliProgram(["extract", "--watch", "--poll", "abc"], { cwd: root, host: "in-process" }).pipe(
+        Effect.provide(host)
+      )
+    );
+
+    expect([exitCodeOf(exit), presented, stdout]).toEqual([2, [], ""]);
+    expect(stderr).toBe(`--poll needs an interval in milliseconds, such as --poll 200\n${USAGE}`);
   });
 
   it("names the fix for a missing config", async () => {
@@ -818,13 +871,24 @@ describe("bin", () => {
     expect(run.stderr).toMatch(/^elmera-intl failed: Error:/u);
   });
 
-  // Only a running watch takes SIGINT and SIGTERM; a one-shot command keeps Node's default, so a signal ends it at once,
-  // with no report. Oracle: the layer 1 executable, which installed no handler outside a watch: killed by the signal,
-  // no exit code, nothing written. The config is a FIFO, so the check is mid-run (blocked reading it) when the signal
-  // lands: the writer's open resolves once the CLI opens it to read.
-  it.each(["SIGINT", "SIGTERM"] as const)("ends a check at once on %s", async (signal) => {
+  // Only a running watch takes SIGINT and SIGTERM: a one-shot command, and a watch still reading its config, keep Node's
+  // default, so a signal ends the process at once, with no output. Oracle: the layer 1 executable, which installed its
+  // handlers only once a watch's config had loaded: killed by the signal, no exit code, nothing written. The config is
+  // a FIFO the test opens and never writes, so the CLI is blocked reading it when the signal lands (the writer's open
+  // resolves once the CLI opens it to read), and stays blocked unless the signal ends it.
+  it.each([
+    ["a check", "SIGINT", ["check"]],
+    ["a check", "SIGTERM", ["check"]],
+    ["a watch reading its config", "SIGINT", ["extract", "--watch"]],
+    ["a watch reading its config", "SIGTERM", ["extract", "--watch"]],
+  ] as const)("ends %s at once on %s", async (_label, signal, args) => {
     execFileSync("mkfifo", [join(root, "fifo.json")]);
-    const child = spawn(execPath, [BIN, "check", "--config", "fifo.json"], { cwd: root });
+    // A hang guard: a CLI that outlived the signal is still blocked on the config, and ends by SIGKILL instead.
+    const child = spawn(execPath, [BIN, ...args, "--config", "fifo.json"], {
+      cwd: root,
+      timeout: 10_000,
+      killSignal: "SIGKILL",
+    });
     let output = "";
     child.stdout.setEncoding("utf8").on("data", (text: string) => {
       output += text;
@@ -839,11 +903,10 @@ describe("bin", () => {
     });
     const config = await open(join(root, "fifo.json"), "w");
     child.kill(signal);
-    // A CLI that outlived the signal reads this config and runs the check to its end.
-    await config.write(JSON.stringify(CONFIG)).catch(() => undefined);
+    const ended = await closed;
     await config.close();
 
-    expect([...(await closed), output]).toEqual([null, signal, ""]);
+    expect([...ended, output]).toEqual([null, signal, ""]);
   });
 
   it("exits quietly when the reader closes the pipe early", async () => {

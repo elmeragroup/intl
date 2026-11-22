@@ -16,16 +16,14 @@ stdout.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 // effect's runMain for this process, as @effect/platform-node-shared's NodeRuntime.runMain but for its exit and signals.
-// That one calls process.exit(), which cuts a report still flushing into a pipe at 64 KiB; this one only sets
-// process.exitCode, and only on failure, so the loop drains and nothing overwrites a code already set. That one also
-// takes SIGINT and SIGTERM for the whole run; here only a running watch takes them (cli-run.ts), and a signal ends any
-// other command at once, as Node does by default.
+// That one calls process.exit(), which cuts a report still flushing into a pipe at 64 KiB; this one sets
+// process.exitCode to the program's own code on every exit, 0 included, as the CLI always has, and lets the loop drain.
+// That one also takes SIGINT and SIGTERM for the whole run; here only a running watch takes them (cli-run.ts), and a
+// signal ends any other command at once, as Node does by default.
 const runMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   fiber.addObserver((exit) => {
     teardown(exit, (code) => {
-      if (code !== 0) {
-        process.exitCode = code;
-      }
+      process.exitCode = code;
     });
   });
 });

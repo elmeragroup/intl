@@ -1,3 +1,6 @@
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import {
@@ -14,16 +17,19 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../src/cli-run";
+import { CliPlatform, cliProgram, runCli } from "../src/cli-run";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import { parsePo } from "../src/po";
 import { loadConfig } from "../src/project-config";
+import { Reporter } from "../src/reporter";
 import type { ProjectWatcher, WatchMode } from "../src/watch";
 import { watchProject } from "../src/watch";
-import { cliFromSource } from "./cli-source";
 
+// The built executable, as the CLI ships: the watch's output and signal handling are the bin's.
+const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 const IMPORT = `import { T } from "@elmeragroup/intl/react";\n`;
 const HEADER = `msgid ""
@@ -112,7 +118,7 @@ type Watcher = {
 // fs.watch returns, but a recursive watch misses an edit made before its stream starts (seen under load: an edit right
 // after it never synced). The probe is a syntax error, so its syncs write nothing; `output()` starts after them.
 async function startWatch(): Promise<Watcher> {
-  const child: ChildProcess = spawn(execPath, cliFromSource("extract", "--watch", "--poll", POLL_MS), {
+  const child: ChildProcess = spawn(execPath, [BIN, "extract", "--watch", "--poll", POLL_MS], {
     cwd: root,
   });
   let stdout = "";
@@ -434,6 +440,47 @@ msgstr ""
     expect(running.startup()).toBe(
       `wrote messages/nb.po\nwatching ${realpathSync(root)} for message changes; Ctrl-C stops\n`
     );
+  });
+
+  // Unit under test: the watch reporting through a Reporter whose writes complete later, as a host's may (layer 4's
+  // Vite logger). Oracle: the executable's lines, written out by hand: the first sync's catalogs, the ready line, then
+  // each later sync's catalogs.
+  it("reports through an asynchronous Reporter", async () => {
+    let stdout = "";
+    let stderr = "";
+    // Each write completes on a later microtask: a write the fiber does not await is lost or fails.
+    const later = (append: (text: string) => void) => (text: string) =>
+      Effect.promise(() => Promise.resolve()).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            append(text);
+          })
+        )
+      );
+    const reporter = Layer.succeed(Reporter, {
+      stdout: later((text) => {
+        stdout += text;
+      }),
+      stderr: later((text) => {
+        stderr += text;
+      }),
+    });
+    const fiber = Effect.runFork(
+      cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
+        Effect.provide(Layer.merge(CliPlatform, reporter))
+      )
+    );
+    const ready = `wrote messages/nb.po\nwatching ${root} for message changes; Ctrl-C stops\n`;
+    try {
+      await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
+      expect(stdout).toBe(ready);
+      write("src/new.tsx", component("New"));
+      await expect.poll(() => stdout, HANG_GUARD).toBe(`${ready}wrote messages/nb.po\n`);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+
+    expect(stderr).toBe("");
   });
 
   it("exits 0 on SIGINT", async () => {

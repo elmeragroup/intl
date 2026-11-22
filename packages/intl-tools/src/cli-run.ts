@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Queue from "effect/Queue";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
@@ -28,6 +29,7 @@ import process from "node:process";
 import type { CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
 import { describeProblem } from "./problem";
+import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
@@ -48,7 +50,6 @@ export type CliHost = "executable" | "in-process";
 
 const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to ${CONFIG_FILE}>]
        elmera-intl extract --watch [--poll <ms>] [--config <path to ${CONFIG_FILE}>]`;
-const POLL_NEEDS_INTERVAL = "--poll needs an interval in milliseconds, such as --poll 200";
 
 /** Arguments the CLI refuses, with the reason it prints above the usage text. Exit code 2. */
 export class UsageError
@@ -78,16 +79,25 @@ export class CliCrashed extends /* @__PURE__ */ Schema.TaggedError<CliCrashed>()
 export type CliFailure = UsageError | ProblemsFound;
 
 // The flags every command parses, so that a flag used with the wrong command gets its own reason (`check --watch`),
-// not "unexpected argument". `--poll` parses to its watch mode; Flag.Int would take `-5` and `1e3` as numbers, where
-// the contract takes only digits.
+// not "unexpected argument". The booleans are presence-only, as the contract has them: no `--no-json`, and a value
+// never attaches (`--json false` leaves `false` an argument). `--poll` parses to its watch mode; Flag.Int would take
+// `-5` and `1e3` as numbers, where the contract takes only digits.
 const flags = () => ({
-  json: Flag.Boolean("json").pipe(Flag.withDefault(false)),
-  watch: Flag.Boolean("watch").pipe(Flag.withDefault(false)),
+  json: Flag.Boolean("json").pipe(
+    Flag.withoutNegation,
+    Flag.withOptionalValue("true"),
+    Flag.withDefault(false)
+  ),
+  watch: Flag.Boolean("watch").pipe(
+    Flag.withoutNegation,
+    Flag.withOptionalValue("true"),
+    Flag.withDefault(false)
+  ),
   config: Flag.String("config").pipe(Flag.optional),
   poll: Flag.String("poll").pipe(
     Flag.filter(
       (value) => /^\d+$/u.test(value),
-      () => POLL_NEEDS_INTERVAL
+      () => "--poll needs an interval in milliseconds, such as --poll 200"
     ),
     Flag.filterMap(
       (value) => Option.liftPredicate(pollEvery(Number(value)), isPolling),
@@ -111,140 +121,93 @@ type Invocation = {
   readonly poll: Option.Option<WatchMode>;
 };
 
-// The command tree, built around what runs once the arguments parse: finding the first failing argument parses with
-// a handler that does nothing.
-function commandTree<E, R>(run: (invocation: Invocation) => Effect.Effect<void, E, R>) {
-  return Command.make("elmera-intl").pipe(
+// The grammar's own settings, provided inside the parse so that no service a host provides can change them: no
+// --help, --version, --wizard, --completions or --log-level (each would take a flag's place), and a silent presenter
+// (the program prints its own usage errors, and effect/cli's help would go to the global console).
+const grammar = /* @__PURE__ */ Layer.merge(
+  /* @__PURE__ */ CliConfig.layer({ builtIns: [] }),
+  /* @__PURE__ */ CliOutput.layerPresenter({ present: () => Effect.void })
+);
+
+/**
+ * Parse scanned tokens with effect/cli and run what they name. A scanned argument list fails to parse only on a
+ * `--poll` value, whose filters' messages are the contract's reasons; any other parse error means the scan and
+ * effect/cli disagree, a defect.
+ */
+function parse<E, R>(
+  tokens: ReadonlyArray<string>,
+  run: (invocation: Invocation) => Effect.Effect<void, E, R>
+): Effect.Effect<void, E | UsageError, R | Command.Environment> {
+  const tree = Command.make("elmera-intl").pipe(
     Command.withSubcommands([
       Command.make("extract", flags(), (input) => run({ command: "extract", ...input })),
       Command.make("check", flags(), (input) => run({ command: "check", ...input })),
     ])
   );
-}
 
-function parse<E, R>(
-  tokens: ReadonlyArray<string>,
-  run: (invocation: Invocation) => Effect.Effect<void, E, R>
-): Effect.Effect<void, E | CliError.CliError, R | Command.Environment> {
   // No --version: builtIns are off, so the version is never printed.
-  return Command.runWith(commandTree(run), { version: "", renderErrors: false })(tokens);
+  return Command.runWith(tree, { version: "", renderErrors: false })(tokens).pipe(
+    Effect.provide(grammar),
+    Effect.catchIf(CliError.isCliError, (error) => {
+      const poll = (error._tag === "ShowHelp" ? error.errors : [error]).find(
+        (reason) => reason._tag === "InvalidValue" && reason.option === "poll"
+      );
+
+      return poll?._tag === "InvalidValue"
+        ? Effect.fail(new UsageError({ reason: poll.expected }))
+        : Effect.die(error);
+    })
+  );
 }
 
-/**
- * The contract reports the first argument that fails, reading left to right, where effect/cli reports flags before
- * arguments. Each flag's value is joined to it (`guardArgs`), so every token is one argument, and the first failing
- * token is the end of the shortest prefix that fails to parse.
- */
-const firstFailure = /* @__PURE__ */ Effect.fn("elmera-intl.firstFailure")(function* (
-  tokens: ReadonlyArray<string>,
-  otherwise: UsageError
-) {
-  for (let end = 1; end <= tokens.length; end += 1) {
-    const failure = yield* parse(tokens.slice(0, end), () => Effect.void).pipe(
-      Effect.match({ onFailure: (error): CliError.CliError | undefined => error, onSuccess: () => undefined })
-    );
-
-    if (failure !== undefined) {
-      return yield* new UsageError({ reason: reasonOf(failure) });
-    }
-  }
-
-  return yield* otherwise;
-});
-
-// Each effect/cli parse error as today's reason. The flag names in `option` carry no dashes.
-function reasonOf(error: CliError.CliError): string {
-  switch (error._tag) {
-    case "ShowHelp": {
-      // The contract rejects a repeated flag before it reads the repeat's value.
-      const [first] = error.errors.toSorted((a, b) => Number(isRepeat(b)) - Number(isRepeat(a)));
-
-      // A bare `elmera-intl` asks for help, with no error of its own.
-      return first === undefined ? "unknown command: (none)" : reasonOf(first);
-    }
-    case "UnknownSubcommand":
-      return `unknown command: ${error.subcommand}`;
-    case "UnrecognizedOption":
-      // A flag before the command stands where the command goes.
-      return error.command?.length === 1
-        ? `unknown command: ${error.option}`
-        : `unexpected argument: ${error.option}`;
-    case "UnexpectedArgument":
-      return `unexpected argument: ${error.arguments[0] ?? ""}`;
-    case "DuplicateOption":
-      return `unexpected argument: --${error.option}`;
-    case "MissingOption":
-    case "InvalidValue":
-      return reasonForFlag(error);
-    default:
-      return error.message;
-  }
-}
-
-// effect/cli reports a flag given twice as an invalid value counting its occurrences.
-function isRepeat(error: CliError.CliError): boolean {
-  return error._tag === "InvalidValue" && error.value.endsWith(" occurrences");
-}
-
-function reasonForFlag(error: CliError.MissingOption | CliError.InvalidValue): string {
-  if (isRepeat(error)) {
-    return `unexpected argument: --${error.option}`;
-  }
-
-  if (error.option === "config") {
-    return "--config needs a path";
-  }
-
-  // The guard always gives --poll a value, so its errors are its filters' own messages: the contract's reasons.
-  if (error.option === "poll" && error._tag === "InvalidValue") {
-    return error.expected;
-  }
-
-  return error.message;
-}
-
-type GuardedArgs =
+type Scanned =
   | { readonly _tag: "Tokens"; readonly tokens: ReadonlyArray<string> }
   | {
-      readonly _tag: "Rejected";
-      /** The arguments before the rejected one, as `Tokens` passes them. */
-      readonly prefix: ReadonlyArray<string>;
-      readonly index: number;
-      readonly token: string;
+      readonly _tag: "SyntaxError";
+      /** The complete options before the error, as `Tokens` passes them; empty when the command is the error. */
+      readonly tokens: ReadonlyArray<string>;
+      readonly reason: string;
     };
 
-/**
- * The contract reads every argument as one whole token, and a flag's value as the next argument. effect/cli's lexer
- * reads three kinds differently: `--flag=value` (a flag with its value), `--` (the end of the flags) and `-abc` (three
- * short flags). The guard finds the first such argument in a flag's place, which the CLI rejects, and passes every
- * flag value joined to its flag (`--config=-x`), so a value that looks like a flag stays the value it is today.
- */
-function guardArgs(args: ReadonlyArray<string>): GuardedArgs {
-  const tokens: Array<string> = [];
-  let configs = 0;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index] ?? "";
-    const value = args[index + 1];
+const PRESENCE_FLAGS = new Set(["--json", "--watch"]);
 
-    // As today: `--poll` takes the next argument, or none at the end, as its value, which only its filters judge;
-    // `--config` takes the next argument unless it is a flag, and effect/cli reports one missing. A repeated
-    // `--config` is rejected before its value is read, so it goes on as a bare repeat.
-    if (index > 0 && arg === "--poll") {
+/**
+ * The contract's syntax, read left to right as layer 1's parser read it: the command, then each flag once, a flag's
+ * value as the next argument, and every argument one whole token. effect/cli's lexer reads `--flag=value`, `--` and
+ * `-abc` differently and reports flags before arguments, so the scan finds the first syntax error itself. It passes
+ * each value joined to its flag (`--config=-x`), so a value that looks like a flag stays the value it is.
+ */
+function scanArgs(args: ReadonlyArray<string>): Scanned {
+  const [command, ...rest] = args;
+
+  if (command !== "extract" && command !== "check") {
+    return { _tag: "SyntaxError", tokens: [], reason: `unknown command: ${command ?? "(none)"}` };
+  }
+
+  const tokens: Array<string> = [command];
+  const seen = new Set<string>();
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index] ?? "";
+    const value = rest[index + 1];
+
+    if (seen.has(arg) || !(PRESENCE_FLAGS.has(arg) || arg === "--config" || arg === "--poll")) {
+      return { _tag: "SyntaxError", tokens, reason: `unexpected argument: ${arg}` };
+    }
+
+    seen.add(arg);
+
+    if (arg === "--config") {
+      // `--config` takes the next argument unless it is a flag.
+      if (value === undefined || value.startsWith("--")) {
+        return { _tag: "SyntaxError", tokens, reason: "--config needs a path" };
+      }
+
+      tokens.push(`--config=${value}`);
+      index += 1;
+    } else if (arg === "--poll") {
+      // `--poll` takes the next argument, or none at the end, as its value, which only its filters judge.
       tokens.push(`--poll=${value ?? ""}`);
       index += 1;
-    } else if (index > 0 && arg === "--config") {
-      configs += 1;
-
-      if (configs > 1) {
-        tokens.push("--config=");
-      } else if (value !== undefined && !value.startsWith("--")) {
-        tokens.push(`--config=${value}`);
-        index += 1;
-      } else {
-        tokens.push(arg);
-      }
-    } else if (readsDifferently(arg)) {
-      return { _tag: "Rejected", prefix: tokens, index, token: arg };
     } else {
       tokens.push(arg);
     }
@@ -253,22 +216,9 @@ function guardArgs(args: ReadonlyArray<string>): GuardedArgs {
   return { _tag: "Tokens", tokens };
 }
 
-function readsDifferently(arg: string): boolean {
-  return (
-    arg === "--" ||
-    (arg.startsWith("--") && arg.includes("=")) ||
-    (arg.startsWith("-") && !arg.startsWith("--") && arg.length > 1 && !NEGATIVE_NUMBER.test(arg))
-  );
-}
-
-// effect/cli's lexer reads these as a value, not a short flag.
-const NEGATIVE_NUMBER = /^-(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/u;
-
 /**
- * The `elmera-intl` program for `args`: parse them, apply the rules between flags, and run the command.
- *
- * Its one interruptible step is the watch's wait, which runs until interrupted; `executable` runs everything else
- * uninterruptibly. A defect (an exception the commands do not classify) stays a defect.
+ * The `elmera-intl` program for `args`: parse them, apply the rules between flags, and run the command. A defect (an
+ * exception the commands do not classify) stays a defect.
  *
  * @param args - The arguments after the program name.
  * @param options - The directory the default config path resolves in, and who runs the program.
@@ -280,24 +230,18 @@ export function cliProgram(
   options: { readonly cwd: string; readonly host: CliHost }
 ): Effect.Effect<void, CliFailure, Reporter | Command.Environment> {
   return Effect.gen(function* () {
-    const guarded = guardArgs(args);
+    const scanned = scanArgs(args);
 
-    if (guarded._tag === "Tokens") {
-      return yield* parse(guarded.tokens, (invocation) => dispatch(invocation, options)).pipe(
-        Effect.catchIf(CliError.isCliError, (error) =>
-          firstFailure(guarded.tokens, new UsageError({ reason: reasonOf(error) }))
-        )
-      );
+    if (scanned._tag === "Tokens") {
+      return yield* parse(scanned.tokens, (invocation) => dispatch(invocation, options));
     }
 
-    // An argument before the rejected one may fail first.
-    return yield* firstFailure(
-      guarded.prefix,
-      new UsageError({
-        reason:
-          guarded.index === 0 ? `unknown command: ${guarded.token}` : `unexpected argument: ${guarded.token}`,
-      })
-    );
+    // An invalid --poll value before the syntax error fails first, as layer 1 judged each value where it read it.
+    if (scanned.tokens.length > 0) {
+      yield* parse(scanned.tokens, () => Effect.void);
+    }
+
+    return yield* new UsageError({ reason: scanned.reason });
   }).pipe(
     Effect.tapErrorTag("UsageError", (error) =>
       Reporter.use((reporter) => reporter.stderr(`${error.reason}\n${USAGE}\n`))
@@ -339,8 +283,9 @@ const dispatch = /* @__PURE__ */ Effect.fn("elmera-intl.dispatch")(function* (
   );
 });
 
-// The commands are still synchronous. These two are the one place each is lifted into the program, until the commands
-// and watch layers make them effects; an exception is a defect, as before.
+// The commands are still synchronous. These are the one place each is lifted into the program (a one-shot report;
+// the watch's config read and its watcher), until the commands and watch layers make them effects; an exception is a
+// defect, as before.
 const commandReport = (command: "extract" | "check", configPath: string) =>
   Effect.sync((): CommandReport => {
     const loaded = loadConfig(configPath);
@@ -351,26 +296,9 @@ const commandReport = (command: "extract" | "check", configPath: string) =>
 
     return command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
   });
-const startWatch = (
-  configPath: string,
-  mode: WatchMode,
-  onResult: (root: string, result: SyncResult) => void
-) =>
-  Effect.sync(() => {
-    const loaded = loadConfig(configPath);
-
-    return loaded._tag === "ConfigInvalid"
-      ? loaded
-      : {
-          ...loaded,
-          watcher: watchProject(
-            loaded.config,
-            (result) => onResult(loaded.config.root, result),
-            undefined,
-            mode
-          ),
-        };
-  });
+const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
+const startWatcher = (config: ProjectConfig, mode: WatchMode, onResult: (result: SyncResult) => void) =>
+  Effect.sync(() => watchProject(config, onResult, undefined, mode));
 
 const runOnce = /* @__PURE__ */ Effect.fn("elmera-intl.once")(function* (
   command: "extract" | "check",
@@ -408,9 +336,18 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   mode: WatchMode
 ) {
   const reporter = yield* Reporter;
-  // Only a watch owns SIGINT and SIGTERM, and only while it runs: a one-shot command keeps Node's default, which ends
-  // it at once. On before the watcher starts, so a signal sent on seeing the ready line finds them; the first signal
-  // stops the watch, and the scope closes the watcher.
+  const loaded = yield* watchConfig(configPath);
+
+  if (loaded._tag === "ConfigInvalid") {
+    yield* reporter.stderr(`${describeProblem(loaded.problem)}\n`);
+
+    return yield* new ProblemsFound({ count: 1 });
+  }
+
+  const { config } = loaded;
+  // Only a watch owns SIGINT and SIGTERM, and only once its watcher starts: until then (a one-shot command, a config
+  // still being read) Node's default ends the process at once. On before the ready line, so a signal sent on seeing it
+  // finds them; the first signal stops the watch, and the scope closes the watcher.
   const stop = yield* Deferred.make<void>();
   const onSignal = () => {
     Deferred.doneUnsafe(stop, Effect.void);
@@ -426,23 +363,23 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
         process.off("SIGTERM", onSignal);
       })
   );
-
-  // The watcher reports from its own callbacks, outside this fiber: each report runs on the program's services.
-  const report = Effect.runSyncWith(yield* Effect.context<Reporter>());
-  const started = yield* Effect.acquireRelease(
-    startWatch(configPath, mode, (root, result) => {
-      report(reportSync(root, result));
+  // The watcher calls back from outside this fiber; this fiber reports each result, so the Reporter may be
+  // asynchronous.
+  const results = yield* Queue.unbounded<SyncResult>();
+  yield* Effect.acquireRelease(
+    startWatcher(config, mode, (result) => {
+      Queue.offerUnsafe(results, result);
     }),
-    (watch) => (watch._tag === "Config" ? Effect.promise(() => watch.watcher.close()) : Effect.void)
+    (watcher) => Effect.promise(() => watcher.close())
   );
-
-  if (started._tag === "ConfigInvalid") {
-    yield* reporter.stderr(`${describeProblem(started.problem)}\n`);
-
-    return yield* new ProblemsFound({ count: 1 });
-  }
-
-  yield* reporter.stdout(`watching ${started.config.root} for message changes; Ctrl-C stops\n`);
+  // The first sync runs as the watcher starts: its report precedes the ready line.
+  yield* Effect.forEach(yield* Queue.clear(results), (result) => reportSync(config.root, result), {
+    discard: true,
+  });
+  yield* reporter.stdout(`watching ${config.root} for message changes; Ctrl-C stops\n`);
+  yield* Effect.forkScoped(
+    Effect.forever(Queue.take(results).pipe(Effect.flatMap((result) => reportSync(config.root, result))))
+  );
 
   return yield* Deferred.await(stop);
 }, Effect.scoped);
@@ -536,11 +473,7 @@ export const CliPlatform: Layer.Layer<Command.Environment> = /* @__PURE__ */ Lay
   /* @__PURE__ */ Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     /* @__PURE__ */ ChildProcessSpawner.make(() => unused("child process"))
-  ),
-  // No --help, --version, --wizard, --completions or --log-level: the CLI has none, and each would take a flag's place.
-  /* @__PURE__ */ CliConfig.layer({ builtIns: [] }),
-  // Silent: the program prints its own usage errors (UsageError), and effect/cli's help would go to stdout.
-  /* @__PURE__ */ CliOutput.layerPresenter({ present: () => Effect.void })
+  )
 );
 
 function inProcess<E>(io: CliIo, program: Effect.Effect<void, E, Reporter | Command.Environment>) {

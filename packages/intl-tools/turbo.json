@@ -2,7 +2,7 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
-    // test/public-surface.test.ts reads dist. An override replaces the root's dependsOn, so ^build is listed again.
+    // The public-surface tests and the CLI and watch tests (through bin/elmera-intl.js) read dist. An override replaces the root's dependsOn, so ^build is listed again.
     "test": {
       "dependsOn": ["build", "^build"]
     },
