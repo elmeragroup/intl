@@ -5,7 +5,6 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Predicate from "effect/Predicate";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
@@ -93,8 +92,8 @@ function renderJsonReport(report: CommandReport): string {
 }
 
 /**
- * Print a defect as `elmera-intl failed: ` and the thrown Error's own stack. It stays a defect, which `exitCodeOf`
- * reads as exit 2.
+ * Print a defect as `elmera-intl failed: ` and the thrown Error's own stack. It stays a defect, which the
+ * executable reads as exit 2.
  *
  * @template E - The program's failures.
  * @template R - The program's requirements.
@@ -113,59 +112,48 @@ export function reportCrash<E, R>(program: Effect.Effect<void, E, R>): Effect.Ef
   );
 }
 
-/**
- * The exit code of a finished run: 0 when clean (a watch a signal stopped included), 1 when it found problems, 2 on a
- * usage error or a crash.
- *
- * @param exit - How the program ended.
- * @returns The process exit code.
- */
-export function exitCodeOf(exit: Exit.Exit<unknown, unknown>): number {
-  if (Exit.isSuccess(exit)) {
-    return 0;
-  }
-
-  // A defect is a crash, whatever code it carries (effect/cli's ShowHelp carries 1, or 0): 2, never "problems found".
-  if (Cause.hasDies(exit.cause)) {
-    return 2;
-  }
-
-  const failure = Cause.squash(exit.cause);
-
-  // Anything else without its own code is an interruption, which nothing in the CLI sends.
-  return Predicate.hasProperty(failure, Runtime.errorExitCode) ? Runtime.getErrorExitCode(failure) : 2;
-}
-
 /** How a host running a command in-process takes a crash. */
 export type CrashHandling =
-  /** Print it as the CLI does (`elmera-intl failed: ` and the stack) and return exit code 2. */
+  /** Print it as the CLI does (`elmera-intl failed: ` and the stack) and return `"crashed"`. */
   | "report"
   /** Reject with the thrown Error, for a host that reports a crash its own way. */
   | "reject";
 
+/** How a one-shot command ended: clean, with problems it printed, or crashed. */
+export type OneShotOutcome = "ok" | "problems" | "crashed";
+
 /**
- * Run `elmera-intl <command> --config <configPath>` in-process, for a host: the same output and exit code as the
- * executable, without parsing arguments.
+ * Run `elmera-intl <command> --config <configPath>` in-process, for a host: the same output as the executable, without
+ * parsing arguments.
  *
  * @param command - The command to run.
  * @param options - The project's config path and how a crash is taken.
  * @param io - The host's output streams.
- * @returns The exit code: 0 when clean, 1 on any problem, 2 on a reported crash.
+ * @returns `"ok"` when clean, `"problems"` when the command printed problems, `"crashed"` on a reported crash.
  * @throws The thrown Error, when the command crashes and `crash` is `"reject"`.
  */
 export async function runOnceInProcess(
   command: OneShotCommand,
   options: { readonly configPath: string; readonly crash: CrashHandling },
   io: ReporterIo
-): Promise<number> {
+): Promise<OneShotOutcome> {
   const program = runOnce(command, false, options.configPath);
   const exit = await Effect.runPromiseExit(
     (options.crash === "report" ? reportCrash(program) : program).pipe(Effect.provide(Reporter.layer(io)))
   );
 
-  if (options.crash === "reject" && Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
-    throw Cause.squash(exit.cause);
+  if (Exit.isSuccess(exit)) {
+    return "ok";
   }
 
-  return exitCodeOf(exit);
+  if (Cause.hasDies(exit.cause)) {
+    if (options.crash === "reject") {
+      throw Cause.squash(exit.cause);
+    }
+
+    return "crashed";
+  }
+
+  // The only failure a one-shot run has is its problems; anything else is an interruption, which nothing here sends.
+  return Cause.hasFails(exit.cause) ? "problems" : "crashed";
 }

@@ -4,8 +4,7 @@
 import * as Runtime from "effect/Runtime";
 import process, { cwd, stderr, stdout } from "node:process";
 
-import { executable } from "./cli-run";
-import { exitCodeOf } from "./command-run";
+import { executable, exitCodeOf } from "./cli-run";
 
 // A reader that closes the pipe early (`| head`) wants no more output, not a stack trace. A parent that spawned the
 // CLI holds a socket, not a pipe, and on macOS its close can surface as ENOTCONN.

@@ -14,26 +14,26 @@ import { CONFIG_FILE } from "./project-config";
  *
  * @param project - The vitest project (its `TestProject`) whose root holds `elmera-intl.json`.
  * @returns Once check is clean; vitest awaits a global setup.
- * @throws When check finds problems (exit 1) or could not run (exit 2): the test run must stop (as a rejection).
+ * @throws When check finds problems or could not run: the test run must stop (as a rejection).
  */
 export default async function checkIntlCatalogs(project: {
   readonly config: { readonly root: string };
 }): Promise<void> {
   const app = project.config.root;
-  const code = await runOnceInProcess(
+  const outcome = await runOnceInProcess(
     "check",
     { configPath: resolve(app, CONFIG_FILE), crash: "report" },
     { stdout: () => undefined, stderr: (text) => process.stderr.write(text) }
   );
 
-  // Exit 1 covers a stale catalog and an invalid config alike: the problems above name which.
-  if (code === 1) {
+  // Problems cover a stale catalog and an invalid config alike: the problems above name which.
+  if (outcome === "problems") {
     throw new Error(
       `elmera-intl check found problems in ${app} (above), each with its fix; a stale catalog needs \`pnpm exec elmera-intl extract\` there and any new msgstr translated`
     );
   }
 
-  if (code !== 0) {
+  if (outcome === "crashed") {
     throw new Error(`elmera-intl check could not run in ${app} (output above)`);
   }
 }

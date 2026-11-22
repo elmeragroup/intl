@@ -15,6 +15,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Queue from "effect/Queue";
 import * as Runtime from "effect/Runtime";
@@ -32,14 +33,14 @@ import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, ProjectWatcher, SyncResult, WatchMode } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, syncFailed, watchProject } from "./watch";
 
-/** Where the CLI writes and resolves paths from. */
-export type CliIo = ReporterIo & {
+/** The directory the default config path resolves in. */
+export type CliOptions = {
   /** Directory the default config path is resolved in. */
   readonly cwd: string;
 };
 
-/** The directory the default config path resolves in. */
-export type CliOptions = { readonly cwd: string };
+/** Where the CLI writes and resolves paths from. */
+export type CliIo = ReporterIo & CliOptions;
 
 const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to ${CONFIG_FILE}>]
        elmera-intl extract --watch [--poll <ms>] [--config <path to ${CONFIG_FILE}>]`;
@@ -74,7 +75,7 @@ const POLL_FLAG = /* @__PURE__ */ Flag.String("poll").pipe(
 const FLAGS = {
   json: /* @__PURE__ */ Flag.Boolean("json").pipe(/* @__PURE__ */ Flag.withDefault(false)),
   watch: /* @__PURE__ */ Flag.Boolean("watch").pipe(/* @__PURE__ */ Flag.withDefault(false)),
-  config: /* @__PURE__ */ Flag.String("config").pipe(Flag.optional),
+  config: /* @__PURE__ */ Flag.String("config").pipe(/* @__PURE__ */ Flag.withDefault(CONFIG_FILE)),
   poll: /* @__PURE__ */ POLL_FLAG.pipe(Flag.optional),
 };
 
@@ -86,31 +87,18 @@ function isPolling(mode: WatchMode | PollIntervalOutOfRange): mode is WatchMode 
 }
 
 /** The flags as effect/cli parses them, before the rules between flags apply. */
-type ParsedFlags = {
-  readonly json: boolean;
-  readonly watch: boolean;
-  readonly config: Option.Option<string>;
-  readonly poll: Option.Option<WatchMode>;
-};
+type ParsedFlags = Command.Command.Config.Infer<typeof FLAGS>;
 
 /** The directory the program resolves the default config path in, provided with the grammar. */
 class WorkingDirectory
-  extends /* @__PURE__ */ Context.Service<WorkingDirectory, { readonly cwd: string }>()(
+  extends /* @__PURE__ */ Context.Service<WorkingDirectory, CliOptions>()(
     "elmera-intl-tools/WorkingDirectory"
   ) {}
 
 const WATCH_WITHOUT_EXTRACT = "--watch goes with extract only, without --json";
 const POLL_WITHOUT_WATCH = "--poll goes with extract --watch only";
 
-const configPathOf = (config: Option.Option<string>) =>
-  WorkingDirectory.use(({ cwd }) =>
-    Effect.succeed(
-      resolve(
-        cwd,
-        Option.getOrElse(config, () => CONFIG_FILE)
-      )
-    )
-  );
+const configPathOf = (config: string) => WorkingDirectory.useSync(({ cwd }) => resolve(cwd, config));
 
 const extract = /* @__PURE__ */ Command.make(
   "extract",
@@ -253,7 +241,7 @@ export const cliProgram = /* @__PURE__ */ Effect.fn("elmera-intl")(
 
     if (scanned._tag === "Tokens") {
       return yield* runCommandLine(scanned.tokens).pipe(
-        Effect.provideService(WorkingDirectory, { cwd: options.cwd }),
+        Effect.provideService(WorkingDirectory, options),
         Effect.provide(grammar),
         Effect.catchIf(CliError.isCliError, pollReason)
       );
@@ -388,8 +376,31 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
 export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
   return Effect.gen(function* () {
     const args = yield* Stdio.Stdio.use((stdio) => stdio.args);
-    yield* cliProgram(args, { cwd: io.cwd });
+    yield* cliProgram(args, io);
   }).pipe(reportCrash, Effect.provide(Layer.merge(CliPlatform, Reporter.layer(io))));
+}
+
+/**
+ * The exit code of a finished run: 0 when clean (a watch a signal stopped included), 1 when it found problems, 2 on a
+ * usage error or a crash.
+ *
+ * @param exit - How the program ended.
+ * @returns The process exit code.
+ */
+export function exitCodeOf(exit: Exit.Exit<unknown, unknown>): number {
+  if (Exit.isSuccess(exit)) {
+    return 0;
+  }
+
+  // A defect is a crash, whatever code it carries (effect/cli's ShowHelp carries 1, or 0): 2, never "problems found".
+  if (Cause.hasDies(exit.cause)) {
+    return 2;
+  }
+
+  const failure = Cause.squash(exit.cause);
+
+  // Anything else without its own code is an interruption, which nothing in the CLI sends.
+  return Predicate.hasProperty(failure, Runtime.errorExitCode) ? Runtime.getErrorExitCode(failure) : 2;
 }
 
 // A service the CLI does not use: its flags read no file, it prompts for nothing and spawns nothing. The layer that

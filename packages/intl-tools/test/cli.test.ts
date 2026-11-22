@@ -1,8 +1,10 @@
+import * as Cause from "effect/Cause";
 import * as CliConfig from "effect/cli/CliConfig";
 import * as CliOutput from "effect/cli/CliOutput";
 import * as Flag from "effect/cli/Flag";
 import * as GlobalFlag from "effect/cli/GlobalFlag";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import type * as LogLevel from "effect/LogLevel";
 import * as Option from "effect/Option";
@@ -27,8 +29,7 @@ import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CliPlatform, cliProgram } from "../src/cli-run";
-import { exitCodeOf } from "../src/command-run";
+import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
 import { Reporter } from "../src/reporter";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
@@ -92,7 +93,8 @@ function bin(...args: Array<string>): CliRun {
 }
 
 // `cliProgram` in-process, under `settings` (a host's own effect/cli settings, as a host runtime that provides Node's
-// services may), its exit read as the executable reads it.
+// services may), its exit read as the executable reads it. A crash rejects with the thrown Error, so a test fails on
+// the crash itself, not on what a later step finds missing; the bin tests own a crash's exit 2.
 async function inProcess<ROut>(args: ReadonlyArray<string>, settings: Layer.Layer<ROut>): Promise<CliRun> {
   let stdout = "";
   let stderr = "";
@@ -107,6 +109,10 @@ async function inProcess<ROut>(args: ReadonlyArray<string>, settings: Layer.Laye
   const exit = await Effect.runPromiseExit(
     cliProgram(args, { cwd: root }).pipe(Effect.provide([CliPlatform, settings, io]))
   );
+
+  if (Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
+    throw Cause.squash(exit.cause);
+  }
 
   return { code: exitCodeOf(exit), stdout, stderr };
 }

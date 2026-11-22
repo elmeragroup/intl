@@ -100,7 +100,7 @@ async function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>
       { configPath: join(root, "elmera-intl.json"), crash: "reject" },
       { stdout: () => undefined, stderr: () => undefined }
     )
-  ).toBe(0);
+  ).toBe("ok");
   let po = read("messages/nb.po");
   for (const [source, translation] of pairs) {
     po = po.replace(`msgid "${source}"\nmsgstr ""`, `msgid "${source}"\nmsgstr "${translation}"`);

@@ -10,7 +10,7 @@ import { formatPo } from "../src/po";
 
 const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
 
-// Both probes run in a fresh Node that records every module it loads (import or require, at startup or on first
+// Each probe runs in a fresh Node that records every module it loads (import or require, at startup or on first
 // use) until the probe stops recording, then prints the recording and what the probe observed.
 const RECORDER = `
 import { registerHooks } from "node:module";
@@ -204,7 +204,7 @@ function probe<T>(script: string, args: ReadonlyArray<string>): ProbeRun<T> {
     cwd: PACKAGE,
     encoding: "utf8",
   });
-  // SAFETY: both probes print this shape, and each caller names the result its probe prints; the test's assertions on
+  // SAFETY: each probe prints this shape, and each caller names the result its probe prints; the test's assertions on
   // the result fail on any other.
   const { loaded, result } = JSON.parse(output) as {
     readonly loaded: ReadonlyArray<string>;

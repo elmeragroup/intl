@@ -38,14 +38,14 @@ it("checks the vitest project root, not the process cwd", async () => {
       { configPath: join(root, "elmera-intl.json"), crash: "reject" },
       { stdout: () => undefined, stderr: () => undefined }
     );
-  expect(await extract()).toBe(0);
+  expect(await extract()).toBe("ok");
   // Check also flags an empty msgstr, so translate the one message.
   const po = join(root, "messages/nb.po");
   writeFileSync(
     po,
     readFileSync(po, "utf8").replace('msgid "Order"\nmsgstr ""', 'msgid "Order"\nmsgstr "Ordre"')
   );
-  expect(await extract()).toBe(0);
+  expect(await extract()).toBe("ok");
   await expect(checkIntlCatalogs({ config: { root } })).resolves.toBeUndefined();
 
   write("src/page.tsx", `${PAGE}export function Greeting() { return <T>Hello</T>; }\n`);

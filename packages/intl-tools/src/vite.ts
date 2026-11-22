@@ -136,13 +136,13 @@ async function check(
   const collect = (text: string) => {
     output += text;
   };
-  const code = await runOnceInProcess(
+  const outcome = await runOnceInProcess(
     "check",
     { configPath: config, crash: "reject" },
     { stdout: collect, stderr: collect }
   );
 
-  return code === 0 ? { ok: true } : { ok: false, output: `${NAME} check failed:\n${output}` };
+  return outcome === "ok" ? { ok: true } : { ok: false, output: `${NAME} check failed:\n${output}` };
 }
 
 // The config, each locale's PO and the formats module; just the config when it is missing or invalid, so fixing it
