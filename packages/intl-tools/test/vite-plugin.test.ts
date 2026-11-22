@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BuildEnvironmentOptions, InlineConfig, Rolldown, ViteDevServer } from "vite";
+import type { BuildEnvironmentOptions, InlineConfig, Plugin, Rolldown, ViteDevServer } from "vite";
 import { build, createBuilder, createLogger, createServer } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -310,6 +310,45 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       .toContain(`msgid "Ready"`);
     write("src/new.tsx", component("New"));
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "New"\nmsgstr ""`);
+  });
+
+  // Unit under test: the dev plugin's watch when the dev server closes before the watch has started: here, from the
+  // first sync's own report, while the start still waits for it. Oracle: layer 2's plugin, by hand: closing the dev
+  // server closes the watch, whatever point its start has reached, so every file watcher it opened is closed.
+  it("closes a watch still starting when the dev server closes", async () => {
+    const watches = () => process.getActiveResourcesInfo().filter((name) => name === "FSEventWrap").length;
+    const before = watches();
+    // A message the first sync adds, so it reports a write.
+    write("src/first.tsx", component("First"));
+    let dev: ViteDevServer | undefined;
+    let closing: Promise<void> | undefined;
+    const capture: Plugin = {
+      name: "capture-dev-server",
+      configureServer(started) {
+        dev = started;
+      },
+    };
+    const created = createServer({
+      root,
+      configFile: false,
+      customLogger: {
+        ...createLogger("silent"),
+        info: (message) => {
+          if (message.includes("wrote") && closing === undefined) {
+            queueMicrotask(() => {
+              closing = dev?.close();
+            });
+          }
+        },
+      },
+      plugins: [capture, intl()],
+    });
+    await expect.poll(() => closing !== undefined, HANG_GUARD).toBe(true);
+    await closing;
+    server = await created;
+
+    expect(read("messages/nb.po")).toContain(`msgid "First"`);
+    await expect.poll(watches, HANG_GUARD).toBe(before);
   });
 
   // Oracle: the poll interval contract (10 ms to Node's timer maximum): the dev server's interval feeds the same

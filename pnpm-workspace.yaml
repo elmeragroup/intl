@@ -48,6 +48,9 @@ catalog:
   # effect's Node platform services (the CLI's Stdio): released with effect and pinned to the same version. Never
   # @effect/platform-node, whose required redis peer auto-installs 15 MB and which adds undici.
   "@effect/platform-node-shared": 4.1.3
+  # effect's Vitest integration (it.effect, TestClock), released with effect and pinned to the same version. The tools'
+  # watch tests drive its debounce and poll on the test clock.
+  "@effect/vitest": 4.1.3
 
   # Host frameworks: the adapters' peers, and the e2e fixture apps that run on them.
   "@mdx-js/loader": 3.1.1

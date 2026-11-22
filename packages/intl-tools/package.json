@@ -101,6 +101,7 @@
     }
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "@elmeragroup/typescript-config": "workspace:*",
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",

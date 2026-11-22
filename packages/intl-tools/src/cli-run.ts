@@ -10,6 +10,7 @@ import * as CliOutput from "effect/cli/CliOutput";
 import * as Command from "effect/cli/Command";
 import * as Flag from "effect/cli/Flag";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -17,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as Queue from "effect/Queue";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
@@ -26,12 +26,11 @@ import { relative, resolve } from "node:path";
 import process from "node:process";
 
 import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
-import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
-import type { PollIntervalOutOfRange, ProjectWatcher, SyncResult, WatchMode } from "./watch";
-import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, syncFailed, watchProject } from "./watch";
+import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
+import { CatalogSync, FileEvents, MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchCatalogs } from "./watch";
 
 /** The directory the default config path resolves in. */
 export type CliOptions = {
@@ -228,7 +227,9 @@ function scanArgs(args: ReadonlyArray<string>): Scanned {
 
 /**
  * The `elmera-intl` program for `args`: parse them, apply the rules between flags, and run the command. A defect (an
- * exception the commands do not classify) stays a defect.
+ * exception the commands do not classify) stays a defect. A watch syncs through the `CatalogSync`, and listens through
+ * the `FileEvents`, that the host provides for the whole program (their `layer()`s in the executable), so both outlive
+ * the watch.
  *
  * @param args - The arguments after the program name.
  * @param options - The directory the default config path resolves in.
@@ -261,55 +262,30 @@ export const cliProgram = /* @__PURE__ */ Effect.fn("elmera-intl")(
   )
 );
 
-// The watch lifts its still-synchronous config read and watcher into the program, until the watch layer makes them
-// effects; an exception is a defect, as before.
+// The watch lifts its still-synchronous config read into the program, until the commands layer makes it an effect; an
+// exception is a defect, as before.
 const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
-// The watcher and the signals that stop it. The listeners go on just before the watcher starts (a one-shot command, or
-// a config still being read, keeps Node's default and ends at once), so they are on before the first sync, and come off
-// again if the watcher fails to start. The first signal takes both off (a second gets Node's default), closes the
-// watcher, so no new sync starts, and ends the results: a sync already running finishes, as it cannot be cut short, and
-// every delivered result is still reported. The close's outcome is held before the results end, since ending them
-// resumes the reporting fiber at once, so the watcher closes once and a failed close is not lost.
-const startWatcher = (config: ProjectConfig, mode: WatchMode, results: Queue.Queue<SyncResult, Cause.Done>) =>
-  Effect.sync(() => {
-    let watcher: ProjectWatcher | undefined;
-    let closed: Promise<Exit.Exit<void>> | undefined;
-    const offSignals = () => {
-      process.off("SIGINT", onSignal);
-      process.off("SIGTERM", onSignal);
-    };
-    // Idempotent: the first signal, and the scope on any exit, both stop the watch.
-    const stop = (): Promise<Exit.Exit<void>> => {
-      if (closed === undefined) {
-        offSignals();
-        // A close that throws fails as one that rejects does, and the results still end.
-        closed = Promise.try(() => watcher?.close()).then(() => Exit.void, Exit.die);
-        Queue.endUnsafe(results);
-      }
+// The signals that stop the watch. On just before the watch starts (a one-shot command, or a config still being read,
+// keeps Node's default and ends at once), so they are on before the first sync, and off again when the watch's scope
+// closes, a failed start included. The first signal takes both off, so a second gets Node's default.
+const signalListeners = (stop: Deferred.Deferred<void>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const off = () => {
+        process.off("SIGINT", onSignal);
+        process.off("SIGTERM", onSignal);
+      };
+      const onSignal = () => {
+        off();
+        Deferred.doneUnsafe(stop, Effect.void);
+      };
+      process.once("SIGINT", onSignal);
+      process.once("SIGTERM", onSignal);
 
-      return closed;
-    };
-    const onSignal = () => {
-      void stop();
-    };
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
-    try {
-      watcher = watchProject(
-        config,
-        (result) => {
-          Queue.offerUnsafe(results, result);
-        },
-        undefined,
-        mode
-      );
-    } catch (error) {
-      offSignals();
-      throw error;
-    }
-
-    return { stop };
-  });
+      return off;
+    }),
+    (off) => Effect.sync(off)
+  );
 
 const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function* (
   configPath: string,
@@ -325,34 +301,18 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   }
 
   const { config } = loaded;
-  // The watcher calls back from outside this fiber; this fiber reports each result, so the Reporter may be
-  // asynchronous.
-  const results = yield* Queue.unbounded<SyncResult, Cause.Done>();
-  // After the last report, the close's outcome: a failed close is a crash, as it always was.
-  yield* Effect.acquireRelease(startWatcher(config, mode, results), (started) =>
-    Effect.promise(() => started.stop()).pipe(Effect.flatten)
-  );
-  // The first sync runs as the watcher starts: its report precedes the ready line.
-  yield* Effect.forEach(yield* Queue.clear(results), (result) => reportResult(config.root, result), {
-    discard: true,
-  });
-  yield* reporter.stdout(`watching ${config.root} for message changes; Ctrl-C stops\n`);
-  // Until a signal ends the results, and then through every result already delivered.
-  yield* Queue.take(results).pipe(
-    Effect.flatMap((result) => reportResult(config.root, result)),
-    Effect.forever,
-    Effect.catchIf(Cause.isDone, () => Effect.void)
-  );
+  const stop = yield* Deferred.make<void>();
+  yield* signalListeners(stop);
+  // The watch writes every result, and the ready line after the first, in order from one fiber, so the Reporter may be
+  // asynchronous. Until a signal, or a write that fails for good: then it closes its watchers, drains and ends as the
+  // writing did; a watcher that failed to close is a crash, after every report. Its extract is the program's
+  // `CatalogSync`, which the host provides around the whole program, so it outlives the watch's stop, an
+  // interruption's included.
+  yield* watchCatalogs(config, mode, stop, {
+    report: (result) => reportSync(config.root, result),
+    ready: reporter.stdout(`watching ${config.root} for message changes; Ctrl-C stops\n`),
+  }).pipe(Effect.flatMap((watching) => watching.done));
 }, Effect.scoped);
-
-// One result's report. A write that fails is reported as the sync's failure, `SyncFailed`, and the watch goes on, as a
-// throwing report always was; if that report fails too, the failure ends the watch.
-const reportResult = (root: string, result: SyncResult) =>
-  reportSync(root, result).pipe(
-    Effect.catchDefect((defect) =>
-      reportSync(root, syncFailed(defect instanceof Error ? defect.message : String(defect)))
-    )
-  );
 
 const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(function* (
   root: string,
@@ -368,7 +328,8 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
 });
 
 /**
- * The executable's program: the arguments from `Stdio`, the command's output on `io`, and a crash printed.
+ * The executable's program: the arguments from `Stdio`, the command's output on `io`, the synchronous extract and
+ * Node's file events for a watch, provided once for the whole program, and a crash printed.
  *
  * @param io - The process's working directory and output streams.
  * @returns The program to run as the process's main fiber; `exitCodeOf` reads its exit.
@@ -377,7 +338,10 @@ export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
   return Effect.gen(function* () {
     const args = yield* Stdio.Stdio.use((stdio) => stdio.args);
     yield* cliProgram(args, io);
-  }).pipe(reportCrash, Effect.provide(Layer.merge(CliPlatform, Reporter.layer(io))));
+  }).pipe(
+    reportCrash,
+    Effect.provide([CliPlatform, Reporter.layer(io), CatalogSync.layer(), FileEvents.layer()])
+  );
 }
 
 /**

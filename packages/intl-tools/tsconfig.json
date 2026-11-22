@@ -23,11 +23,12 @@
       {
         "name": "@effect/language-service",
         // Globs resolve against this file, and an override's list replaces the preset's. The tests' unstable APIs:
-        // effect/Arbitrary for the PO codec's round-trip property, and effect/cli for a host's own CLI settings.
+        // effect/Arbitrary for the PO codec's round-trip property, effect/cli for a host's own CLI settings, and
+        // @effect/vitest (it.effect and its TestClock) for the watch's timing.
         "overrides": [
           {
             "include": ["test/**/*"],
-            "options": { "allowedUnstableApis": ["effect/Arbitrary", "effect/cli"] }
+            "options": { "allowedUnstableApis": ["effect/Arbitrary", "effect/cli", "@effect/vitest"] }
           }
         ]
       }

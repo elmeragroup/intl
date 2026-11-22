@@ -37,14 +37,15 @@ const NAME = "elmera-intl";
  */
 export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
   const configPath = (root: string) => resolve(root, options.config ?? CONFIG_FILE);
-  let watcher: ProjectWatcher | undefined;
+  // The watch as soon as its start begins: a dev server that closes while it is still starting closes it too.
+  let watcher: Promise<ProjectWatcher> | undefined;
 
   return [
     intlCatalogs(options),
     {
       name: `${NAME}:watch`,
       apply: "serve",
-      configureServer(server) {
+      async configureServer(server) {
         const { logger, root } = server.config;
         const loaded = loadConfig(configPath(root));
 
@@ -82,13 +83,16 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
               });
             }
           },
-          undefined,
           mode
         );
+        await watcher;
       },
       async closeBundle() {
-        await watcher?.close();
+        const starting = watcher;
         watcher = undefined;
+        // A start that failed has stopped already, and failed the dev server's start with its error.
+        const running = await starting?.catch(() => undefined);
+        await running?.close();
       },
     },
     {
