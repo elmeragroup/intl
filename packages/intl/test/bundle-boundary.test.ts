@@ -1,14 +1,31 @@
 import { fileURLToPath } from "node:url";
+import type { RolldownOutput } from "rolldown";
 import { rolldown } from "rolldown";
 import { expect, it } from "vitest";
 
 import manifest from "../package.json" with { type: "json" };
 
+const SELF = `${manifest.name}/`;
+const EFFECT = /^effect(?:\/|$)/u;
+
 // Lint sees imports one file at a time; what reaches a browser is the bundle. Bundling the client entry from source
 // for the browser, with every third-party package left external, lists exactly the packages it pulls in, so a
 // tools module (parser, PO, filesystem) reached through any chain of runtime files shows up here. `effect` is the
 // tools' PO codec and the optional peer of `/effect` only.
-const PARSE_TIME = [/^@elmeragroup\/intl-tools/u, /^oxc-/u, /^@oxc-/u, /^effect(?:\/|$)/u, /^node:/u];
+const PARSE_TIME = [/^@elmeragroup\/intl-tools/u, /^oxc-/u, /^@oxc-/u, EFFECT, /^node:/u];
+
+// Every package but this one's own subpaths stays external.
+const isExternal = (id: string): boolean =>
+  !id.startsWith(".") && !id.startsWith("/") && !id.startsWith(SELF);
+
+// The external imports of a bundle's chunks, by specifier: every import that names no chunk of its own.
+function externalImports(output: RolldownOutput["output"]): ReadonlyArray<string> {
+  const chunkFiles = new Set(output.map((file) => file.fileName));
+
+  return output.flatMap((file) =>
+    file.type === "chunk" ? [...file.imports, ...file.dynamicImports].filter((id) => !chunkFiles.has(id)) : []
+  );
+}
 
 it("keeps parsers, PO and Node built-ins out of the browser bundle of /react", async () => {
   const bundle = await rolldown({
@@ -16,14 +33,11 @@ it("keeps parsers, PO and Node built-ins out of the browser bundle of /react", a
     platform: "browser",
     // The runtime's own specifiers resolve to source through its tsconfig paths, so their graph is bundled too.
     tsconfig: fileURLToPath(new URL("../tsconfig.json", import.meta.url)),
-    external: (id) => !id.startsWith(".") && !id.startsWith("/") && !id.startsWith("@elmeragroup/intl/"),
+    external: isExternal,
   });
   const { output } = await bundle.generate({ format: "esm" });
   await bundle.close();
-  const chunkFiles = new Set(output.map((file) => file.fileName));
-  const packages = output.flatMap((file) =>
-    file.type === "chunk" ? [...file.imports, ...file.dynamicImports].filter((id) => !chunkFiles.has(id)) : []
-  );
+  const packages = externalImports(output);
 
   expect(packages).toContain("react");
   expect(packages.filter((id) => PARSE_TIME.some((pattern) => pattern.test(id)))).toEqual([]);
@@ -56,8 +70,6 @@ it.each([
   expect(PARSER_ERROR_CODES.filter((codeName) => code.includes(codeName))).toEqual(expected);
 });
 
-const SELF = `${manifest.name}/`;
-const EFFECT = /^effect(?:\/|$)/u;
 // Each subpath's built module, and every built entry (the react-server branch of ./react included).
 const BUILT = new Map(Object.entries(manifest.exports).map(([subpath, target]) => [subpath, target.import]));
 const ENTRIES = [
@@ -80,7 +92,7 @@ async function graphOf(
     logLevel: "silent",
     // Every import counts, used or not: Node loads a module's imports whether or not a bundler would drop them.
     treeshake: false,
-    external: (id) => !id.startsWith(".") && !id.startsWith("/") && !id.startsWith(SELF),
+    external: isExternal,
     plugins: [
       {
         name: "self-specifiers",
@@ -94,15 +106,10 @@ async function graphOf(
   });
   const { output } = await bundle.generate({ format: "esm" });
   await bundle.close();
-  const chunkFiles = new Set(output.map((file) => file.fileName));
 
   return {
     modules: output.flatMap((file) => (file.type === "chunk" ? file.moduleIds : [])),
-    external: output.flatMap((file) =>
-      file.type === "chunk"
-        ? [...file.imports, ...file.dynamicImports].filter((id) => !chunkFiles.has(id))
-        : []
-    ),
+    external: externalImports(output),
   };
 }
 

@@ -164,6 +164,25 @@ export function resolveVariable(scope: Scope | null, name: string): Variable | u
 }
 
 /**
+ * The import a name resolves to from a scope.
+ *
+ * @param scope - The scope the name is used in (`sourceCode.getScope(node)`).
+ * @param name - The name.
+ * @returns The imported module and the specifier that binds the name, or `undefined` when no import binds it (a local
+ *   binding of the same name included).
+ */
+export function importOf(
+  scope: Scope | null,
+  name: string
+): { readonly source: string; readonly specifier: ESTree.Node } | undefined {
+  const definition = resolveVariable(scope, name)?.defs[0];
+
+  return definition?.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration"
+    ? { source: definition.parent.source.value, specifier: definition.node }
+    : undefined;
+}
+
+/**
  * Whether a name in this scope is the platform's global: no import, declaration or parameter binds it.
  *
  * @param scope - The scope the name is used in.

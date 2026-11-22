@@ -15,18 +15,6 @@ type Document = typeof PoDocument.Type;
 type Message = typeof PoMessage.Type;
 type Reference = typeof PoReference.Type;
 
-/** Why a PO text cannot be read, with the 1-based line where reading stopped. */
-class PoSyntaxError
-  extends /* @__PURE__ */ Schema.TaggedError<PoSyntaxError>()("PoSyntaxError", {
-    reason: Schema.String,
-    line: Schema.Int,
-  })
-{
-  override get message(): string {
-    return `line ${this.line}: ${this.reason}`;
-  }
-}
-
 type Keyword = "msgctxt" | "msgid" | "msgstr";
 
 // A message while its lines are read, its strings under the keywords that set them (`finish` names them): each is
@@ -52,15 +40,17 @@ const ESCAPES: ReadonlyMap<string, string> = new Map([
   ["\t", "t"],
 ]);
 // The letter after a backslash, and the character it stands for: ESCAPES reversed.
-const UNESCAPES: ReadonlyMap<string, string> = new Map([
-  ["\\", "\\"],
-  ['"', '"'],
-  ["n", "\n"],
-  ["r", "\r"],
-  ["t", "\t"],
-]);
+const UNESCAPES: ReadonlyMap<string, string> = new Map(
+  /* @__PURE__ */ Array.from(ESCAPES, ([char, code]): [string, string] => [code, char])
+);
+// Any character ESCAPES holds: a string without one is written as it is.
+const ESCAPABLE = /[\\"\n\r\t]/u;
 
 function escape(value: string): string {
+  if (!ESCAPABLE.test(value)) {
+    return value;
+  }
+
   let result = "";
 
   for (const char of value) {
@@ -73,6 +63,10 @@ function escape(value: string): string {
 
 // A backslash before a letter PO does not escape stays as written.
 function unescape(value: string): string {
+  if (!value.includes("\\")) {
+    return value;
+  }
+
   let result = "";
 
   for (let index = 0; index < value.length; index += 1) {
@@ -91,56 +85,94 @@ function unescape(value: string): string {
   return result;
 }
 
-// The text between a string's quotes. A header field may lack its closing quote. The failure names the text as given.
-function quoted(text: string, open: "closed" | "open-allowed"): Result.Result<string, string> {
+// The text after a string's opening quote, without its closing quote when it has one. A lone `"` reads as itself: the
+// ported reader's substring(1, 0) swaps its bounds.
+function unquote(trimmed: string): string {
+  if (trimmed === QUOTE) {
+    return trimmed;
+  }
+
+  return trimmed.endsWith(QUOTE) ? trimmed.slice(QUOTE.length, -QUOTE.length) : trimmed.slice(QUOTE.length);
+}
+
+// The text between a string's quotes. The failure names the text as given.
+function quoted(text: string): Result.Result<string, string> {
   const trimmed = text.trim();
 
-  if (!trimmed.startsWith(QUOTE)) {
-    return Result.fail(`Incomplete quoted string:\n> ${text}`);
-  }
-
-  if (!trimmed.endsWith(QUOTE)) {
-    return open === "open-allowed"
-      ? Result.succeed(trimmed.slice(QUOTE.length))
-      : Result.fail(`Incomplete quoted string:\n> ${text}`);
-  }
-
-  // A lone `"` reads as itself: the ported reader's substring(1, 0) swaps its bounds.
-  return Result.succeed(trimmed === QUOTE ? trimmed : trimmed.slice(QUOTE.length, -QUOTE.length));
+  return trimmed.startsWith(QUOTE) && trimmed.endsWith(QUOTE)
+    ? Result.succeed(unquote(trimmed))
+    : Result.fail(`Incomplete quoted string:\n> ${text}`);
 }
 
 const hasPrefix = (line: string, prefix: string): boolean => line.startsWith(`${prefix} `);
 
-// The ported reader, one trimmed line at a time: a message ends at a blank line, and the first message whose msgid
-// and msgstr are both empty is the header, whose quoted lines that follow are its fields, one per line.
-class MessageReader {
+type PendingComment = { readonly text: string; readonly line: number };
+
+// Why reading stopped, and the 1-based line where it did.
+const failureAt = (line: number, reason: string): string => `line ${line}: ${reason}`;
+
+// The reader, one trimmed line at a time, over GNU msgcat's entries: an entry starts at `msgctxt`, or at `msgid` not
+// after one, blank line or not; a comment belongs to the entry it precedes, across blank lines; every `#,` line of an
+// entry is read; an obsolete (`#~`) entry is dropped with the comments before it; comments after the last entry are
+// dropped. The first message whose msgid and msgstr are both empty is the header: its comments are dropped, and the
+// quoted lines that follow it, up to the next entry, are its fields, one per line. Each method returns the failure that
+// stops reading, if any.
+class PoReader {
   readonly messages: Array<Message> = [];
   readonly header: Record<string, string> = {};
   private inHeader = false;
+  // The entry being read: undefined before the first and while the header's fields are read.
   private draft: Draft | undefined;
+  // The keyword whose string a quoted line continues.
   private lastKeyword: Keyword | undefined;
+  // The last `msg…` word that opened a line, which decides whether a `msgid` starts an entry.
+  private lastWord: string | undefined;
+  // The comments since the last entry started, held for the next one.
+  private pending: Array<PendingComment> = [];
 
-  blank(line: number): PoSyntaxError | undefined {
-    const failure = this.inHeader ? undefined : this.finish(line);
-    this.inHeader = false;
-    this.lastKeyword = undefined;
+  read(text: string, line: number): string | undefined {
+    if (text.startsWith(OBSOLETE)) {
+      this.pending = [];
 
-    return failure;
+      return undefined;
+    }
+
+    if (text.startsWith(COMMENT)) {
+      this.pending.push({ text, line });
+
+      return undefined;
+    }
+
+    if (text === "") {
+      return undefined;
+    }
+
+    const word = KEYWORD.exec(text)?.[0];
+    const startsEntry = word === "msgctxt" || (word === "msgid" && this.lastWord !== "msgctxt");
+    this.lastWord = word ?? this.lastWord;
+    const started = startsEntry ? this.startEntry(line) : undefined;
+
+    if (started !== undefined) {
+      return started;
+    }
+
+    const reason = this.inHeader ? this.readField(text) : this.readEntryLine(text);
+
+    return reason === undefined ? undefined : failureAt(line, reason);
   }
 
-  finish(line: number): PoSyntaxError | undefined {
+  // Ends the entry being read, which is complete only with both its msgid and msgstr.
+  endEntry(line: number): string | undefined {
     const { draft } = this;
     this.draft = undefined;
+    this.lastKeyword = undefined;
 
     if (draft === undefined) {
       return undefined;
     }
 
     if (draft.msgid === undefined || draft.msgstr === undefined) {
-      return new PoSyntaxError({
-        reason: "Incomplete message entry: both msgid and msgstr are required",
-        line,
-      });
+      return failureAt(line, "Incomplete message entry: both msgid and msgstr are required");
     }
 
     const message: Message = {
@@ -155,41 +187,32 @@ class MessageReader {
     return undefined;
   }
 
-  read(text: string, line: number): PoSyntaxError | undefined {
-    const reason = this.inHeader ? this.readField(text) : this.readEntryLine(text);
+  // Ends the entry before, then gives the new one the comments held for it, stopping at the first that fails.
+  private startEntry(line: number): string | undefined {
+    const ended = this.endEntry(line);
 
-    return reason === undefined ? undefined : new PoSyntaxError({ reason, line });
-  }
-
-  private readField(text: string): string | undefined {
-    if (!text.startsWith(QUOTE)) {
-      return `Encountered unexpected non-quoted metadata line:\n> ${text}`;
+    if (ended !== undefined) {
+      return ended;
     }
 
-    const field = quoted(text, "open-allowed");
+    this.inHeader = false;
 
-    if (Result.isFailure(field)) {
-      return field.failure;
+    for (const comment of this.pending) {
+      const reason = this.applyComment(comment.text);
+
+      if (reason !== undefined) {
+        return failureAt(comment.line, reason);
+      }
     }
 
-    // `Key: value\n`: the value is trimmed, its newline with it.
-    const fieldText = unescape(field.success);
-    const separator = fieldText.indexOf(":");
-
-    if (separator > 0) {
-      this.header[fieldText.slice(0, separator).trim()] = fieldText.slice(separator + 1).trim();
-    }
+    this.pending = [];
 
     return undefined;
   }
 
-  private draftOf(): Draft {
-    this.draft ??= { references: [], extractedComments: [], flags: [] };
-
-    return this.draft;
-  }
-
-  private readEntryLine(text: string): string | undefined {
+  // A comment of the entry: `#,` flags, `#:` references and `#.` extracted comments are read, translator (`# `) and
+  // previous-string (`#| `) comments fail, and any other comment is dropped.
+  private applyComment(text: string): string | undefined {
     if (hasPrefix(text, "#")) {
       return `Translator comments (#) are not supported, use inline descriptions instead:\n> ${text}`;
     }
@@ -207,11 +230,7 @@ class MessageReader {
           flags.push(flag.trim());
         }
       }
-
-      return undefined;
-    }
-
-    if (hasPrefix(text, "#:")) {
+    } else if (hasPrefix(text, "#:")) {
       const [path = "", lineText] = text.slice(2).trim().split(":");
       // oxlint-disable-next-line radix -- conformance: the ported reader parses a line with parseInt's own radix, so a catalog it wrote reads back the same ("0x1A" is line 26).
       const parsedLine = lineText === undefined ? Number.NaN : Number.parseInt(lineText);
@@ -219,16 +238,32 @@ class MessageReader {
       const reference: Reference =
         Number.isNaN(parsedLine) || parsedLine === 0 ? { path } : { path, line: parsedLine };
       this.draftOf().references.push(reference);
-
-      return undefined;
-    }
-
-    if (hasPrefix(text, "#.")) {
+    } else if (hasPrefix(text, "#.")) {
       this.draftOf().extractedComments.push(text.slice(2).trim());
-
-      return undefined;
     }
 
+    return undefined;
+  }
+
+  // A header field: `"Key: value\n"`. It may lack its closing quote; the value is trimmed, its newline with it.
+  private readField(text: string): string | undefined {
+    if (!text.startsWith(QUOTE)) {
+      return `Encountered unexpected non-quoted metadata line:\n> ${text}`;
+    }
+
+    const fieldText = unescape(unquote(text));
+    const separator = fieldText.indexOf(":");
+
+    if (separator > 0) {
+      this.header[fieldText.slice(0, separator).trim()] = fieldText.slice(separator + 1).trim();
+    }
+
+    return undefined;
+  }
+
+  // A line of the entry that is not a comment: a keyword's string, or a quoted line continuing the last one. Any other
+  // line is dropped.
+  private readEntryLine(text: string): string | undefined {
     if (hasPrefix(text, "msgid_plural")) {
       return `Plural forms (msgid_plural) are not supported, use ICU pluralization instead:\n> ${text}`;
     }
@@ -239,15 +274,17 @@ class MessageReader {
       }
     }
 
-    if (text.startsWith(QUOTE)) {
-      return this.continueString(text);
-    }
+    return text.startsWith(QUOTE) ? this.continueString(text) : undefined;
+  }
 
-    return undefined;
+  private draftOf(): Draft {
+    this.draft ??= { references: [], extractedComments: [], flags: [] };
+
+    return this.draft;
   }
 
   private readKeyword(keyword: Keyword, rest: string): string | undefined {
-    const value = quoted(rest, "closed");
+    const value = quoted(rest);
 
     if (Result.isFailure(value)) {
       return value.failure;
@@ -275,7 +312,7 @@ class MessageReader {
       return `Encountered unexpected quoted line:\n> ${text}`;
     }
 
-    const value = quoted(text, "closed");
+    const value = quoted(text);
 
     if (Result.isFailure(value)) {
       return value.failure;
@@ -287,67 +324,20 @@ class MessageReader {
   }
 }
 
-type PendingComment = { readonly text: string; readonly line: number };
-
-// GNU msgcat's entries over the ported reader: an entry starts at `msgctxt`, or at `msgid` not after one, blank line
-// or not; a comment belongs to the entry it precedes, across blank lines; every `#,` line of an entry is read; an
-// obsolete (`#~`) entry is dropped with the comments before it; comments after the last entry are dropped.
-function readPoText(text: string): Result.Result<Document, PoSyntaxError> {
-  const reader = new MessageReader();
-  let pending: Array<PendingComment> = [];
-  let keyword: string | undefined;
-  let started = false;
+// The document a PO text holds, or the reason and line where reading stopped.
+function readPoText(text: string): Result.Result<Document, string> {
+  const reader = new PoReader();
   const lines = text.split(/\r?\n/u);
 
   for (const [index, raw] of lines.entries()) {
-    const line = index + 1;
-    const trimmed = raw.trim();
-
-    if (trimmed.startsWith(OBSOLETE)) {
-      pending = [];
-      continue;
-    }
-
-    if (trimmed.startsWith(COMMENT)) {
-      pending.push({ text: trimmed, line });
-      continue;
-    }
-
-    if (trimmed === "") {
-      continue;
-    }
-
-    const next = KEYWORD.exec(trimmed)?.[0];
-
-    if (next === "msgctxt" || (next === "msgid" && keyword !== "msgctxt")) {
-      const ended = started ? reader.blank(line) : undefined;
-
-      if (ended !== undefined) {
-        return Result.fail(ended);
-      }
-
-      // Reading stops at the first comment that fails.
-      for (const comment of pending) {
-        const failure = reader.read(comment.text, comment.line);
-
-        if (failure !== undefined) {
-          return Result.fail(failure);
-        }
-      }
-
-      pending = [];
-    }
-
-    keyword = next ?? keyword;
-    started = true;
-    const failure = reader.read(trimmed, line);
+    const failure = reader.read(raw.trim(), index + 1);
 
     if (failure !== undefined) {
       return Result.fail(failure);
     }
   }
 
-  const failure = reader.finish(lines.length);
+  const failure = reader.endEntry(lines.length);
 
   if (failure !== undefined) {
     return Result.fail(failure);
@@ -408,9 +398,9 @@ function writePoText(document: Document): string {
  */
 export const PoText = /* @__PURE__ */ Schema.String.pipe(
   /* @__PURE__ */ Schema.decodeTo(PoDocument, {
-    decode: /* @__PURE__ */ SchemaGetter.transformEffect((text: string) =>
+    decode: /* @__PURE__ */ SchemaGetter.transformEffect((text: string, options) =>
       Effect.fromResult(readPoText(text)).pipe(
-        Effect.mapError((error) => new SchemaIssue.InvalidValue({ message: error.message }, text))
+        Effect.mapError((message) => new SchemaIssue.InvalidValue({ message }, text, options))
       )
     ),
     encode: /* @__PURE__ */ SchemaGetter.transform(writePoText),

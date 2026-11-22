@@ -46,8 +46,8 @@ const FACTORY_KINDS: ReadonlyMap<string, "t" | "intl"> = new Map([
   ["getIntl", "intl"],
   ["createIntl", "intl"],
 ]);
-/** The Effect service `yield*` reads an IntlInstance from, and the subpath it is imported from. */
-export const SERVICE = { imported: "CurrentIntl", source: "@elmeragroup/intl/effect" } as const;
+// The Effect service `yield*` reads an IntlInstance from, and the subpath it is imported from.
+const SERVICE = { imported: "CurrentIntl", source: "@elmeragroup/intl/effect" } as const;
 // A const key resolves through at most this many const aliases.
 const MAX_ALIAS_DEPTH = 16;
 

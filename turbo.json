@@ -10,8 +10,8 @@
     "//#lint:oxlint": {
       "cache": false
     },
-    // The Effect lint pass: type-aware over the files .oxlintrc.effect.json lists and every module they import, so no
-    // input list can name what it reads. Uncached, as lint:oxlint is.
+    // The Effect lint pass: type-aware over the whole workspace and every module it imports, so no input list can name
+    // what it reads. Uncached, as lint:oxlint is.
     "//#lint:effect": {
       "cache": false
     },

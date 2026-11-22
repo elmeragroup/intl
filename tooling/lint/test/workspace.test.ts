@@ -1,11 +1,8 @@
 // The contracts that live in JSON and YAML, which oxlint does not read: package manifests, the dependency catalog, the
 // Node pin and the lint config itself. Fast and unbuilt, so it runs in the same feedback loop as lint.
-import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Expression } from "oxc-parser";
-import { parseSync, Visitor } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -83,60 +80,6 @@ function sourceTargets(target: ExportTarget): ReadonlyArray<string> {
             ? Object.values(value).filter((nested): nested is string => typeof nested === "string")
             : sourceTargets(value)
       );
-}
-
-// A literal module specifier's value as JavaScript reads it: escapes decoded, parentheses and an expression-free
-// template literal seen through. Any other expression names no fixed module.
-function specifierValue(node: Expression): string | undefined {
-  if (node.type === "ParenthesizedExpression") {
-    return specifierValue(node.expression);
-  }
-
-  if (node.type === "Literal" && typeof node.value === "string") {
-    return node.value;
-  }
-
-  return node.type === "TemplateLiteral" && node.expressions.length === 0
-    ? (node.quasis[0]?.value.cooked ?? undefined)
-    : undefined;
-}
-
-// Whether a module imports effect: a static import or re-export (the parser's module record holds their decoded
-// specifiers), or a dynamic import of a literal specifier. Text that only looks like an import (a fixture in a
-// template literal) is none.
-function importsEffect(file: string): boolean {
-  const { module, program } = parseSync(file, read(file));
-  const specifiers = [
-    ...module.staticImports.map((declaration) => declaration.moduleRequest.value),
-    ...module.staticExports.flatMap((declaration) =>
-      declaration.entries.flatMap((entry) =>
-        entry.moduleRequest === null ? [] : [entry.moduleRequest.value]
-      )
-    ),
-  ];
-
-  new Visitor({
-    ImportExpression(node) {
-      const specifier = specifierValue(node.source);
-
-      if (specifier !== undefined) {
-        specifiers.push(specifier);
-      }
-    },
-  }).visit(program);
-
-  return specifiers.some((specifier) => /^effect(?:\/|$)/u.test(specifier));
-}
-
-// The files `lint:effect` lints, as it lists them: the script itself run with `--debug=files`, so its paths and
-// oxlint's own ignores (.gitignore, build output) decide.
-function effectLintFiles(): ReadonlyArray<string> {
-  const listed = execFileSync("pnpm", ["--silent", "run", "lint:effect", "--debug=files"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-
-  return listed.split("\n").filter((line) => line !== "" && existsSync(join(ROOT, line)));
 }
 
 // Unit under test: the committed workspace configuration. Oracle: the conventions AGENTS.md states, each case naming
@@ -283,17 +226,15 @@ describe(".oxlintrc.json", () => {
 
 // The Effect diagnostics are configured twice: tooling/typescript/effect.json for the editor (the Effect language
 // service) and .oxlintrc.effect.json for `pnpm lint:effect`, the gate, whose rules exist only in the Effect-patched
-// oxlint. These hold the two to one decision per rule, and the gate to the files that use Effect.
+// oxlint. These hold the two to one decision per rule, and the gate to the main pass's scope.
 type EffectPreset = {
   readonly compilerOptions: {
     readonly plugins: ReadonlyArray<{ readonly diagnosticSeverity: Readonly<Record<string, string>> }>;
   };
 };
 type EffectLintConfig = {
-  readonly overrides: ReadonlyArray<{
-    readonly files: ReadonlyArray<string>;
-    readonly rules: Readonly<Record<string, string>>;
-  }>;
+  readonly ignorePatterns: ReadonlyArray<string>;
+  readonly rules: Readonly<Record<string, string>>;
 };
 type EffectSchema = {
   readonly definitions: {
@@ -311,7 +252,7 @@ describe("Effect diagnostics", () => {
   const severities =
     (parseJsonc(presetText) as EffectPreset).compilerOptions.plugins[0]?.diagnosticSeverity ?? {};
   // SAFETY: as above.
-  const [override] = (parseJsonc(lintText) as EffectLintConfig).overrides;
+  const lintConfig = parseJsonc(lintText) as EffectLintConfig;
   // The oxlint name of a language-service rule (each rule's docs list both): kebab case under `effecttsgo/`.
   const oxlintName = (rule: string) =>
     `effecttsgo/${rule.replace("UUID", "Uuid").replaceAll(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`;
@@ -339,8 +280,8 @@ describe("Effect diagnostics", () => {
       .filter(([, level]) => level === "error")
       .map(([rule]) => oxlintName(rule));
 
-    expect(Object.keys(override?.rules ?? {}).toSorted()).toEqual(errors.toSorted());
-    expect(new Set(Object.values(override?.rules ?? {}))).toEqual(new Set(["error"]));
+    expect(Object.keys(lintConfig.rules).toSorted()).toEqual(errors.toSorted());
+    expect(new Set(Object.values(lintConfig.rules))).toEqual(new Set(["error"]));
     expect(lintConfigFindings(lintText)).toEqual({
       warned: [],
       unexplainedOffs: [],
@@ -357,12 +298,13 @@ describe("Effect diagnostics", () => {
     expect(script).toContain(`--tsrs-lint=${String(tsrs)} `);
   });
 
-  // Lint reads one file at a time and cannot see which files the second config scopes, so the list is held here: the
-  // gate covers every source file that imports effect, and nothing else.
-  it("covers every file that imports effect", () => {
-    const sources = effectLintFiles().filter((file) => importsEffect(file));
+  // The Effect pass lints the whole workspace, as the main pass does: a file that only consumes Effect values (yields
+  // CurrentIntl, names an effect type through import()) needs the rules as much as one that imports effect. Both
+  // passes skip the same paths.
+  it("ignores what the main pass ignores", () => {
+    // SAFETY: the committed main lint config; a missing field fails the comparison.
+    const main = parseJsonc(read(".oxlintrc.json")) as Pick<EffectLintConfig, "ignorePatterns">;
 
-    expect(sources.length).toBeGreaterThan(0);
-    expect([...(override?.files ?? [])].toSorted()).toEqual(sources.toSorted());
+    expect(lintConfig.ignorePatterns).toEqual(main.ignorePatterns);
   });
 });

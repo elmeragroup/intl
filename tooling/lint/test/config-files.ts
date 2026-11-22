@@ -105,6 +105,32 @@ function parseWithComments(text: string) {
   };
 }
 
+// Each rule of a map of severities with its level, and for a rule turned off whether a comment explains it: one above
+// the rule or above its run of offs.
+function ruleLevels(
+  rules: Node | undefined,
+  commentedBefore: ReturnType<typeof parseWithComments>["commentedBefore"]
+) {
+  const entries = rules?.children ?? [];
+
+  return entries.map((entry, index) => {
+    const id = String(entry.children?.[0]?.value);
+    const level = severity(entry.children?.[1]);
+
+    if (level !== "off" || rules === undefined) {
+      return { id, level, commented: false };
+    }
+
+    let first = index;
+
+    while (first > 0 && severity(entries[first - 1]?.children?.[1]) === "off") {
+      first -= 1;
+    }
+
+    return { id, level, commented: commentedBefore(entries, first, rules) };
+  });
+}
+
 /** What the manifest test asks of a map of rule severities, as the rule names that break it. */
 export type SeverityFindings = {
   /** Rules at a level other than `error` and `off`. */
@@ -126,30 +152,14 @@ export function effectPresetFindings(text: string): SeverityFindings {
     root === undefined
       ? undefined
       : findNodeAtLocation(root, ["compilerOptions", "plugins", 0, "diagnosticSeverity"]);
-  const entries = rules?.children ?? [];
-  const unclear: Array<string> = [];
-  const unexplainedOffs: Array<string> = [];
+  const levels = ruleLevels(rules, commentedBefore);
 
-  entries.forEach((entry, index) => {
-    const id = String(entry.children?.[0]?.value);
-    const level = severity(entry.children?.[1]);
-
-    if (level !== "error" && level !== "off") {
-      unclear.push(id);
-    }
-
-    let first = index;
-
-    while (first > 0 && severity(entries[first - 1]?.children?.[1]) === "off") {
-      first -= 1;
-    }
-
-    if (level === "off" && rules !== undefined && !commentedBefore(entries, first, rules)) {
-      unexplainedOffs.push(id);
-    }
-  });
-
-  return { unclear, unexplainedOffs };
+  return {
+    unclear: levels.filter(({ level }) => level !== "error" && level !== "off").map(({ id }) => id),
+    unexplainedOffs: levels
+      .filter(({ level, commented }) => level === "off" && !commented)
+      .map(({ id }) => id),
+  };
 }
 
 /**
@@ -165,32 +175,15 @@ export function lintConfigFindings(text: string): LintConfigFindings {
   const unexplainedOverrides: Array<string> = [];
 
   const checkRules = (rules: Node | undefined, explainedByOverride: boolean | undefined): void => {
-    const entries = rules?.children ?? [];
-
-    entries.forEach((entry, index) => {
-      const id = String(entry.children?.[0]?.value);
-      const level = severity(entry.children?.[1]);
-
+    for (const { id, level, commented } of ruleLevels(rules, commentedBefore)) {
       if (level === "warn") {
         warned.push(id);
       }
 
-      if (level !== "off" || rules === undefined) {
-        return;
-      }
-
-      let first = index;
-
-      while (first > 0 && severity(entries[first - 1]?.children?.[1]) === "off") {
-        first -= 1;
-      }
-
-      const explained = explainedByOverride ?? commentedBefore(entries, first, rules);
-
-      if (!explained) {
+      if (level === "off" && !(explainedByOverride ?? commented)) {
         unexplainedOffs.push(id);
       }
-    });
+    }
   };
 
   for (const category of property(root, "categories")?.children ?? []) {

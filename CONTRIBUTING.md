@@ -15,8 +15,8 @@ for the package responsibilities, code conventions and checks.
 
 ### Effect diagnostics in the editor
 
-The files that import `effect` are checked by the Effect language service: `pnpm lint:effect`, part of
-`pnpm lint` and CI, runs its rules through the Effect-patched oxlint. The committed editor settings
+Code that uses Effect values is checked by the Effect language service: `pnpm lint:effect`, part of
+`pnpm lint` and CI, runs its rules over the whole workspace through the Effect-patched oxlint. The committed editor settings
 keep the stock tsrs and oxlint, so they show none of these diagnostics. To see them while editing,
 point your editor's TypeScript server at the Effect-patched build:
 `pnpm exec effect-tsgo get-exe-path` prints its path, and `pnpm exec effect-tsgo setup` walks through

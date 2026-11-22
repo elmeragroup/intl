@@ -89,3 +89,20 @@ it("reads a reference line past Number's range", () => {
     Result.isSuccess(decoded) ? decoded.success.messages[0]?.references : decoded.failure.message
   ).toEqual([{ path: "src/a.tsx", line: Number.POSITIVE_INFINITY }]);
 });
+
+// Unit under test: PoText's decode failure. Oracle: Schema's own contract for `reportInput: true`, under which every
+// issue keeps the input it rejected, and without which none does.
+it("keeps the rejected text on its issue only when asked to", () => {
+  const text = 'msgid "unclosed';
+  const reported = decode(text, { reportInput: true });
+  const plain = decode(text);
+  const issueOf = (result: typeof plain) =>
+    Result.isFailure(result) && result.failure.issue._tag === "Encoding"
+      ? result.failure.issue.issue
+      : undefined;
+
+  expect(Result.isFailure(reported) ? reported.failure.message : undefined).toContain("line 1: ");
+  expect(issueOf(reported)).toMatchObject({ _tag: "InvalidValue", input: text });
+  expect(issueOf(plain)).toMatchObject({ _tag: "InvalidValue" });
+  expect(Object.hasOwn(issueOf(plain) ?? {}, "input")).toBe(false);
+});

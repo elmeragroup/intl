@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,13 @@ const CATALOGS = { nb: compiled("nb", { [SOURCE]: "Hei, {name}" }), en: english(
 
 // What a server knows of the request the options resolve from: its locale (a cookie, in an app).
 class RequestLocale extends Context.Service<RequestLocale, keyof typeof CATALOGS>()("RequestLocale") {}
+
+// The app's options effect: the request's locale and its catalog.
+const requestOptions = Effect.gen(function* () {
+  const locale = yield* RequestLocale;
+
+  return { locale, catalog: CATALOGS[locale], timeZone: "UTC" };
+});
 
 class CatalogUnavailable extends Schema.TaggedError<CatalogUnavailable>()("CatalogUnavailable", {
   locale: Schema.String,
@@ -52,18 +60,13 @@ afterAll(() => runtime.dispose());
 describe("CurrentIntl.provide", () => {
   it("gives two overlapping requests in two locales their own translator", async () => {
     const barrier = await runtime.runPromise(makeBarrier(2));
-    const intlOptions = Effect.gen(function* () {
-      const locale = yield* RequestLocale;
-
-      return { locale, catalog: CATALOGS[locale], timeZone: "UTC" };
-    });
     // Both requests have their translators before either reads one.
     const handler = Effect.gen(function* () {
       yield* barrier.arrive;
       const { t } = yield* CurrentIntl;
 
       return t("Hello, {name}", { name: "Ada" });
-    }).pipe(CurrentIntl.provide(intlOptions));
+    }).pipe(CurrentIntl.provide(requestOptions));
     const request = (locale: keyof typeof CATALOGS) =>
       runtime.runPromise(handler.pipe(Effect.provideService(RequestLocale, locale)));
 
@@ -73,13 +76,7 @@ describe("CurrentIntl.provide", () => {
   // A layer would be built once by the outer provide and reused by the inner one (Effect.provide reuses a layer an
   // enclosing provide built), so the inner request would get the outer translator.
   it("gives a run nested in another its own translator from the same provider", async () => {
-    const provideIntl = CurrentIntl.provide(
-      Effect.gen(function* () {
-        const locale = yield* RequestLocale;
-
-        return { locale, catalog: CATALOGS[locale], timeZone: "UTC" };
-      })
-    );
+    const provideIntl = CurrentIntl.provide(requestOptions);
     const greet = Effect.gen(function* () {
       const { t } = yield* CurrentIntl;
 
@@ -111,5 +108,32 @@ describe("CurrentIntl.provide", () => {
       Exit.fail(new CatalogUnavailable({ locale: "nb" }))
     );
     expect(await runtime.runPromise(Ref.get(ran))).toBe(false);
+  });
+});
+
+// Unit under test: `CurrentIntl.layer`, the fixed translator. Oracle: the translation the nb catalog states, and
+// createIntl's own contract that a catalog of another catalog version is a defect, which the layer defers to the
+// moment it is built.
+describe("CurrentIntl.layer", () => {
+  const greet = Effect.gen(function* () {
+    const { t } = yield* CurrentIntl;
+
+    return t("Hello, {name}", { name: "Ada" });
+  });
+
+  it("serves the translator its options build", async () => {
+    const layer = CurrentIntl.layer({ locale: "nb", catalog: CATALOGS.nb, timeZone: "UTC" });
+
+    expect(await runtime.runPromise(greet.pipe(Effect.provide(layer)))).toBe("Hei, Ada");
+  });
+
+  it("builds the translator when the layer is built, not when it is made", async () => {
+    const catalog = { ...CATALOGS.nb, v: 999 };
+    const layer = CurrentIntl.layer({ locale: "nb", catalog, timeZone: "UTC" });
+    const exit = await runtime.runPromise(Effect.exit(greet.pipe(Effect.provide(layer))));
+    const defect = Exit.isFailure(exit) && Cause.hasDies(exit.cause) ? Cause.squash(exit.cause) : undefined;
+
+    expect(defect).toBeInstanceOf(Error);
+    expect(defect instanceof Error ? defect.message : undefined).toContain("catalog version 999");
   });
 });

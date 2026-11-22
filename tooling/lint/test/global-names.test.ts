@@ -5,7 +5,7 @@ const RUNTIME_NAMESPACE = { namespace: "elmera-intl" };
 
 // Unit under test: elmera-workspace/global-names. Oracle: the global-namespace contract per case: a lint plugin's
 // name, a Symbol.for key, a custom HMR event, and (in published src) a `*_EVENT`/`*_FILE` string constant and an Effect
-// `Context.Service` key start with `elmera-`.
+// `Context.Service` or `Context.Reference` key start with `elmera-`.
 createTester().run("global-names", globalNames, {
   valid: [
     // Vite's own HMR events keep Vite's names: a renamed listener would never fire.
@@ -39,6 +39,11 @@ createTester().run("global-names", globalNames, {
     // Through a namespace import of effect's root module.
     {
       code: `import * as Fx from "effect";\nexport class CurrentIntl extends Fx.Context.Service<CurrentIntl, number>()("elmera-intl/CurrentIntl") {}`,
+      filename: fixture("runtime/src/effect.ts"),
+    },
+    // Context.Reference, a service with a default value, shares the key space.
+    {
+      code: `import * as Context from "effect/Context";\nexport const Locale = Context.Reference<string>("elmera-intl/Locale", { defaultValue: () => "en" });`,
       filename: fixture("runtime/src/effect.ts"),
     },
     // Only effect's Context.Service is a service: a local `Context`, or a test's own double, is not checked.
@@ -94,6 +99,17 @@ createTester().run("global-names", globalNames, {
       code: `import * as Fx from "effect";\nexport const Locale = Fx.Context.Service<string>("Locale");`,
       filename: fixture("runtime/src/effect.ts"),
       errors: [{ messageId: "serviceKey", data: { value: "Locale", ...RUNTIME_NAMESPACE } }],
+    },
+    // Context.Reference keys share Context.Service's space, through each import of Context.
+    {
+      code: `import * as Context from "effect/Context";\nexport const Locale = Context.Reference<string>("Locale", { defaultValue: () => "en" });`,
+      filename: fixture("runtime/src/effect.ts"),
+      errors: [{ messageId: "serviceKey", data: { value: "Locale", ...RUNTIME_NAMESPACE } }],
+    },
+    {
+      code: `import { Reference } from "effect/Context";\nexport const Locale = Reference<string>("intl/Locale", { defaultValue: () => "en" });`,
+      filename: fixture("runtime/src/effect.ts"),
+      errors: [{ messageId: "serviceKey", data: { value: "intl/Locale", ...RUNTIME_NAMESPACE } }],
     },
     // A key the rule cannot read is not checked, so it must be a literal at the declaration.
     {

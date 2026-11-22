@@ -1,14 +1,15 @@
 // A name in a namespace the whole app shares carries the `elmera-` prefix, so it cannot collide with another library's:
 // the oxlint plugin name (the prefix of every rule id an app writes), a `Symbol.for` key, a dev server's custom HMR
 // event, and, in the published packages' source, the string constants that name such things (`*_EVENT`, `*_FILE`,
-// such as `elmera-intl.json`), and the key of an Effect `Context.Service` declared there (`elmera-intl/CurrentIntl`):
-// a host's Context holds every library's services by key, so such a key carries its own package's namespace
-// (`@elmeragroup/intl` → `elmera-intl/`), written as a literal where it is declared. Imported names do not need it (`intl()`): the specifier already scopes them. The bin
-// and the export conditions live in package.json, which the manifest test checks. Vite's own HMR events keep the names
-// Vite gives them, since a listener under any other name never fires.
+// such as `elmera-intl.json`), and the key of an Effect `Context.Service` or `Context.Reference` declared there
+// (`elmera-intl/CurrentIntl`): a host's Context holds every library's services by key, so such a key carries its own
+// package's namespace (`@elmeragroup/intl` → `elmera-intl/`), written as a literal where it is declared. Imported
+// names do not need it (`intl()`): the specifier already scopes them. The bin and the export conditions live in
+// package.json, which the manifest test checks. Vite's own HMR events keep the names Vite gives them, since a listener
+// under any other name never fires.
 import type { ESTree, Rule } from "@oxlint/plugins";
 
-import { dottedName, moduleExportName, resolveVariable, stringLiteral, unwrap } from "../ast.ts";
+import { dottedName, importOf, moduleExportName, stringLiteral, unwrap } from "../ast.ts";
 import { isPublishedSource, packageOf } from "../workspace.ts";
 
 const PREFIX = /^elmera[-.]/u;
@@ -35,7 +36,7 @@ export const VITE_EVENTS: ReadonlySet<string> = new Set([
   "vite:client:disconnect",
 ]);
 
-// The Effect modules `Context.Service` is read from: `import * as Context from "effect/Context"`,
+// The Effect modules `Context.Service` and `Context.Reference` are read from: `import * as Context from "effect/Context"`,
 // `import { Context } from "effect"`, or `import { Service } from "effect/Context"`.
 const CONTEXT_MODULE = "effect/Context";
 const EFFECT_ROOT = "effect";
@@ -77,17 +78,6 @@ export const globalNames: Rule = {
       }
     }
 
-    // The import an identifier resolves to: its module and specifier (a local binding of the same name is none).
-    function importOf(
-      identifier: ESTree.IdentifierReference
-    ): { readonly source: string; readonly specifier: ESTree.Node } | undefined {
-      const definition = resolveVariable(context.sourceCode.getScope(identifier), identifier.name)?.defs[0];
-
-      return definition?.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration"
-        ? { source: definition.parent.source.value, specifier: definition.node }
-        : undefined;
-    }
-
     // The export of effect a callee names, as a path from effect's root module: `Context.Service`, through a namespace
     // or named import of `effect` or of `effect/Context`, any depth of static members. A local binding names none.
     function effectPath(callee: ESTree.Expression): ReadonlyArray<string> | undefined {
@@ -99,7 +89,8 @@ export const globalNames: Rule = {
         value = unwrap(value.object);
       }
 
-      const imported = value.type === "Identifier" ? importOf(value) : undefined;
+      const imported =
+        value.type === "Identifier" ? importOf(context.sourceCode.getScope(value), value.name) : undefined;
       const { specifier } = imported ?? {};
       const base =
         imported?.source === EFFECT_ROOT ? [] : imported?.source === CONTEXT_MODULE ? ["Context"] : undefined;
@@ -117,22 +108,25 @@ export const globalNames: Rule = {
         : undefined;
     }
 
-    function isContextService(callee: ESTree.Expression): boolean {
+    // Which Context key a callee declares: `Context.Service`, or `Context.Reference` (effect's
+    // `export const Reference = Service`, a service with a default value), whose keys share one space.
+    function contextKeyKind(callee: ESTree.Expression): "Service" | "Reference" | undefined {
       const path = effectPath(callee);
+      const kind = path?.length === 2 && path[0] === "Context" ? path[1] : undefined;
 
-      return path?.length === 2 && path[0] === "Context" && path[1] === "Service";
+      return kind === "Service" || kind === "Reference" ? kind : undefined;
     }
 
-    // The key literal of a service declaration: `Context.Service<S, A>()("key")` (the class form) or
-    // `Context.Service<S>("key")`.
+    // The key literal of a service declaration: `Context.Service<S, A>()("key")` (the class form),
+    // `Context.Service<S>("key")` or `Context.Reference<S>("key", { defaultValue })`.
     function serviceKey(node: ESTree.CallExpression): ESTree.CallExpression["arguments"][number] | undefined {
       const callee = unwrap(node.callee);
       const [first] = node.arguments;
       const declares =
         (callee.type === "CallExpression" &&
           callee.arguments.length === 0 &&
-          isContextService(callee.callee)) ||
-        isContextService(callee);
+          contextKeyKind(callee.callee) === "Service") ||
+        contextKeyKind(callee) !== undefined;
 
       return declares ? first : undefined;
     }

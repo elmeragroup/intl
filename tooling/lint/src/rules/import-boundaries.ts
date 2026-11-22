@@ -67,8 +67,10 @@ export const importBoundaries: Rule = {
     const mayUseInternal = inRuntime || pkg.name === TOOLS;
     const shipped = isPublishedSource(pkg, context.filename);
     const srcRoot = resolve(pkg.root, "src");
-    const inRuntimeSource = inRuntime && pathInPackage(pkg, context.filename).startsWith("src/");
-    const isEffectEntry = inRuntime && pathInPackage(pkg, context.filename) === EFFECT_ENTRY;
+    const path = pathInPackage(pkg, context.filename);
+    const inRuntimeSource = inRuntime && path.startsWith("src/");
+    // Every runtime module but the `/effect` entry stays off `effect` and off that entry.
+    const barredFromEffect = inRuntimeSource && path !== EFFECT_ENTRY;
     const effectEntryPath = resolve(pkg.root, EFFECT_ENTRY.replace(/\.ts$/u, ""));
 
     function check(source: ESTree.StringLiteral, typeOnly: boolean): void {
@@ -78,7 +80,7 @@ export const importBoundaries: Rule = {
       if (specifier.startsWith(".")) {
         const target = resolve(dirname(context.filename), specifier);
 
-        if (inRuntimeSource && !isEffectEntry && target.replace(/\.[cm]?[jt]sx?$/u, "") === effectEntryPath) {
+        if (barredFromEffect && target.replace(/\.[cm]?[jt]sx?$/u, "") === effectEntryPath) {
           context.report({ node: source, messageId: "effectEntry", data });
         }
 
@@ -108,11 +110,11 @@ export const importBoundaries: Rule = {
         context.report({ node: source, messageId: "internal", data });
       }
 
-      if (name === EFFECT && inRuntimeSource && !isEffectEntry) {
+      if (name === EFFECT && barredFromEffect) {
         context.report({ node: source, messageId: "effect", data });
       }
 
-      if (specifier === EFFECT_SUBPATH && inRuntimeSource && !isEffectEntry) {
+      if (specifier === EFFECT_SUBPATH && barredFromEffect) {
         context.report({ node: source, messageId: "effectEntry", data });
       }
 

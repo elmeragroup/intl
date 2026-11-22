@@ -42,7 +42,7 @@ workspace export map has an `elmera-source` condition pointing at `src`, which `
 enables for TypeScript and the lint script passes to Node (`--conditions=elmera-source`) for the
 plugins Oxlint loads from source. Run Oxlint through `pnpm lint`, which sets that and
 `OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint`; neither needs a build. `pnpm lint` also runs `pnpm lint:effect`,
-the Effect diagnostics on the files that import `effect`, through the Effect-patched oxlint (`.oxlintrc.effect.json`;
+the Effect diagnostics over the whole workspace (they fire only on Effect values), through the Effect-patched oxlint (`.oxlintrc.effect.json`;
 tooling/typescript/effect.json holds the same rules for the editor). The e2e fixtures'
 `type-check` drops the condition (`--customConditions null`) to read the built declarations, as
 consumers do. Development needs macOS or glibc-based Linux: the Effect-patched binaries `lint:effect` runs do not support musl.

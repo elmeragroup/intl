@@ -105,3 +105,6 @@ const _infallible: Effect.Effect<string> = served;
 // @ts-expect-error without CurrentIntl.provide the handler still requires CurrentIntl
 // @effect-diagnostics-next-line missingEffectContext:off - a type test: the @ts-expect-error above is the assertion
 const _unserved: Effect.Effect<string> = greet;
+// CurrentIntl.layer discharges the CurrentIntl requirement and adds neither a failure nor a requirement of its own.
+declare const fixedOptions: CreateIntlOptions;
+const _fixed: Effect.Effect<string> = Effect.provide(greet, CurrentIntl.layer(fixedOptions));

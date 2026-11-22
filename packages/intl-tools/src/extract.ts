@@ -130,7 +130,7 @@ function importsPackageIn(program: Program): boolean {
   );
 }
 
-type Use = { readonly parent: Node | undefined; readonly child: Node | undefined };
+type Use = { readonly parent: Node | undefined; readonly child: Node | undefined; readonly index: number };
 type PendingFailure = { readonly message: string; readonly offset: number };
 
 // One file's walk. Names resolve through the scope tree; the walk itself only tracks where it is (current scope,
@@ -261,22 +261,18 @@ class Extraction {
     return name._tag === "Static" ? name.name : undefined;
   }
 
-  // The nearest ancestor of the visited node that is not one of `transparent`, and its child on the way down.
-  private useOf(transparent: ReadonlySet<string>): Use {
-    return this.useAt(this.ancestors.length - 1, transparent);
-  }
-
-  // The same for the ancestor at `index` (the visited node is the last).
-  private useAt(index: number, transparent: ReadonlySet<string>): Use {
-    for (let i = index - 1; i >= 0; i -= 1) {
+  // The nearest ancestor of the visited node (or of the ancestor at `from`) that is not one of `transparent`, its child
+  // on the way down, and its index among the ancestors.
+  private useOf(transparent: ReadonlySet<string>, from = this.ancestors.length - 1): Use {
+    for (let i = from - 1; i >= 0; i -= 1) {
       const ancestor = this.ancestors[i];
 
       if (ancestor && !transparent.has(ancestor.type)) {
-        return { parent: ancestor, child: this.ancestors[i + 1] };
+        return { parent: ancestor, child: this.ancestors[i + 1], index: i };
       }
     }
 
-    return { parent: undefined, child: undefined };
+    return { parent: undefined, child: undefined, index: -1 };
   }
 
   private visit(node: Node, parent: Node | undefined): void {
@@ -350,16 +346,14 @@ class Extraction {
   // `CurrentIntl` is read only as `yield* CurrentIntl` and provided only by calling `.layer(…)` or `.provide(…)`: any
   // other read (`.use`, `Effect.map(CurrentIntl, …)`, an alias) reaches the translator where extraction cannot see it.
   private checkService(name: string, node: Node): void {
-    const { parent, child } = this.useOf(VALUE_TRANSPARENT);
+    const { parent, child, index } = this.useOf(VALUE_TRANSPARENT);
     const yielded = parent?.type === "YieldExpression" && parent.delegate && parent.argument === child;
     const member =
       parent?.type === "MemberExpression" && parent.object === child
         ? this.staticMemberName(parent)
         : undefined;
     const call =
-      member === "layer" || member === "provide"
-        ? this.useAt(this.ancestors.lastIndexOf(parent ?? node), VALUE_TRANSPARENT)
-        : undefined;
+      member === "layer" || member === "provide" ? this.useOf(VALUE_TRANSPARENT, index) : undefined;
     const provided = call?.parent?.type === "CallExpression" && call.parent.callee === call.child;
 
     if (!yielded && !provided) {
