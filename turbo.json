@@ -4,11 +4,15 @@
   "ui": "stream",
   "globalEnv": ["NODE_ENV"],
   "tasks": {
-    // Reads source only: type-aware rules and the plugins resolve the workspace packages through their
-    // `elmera-source` export condition, so nothing is built first. Uncached: Oxlint reads every package's files
-    // (the e2e fixtures among them), and turbo documents a task's default inputs only as its package's own files.
+    // Reads source: type-aware rules and the plugins resolve the workspace packages through their `elmera-source`
+    // export condition. Oxlint's import plugin does not: its resolver takes `@elmeragroup/intl/*` and
+    // `@elmeragroup/intl-tools/*` to `dist` when it is built, and opens those files. So under turbo it waits for both
+    // builds: a build running beside it deletes `dist` mid-read and fails it (#10). `pnpm lint` runs Oxlint directly and
+    // needs no build: an unbuilt `dist` is skipped. Uncached: Oxlint reads every package's files (the e2e fixtures among
+    // them), and turbo documents a task's default inputs only as its package's own files.
     "//#lint:oxlint": {
-      "cache": false
+      "cache": false,
+      "dependsOn": ["@elmeragroup/intl#build", "@elmeragroup/intl-tools#build"]
     },
     // The Effect lint pass: type-aware over the whole workspace and every module it imports, so no input list can name
     // what it reads. Uncached, as lint:oxlint is.
