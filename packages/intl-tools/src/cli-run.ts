@@ -10,7 +10,6 @@ import * as CliError from "effect/cli/CliError";
 import * as CliOutput from "effect/cli/CliOutput";
 import * as Command from "effect/cli/Command";
 import * as Flag from "effect/cli/Flag";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -34,7 +33,7 @@ import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
-import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
+import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, syncFailed, watchProject } from "./watch";
 
 /** Where the CLI writes and resolves paths from. */
 export type CliIo = ReporterIo & {
@@ -169,8 +168,6 @@ type Scanned =
       readonly reason: string;
     };
 
-const PRESENCE_FLAGS = new Set(["--json", "--watch"]);
-
 /**
  * The contract's syntax, read left to right as layer 1's parser read it: the command, then each flag once, a flag's
  * value as the next argument, and every argument one whole token. effect/cli's lexer reads `--flag=value`, `--` and
@@ -185,16 +182,15 @@ function scanArgs(args: ReadonlyArray<string>): Scanned {
   }
 
   const tokens: Array<string> = [command];
-  const seen = new Set<string>();
+  // The flags not yet given, named from their definitions: an argument that is none of them is unknown or a repeat.
+  const remaining = new Set(Object.keys(flags()).map((name) => `--${name}`));
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index] ?? "";
     const value = rest[index + 1];
 
-    if (seen.has(arg) || !(PRESENCE_FLAGS.has(arg) || arg === "--config" || arg === "--poll")) {
+    if (!remaining.delete(arg)) {
       return { _tag: "SyntaxError", tokens, reason: `unexpected argument: ${arg}` };
     }
-
-    seen.add(arg);
 
     if (arg === "--config") {
       // `--config` takes the next argument unless it is a flag.
@@ -297,8 +293,40 @@ const commandReport = (command: "extract" | "check", configPath: string) =>
     return command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
   });
 const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
-const startWatcher = (config: ProjectConfig, mode: WatchMode, onResult: (result: SyncResult) => void) =>
-  Effect.sync(() => watchProject(config, onResult, undefined, mode));
+// The watcher and the signals that stop it. The listeners go on just before the watcher starts (a one-shot command, or
+// a config still being read, keeps Node's default and ends at once), so they are on before the ready line. The first
+// signal takes both off (a second gets Node's default), closes the watcher, so no new sync starts, and ends the
+// results: a sync already running finishes, as it cannot be cut short, and every delivered result is still reported.
+const startWatcher = (config: ProjectConfig, mode: WatchMode, results: Queue.Queue<SyncResult, Cause.Done>) =>
+  Effect.sync(() => {
+    let closed: Promise<void> | undefined;
+    // Idempotent: the first signal, and the scope on any other exit, both stop the watch.
+    const stop = (): Promise<void> => {
+      if (closed === undefined) {
+        process.off("SIGINT", onSignal);
+        process.off("SIGTERM", onSignal);
+        Queue.endUnsafe(results);
+        closed = watcher.close();
+      }
+
+      return closed;
+    };
+    const onSignal = () => {
+      void stop();
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    const watcher = watchProject(
+      config,
+      (result) => {
+        Queue.offerUnsafe(results, result);
+      },
+      undefined,
+      mode
+    );
+
+    return { stop };
+  });
 
 const runOnce = /* @__PURE__ */ Effect.fn("elmera-intl.once")(function* (
   command: "extract" | "check",
@@ -345,44 +373,34 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   }
 
   const { config } = loaded;
-  // Only a watch owns SIGINT and SIGTERM, and only once its watcher starts: until then (a one-shot command, a config
-  // still being read) Node's default ends the process at once. On before the ready line, so a signal sent on seeing it
-  // finds them; the first signal stops the watch, and the scope closes the watcher.
-  const stop = yield* Deferred.make<void>();
-  const onSignal = () => {
-    Deferred.doneUnsafe(stop, Effect.void);
-  };
-  yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      process.once("SIGINT", onSignal);
-      process.once("SIGTERM", onSignal);
-    }),
-    () =>
-      Effect.sync(() => {
-        process.off("SIGINT", onSignal);
-        process.off("SIGTERM", onSignal);
-      })
-  );
   // The watcher calls back from outside this fiber; this fiber reports each result, so the Reporter may be
   // asynchronous.
-  const results = yield* Queue.unbounded<SyncResult>();
-  yield* Effect.acquireRelease(
-    startWatcher(config, mode, (result) => {
-      Queue.offerUnsafe(results, result);
-    }),
-    (watcher) => Effect.promise(() => watcher.close())
+  const results = yield* Queue.unbounded<SyncResult, Cause.Done>();
+  const watch = yield* Effect.acquireRelease(startWatcher(config, mode, results), (started) =>
+    Effect.promise(() => started.stop())
   );
   // The first sync runs as the watcher starts: its report precedes the ready line.
-  yield* Effect.forEach(yield* Queue.clear(results), (result) => reportSync(config.root, result), {
+  yield* Effect.forEach(yield* Queue.clear(results), (result) => reportResult(config.root, result), {
     discard: true,
   });
   yield* reporter.stdout(`watching ${config.root} for message changes; Ctrl-C stops\n`);
-  yield* Effect.forkScoped(
-    Effect.forever(Queue.take(results).pipe(Effect.flatMap((result) => reportSync(config.root, result))))
+  // Until a signal ends the results, and then through every result already delivered.
+  yield* Queue.take(results).pipe(
+    Effect.flatMap((result) => reportResult(config.root, result)),
+    Effect.forever,
+    Effect.catchIf(Cause.isDone, () => Effect.void)
   );
-
-  return yield* Deferred.await(stop);
+  yield* Effect.promise(() => watch.stop());
 }, Effect.scoped);
+
+// One result's report. A write that fails is reported as the sync's failure, `SyncFailed`, and the watch goes on, as a
+// throwing report always was; if that report fails too, the failure ends the watch.
+const reportResult = (root: string, result: SyncResult) =>
+  reportSync(root, result).pipe(
+    Effect.catchDefect((defect) =>
+      reportSync(root, syncFailed(defect instanceof Error ? defect.message : String(defect)))
+    )
+  );
 
 const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(function* (
   root: string,

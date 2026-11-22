@@ -1,8 +1,10 @@
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -14,6 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
@@ -481,6 +484,103 @@ msgstr ""
     }
 
     expect(stderr).toBe("");
+  });
+
+  // A signal that lands while a sync runs ends the watch after that sync, whose result is still reported. Oracle: the
+  // layer 1 executable's stderr for this case, written out by hand, and its exit 0. The catalog becomes a FIFO the next
+  // sync blocks reading (the writer's open resolves once it does), so the signal lands mid-sync without timing.
+  it.each(["SIGINT", "SIGTERM"] as const)("reports the sync a %s lands in, then exits 0", async (signal) => {
+    await extractTranslated([]);
+    const running = await startWatch();
+    const po = join(root, "messages/nb.po");
+    // Renamed into place: the watch never sees the catalog missing, which a sync would write anew.
+    execFileSync("mkfifo", [join(root, "nb.fifo")]);
+    renameSync(join(root, "nb.fifo"), po);
+    const catalog = await open(po, "w");
+    const exited = running.kill(signal);
+    await catalog.write(`# translator note\nmsgid ""\nmsgstr ""\n`);
+    await catalog.close();
+
+    expect(await exited).toBe(0);
+    expect(running.output().stderr).toBe(
+      `messages/nb.po: CatalogUnreadable: line 1: Translator comments (#) are not supported, use inline descriptions instead:
+> # translator note
+  fix: keep the PO to msgctxt/msgid/msgstr with #. #: #, comments: translator comments (# ), #| and msgid_plural are not read
+`
+    );
+  });
+
+  // Unit under test: the watch's reporting when a Reporter write throws, as a host's may (layer 4). Oracle: layer 1's
+  // handling, written out by hand: the failed write is reported as its sync's SyncFailed, and the watch goes on.
+  it("reports a write that throws as SyncFailed, and keeps watching", async () => {
+    let stdout = "";
+    let stderr = "";
+    let thrown = false;
+    const reporter = Layer.succeed(Reporter, {
+      stdout: Effect.fnUntraced(function* (text: string) {
+        yield* Effect.sync(() => {
+          if (!thrown && text.startsWith("wrote")) {
+            thrown = true;
+            throw new Error("disk full");
+          }
+
+          stdout += text;
+        });
+      }),
+      stderr: Effect.fnUntraced(function* (text: string) {
+        yield* Effect.sync(() => {
+          stderr += text;
+        });
+      }),
+    });
+    const fiber = Effect.runFork(
+      cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
+        Effect.provide(Layer.merge(CliPlatform, reporter))
+      )
+    );
+    const ready = `watching ${root} for message changes; Ctrl-C stops\n`;
+    try {
+      await expect.poll(() => stdout, HANG_GUARD).toBe(ready);
+      expect(stderr).toBe(
+        "SyncFailed: disk full\n  fix: fix the file the error names; the next change retries\n"
+      );
+      write("src/new.tsx", component("New"));
+      await expect.poll(() => stdout, HANG_GUARD).toBe(`${ready}wrote messages/nb.po\n`);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+  });
+
+  // When the SyncFailed report cannot be written either, nothing reports the watch any more: it must end, with the
+  // failure, rather than go on writing catalogs unreported.
+  it("ends when a failed write cannot be reported either", async () => {
+    let stdout = "";
+    let broken = false;
+    const failing = (append: (text: string) => void) => (text: string) =>
+      Effect.sync(() => {
+        if (broken) {
+          throw new Error("disk full");
+        }
+
+        append(text);
+      });
+    const reporter = Layer.succeed(Reporter, {
+      stdout: failing((text) => {
+        stdout += text;
+      }),
+      stderr: failing(() => undefined),
+    });
+    const ended = Effect.runPromiseExit(
+      cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root, host: "executable" }).pipe(
+        Effect.provide(Layer.merge(CliPlatform, reporter))
+      )
+    );
+    await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
+    broken = true;
+    write("src/new.tsx", component("New"));
+    const exit = await ended;
+
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
   });
 
   it("exits 0 on SIGINT", async () => {

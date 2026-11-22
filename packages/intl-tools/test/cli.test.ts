@@ -1,7 +1,11 @@
 import * as CliConfig from "effect/cli/CliConfig";
 import * as CliOutput from "effect/cli/CliOutput";
+import * as Flag from "effect/cli/Flag";
+import * as GlobalFlag from "effect/cli/GlobalFlag";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type * as LogLevel from "effect/LogLevel";
+import * as Option from "effect/Option";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -780,6 +784,8 @@ describe("usage", () => {
     const { code, stdout, stderr } = bin(...args);
     expect([code, stdout]).toEqual([2, ""]);
     expect(stderr).toBe(`${reason}\n${USAGE}`);
+    // Refused before anything runs: no catalog is written.
+    expect(existsSync(join(root, "messages"))).toBe(false);
   });
 
   // `--config` takes the next argument as its path unless it starts with `--`, so `-x` is a path (one that does not
@@ -824,6 +830,36 @@ describe("usage", () => {
 
     expect([exitCodeOf(exit), presented, stdout]).toEqual([2, [], ""]);
     expect(stderr).toBe(`--poll needs an interval in milliseconds, such as --poll 200\n${USAGE}`);
+  });
+
+  // Unit under test: `cliProgram` under a host runtime whose effect/cli settings carry a global setting of its own, one
+  // whose flag is required. Oracle: the usage row for `check --watch` above: no setting a host provides is part of the
+  // CLI's grammar.
+  it("keeps its grammar under a host's own global setting", async () => {
+    let stdout = "";
+    let stderr = "";
+    // A setting in the place of effect/cli's `--log-level`, with a flag of its own that every invocation would need.
+    const hostSetting = GlobalFlag.Setting("log-level")({
+      flag: Flag.String("region").pipe(Flag.map(() => Option.none<LogLevel.LogLevel>())),
+    });
+    const host = Layer.mergeAll(
+      CliPlatform,
+      CliConfig.layer({ builtIns: [hostSetting] }),
+      Reporter.layer({
+        stdout: (text) => {
+          stdout += text;
+        },
+        stderr: (text) => {
+          stderr += text;
+        },
+      })
+    );
+    const exit = await Effect.runPromiseExit(
+      cliProgram(["check", "--watch"], { cwd: root, host: "in-process" }).pipe(Effect.provide(host))
+    );
+
+    expect([exitCodeOf(exit), stdout]).toEqual([2, ""]);
+    expect(stderr).toBe(`--watch goes with extract only, without --json\n${USAGE}`);
   });
 
   it("names the fix for a missing config", async () => {
