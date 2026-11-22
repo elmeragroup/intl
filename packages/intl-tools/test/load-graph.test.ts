@@ -1,33 +1,58 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSync } from "oxc-parser";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import { formatPo } from "../src/po";
 
 const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
-const DIST = new URL("../dist/", import.meta.url).href;
 
-// Records every module a fresh Node loads (import or require, at startup or on first use) while it imports the built
-// entry and runs it as its host does, then stops recording, checks what the run produced and prints both. argv: entry
-// URL, host, project root.
-// - loader: one compile of the nb catalog, then one compile under a malformed config (the ConfigInvalid path); the
-//   compiled module is then imported and asked for "Hello", which the fixture translates as "Hei".
-// - next: one withIntl call with an explicit Turbopack root; the result is the rule keys it added.
-const RECORD_RUN = `
+// Both probes run in a fresh Node that records every module it loads (import or require, at startup or on first
+// use) until the probe stops recording, then prints the recording and what the probe observed.
+const RECORDER = `
 import { registerHooks } from "node:module";
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
 const loaded = [];
 let recording = true;
 registerHooks({ load(url, context, nextLoad) { if (recording) loaded.push(url); return nextLoad(url, context); } });
-const [entry, host, root] = process.argv.slice(1);
-const module = await import(entry);
+const stop = () => { recording = false; };
+`;
+
+// next.config's view: `@elmeragroup/intl-tools/next` resolved through the package's export map, as an app resolves
+// it; one withIntl call on a valid config, one on a malformed one. Prints the rule keys, the loader the `*.po` rule
+// names (its non-source rule), and the malformed config's diagnostic. argv: project root.
+const NEXT_PROBE = `${RECORDER}
+import { join } from "node:path";
+const [root] = process.argv.slice(1);
+const { withIntl } = await import("@elmeragroup/intl-tools/next");
+const config = withIntl({ turbopack: { root } }, { dir: root });
+let invalid = "accepted";
+try {
+  withIntl({ turbopack: { root } }, { dir: join(root, "bad-app") });
+} catch (error) {
+  // The parser's own message after "not JSON: " varies by Node version.
+  invalid = error.message.replace(/^withIntl: not JSON: .*?; /u, "withIntl: not JSON: …; ");
+}
+stop();
+const rules = config.turbopack.rules;
+const rule = rules["*.po"].find((candidate) => !candidate.loaders[0].options.source);
+process.stdout.write(JSON.stringify({ loaded, result: { keys: Object.keys(rules), invalid }, loader: rule.loaders[0].loader }));
+`;
+
+// A loader worker's view: the loader withIntl's rule names, loaded fresh; one compile of the nb catalog, one under a
+// malformed config. The compiled module is then imported and asked for "Hello", which the fixture translates as "Hei".
+// argv: loader path, project root.
+const LOADER_PROBE = `${RECORDER}
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [loader, root] = process.argv.slice(1);
+const { default: poLoader } = await import(pathToFileURL(loader).href);
 const compile = (config) => {
   const { promise, resolve } = Promise.withResolvers();
-  module.default.call(
+  poLoader.call(
     {
       resourcePath: join(root, "messages/nb.po"),
       getOptions: () => ({ config: join(root, config), source: false }),
@@ -38,39 +63,32 @@ const compile = (config) => {
   );
   return promise;
 };
-let result;
-if (host === "loader") {
-  const compiled = await compile("elmera-intl.json");
-  const invalid = await compile("bad.json");
-  recording = false;
-  let hello = compiled.error;
-  if (compiled.code !== undefined) {
-    const { createIntl } = await import("@elmeragroup/intl/core");
-    const { default: catalog } = await import("data:text/javascript," + encodeURIComponent(compiled.code));
-    hello = createIntl({ locale: "nb", catalog, timeZone: "UTC" }).t("Hello");
-  }
-  // The problem's location and code; the parser's own message after "not JSON: " varies by Node version.
-  result = { hello, invalid: (invalid.error ?? "compiled").split(": not JSON: ")[0] };
-} else {
-  const config = module.withIntl({ turbopack: { root } }, { dir: root });
-  recording = false;
-  result = Object.keys(config.turbopack.rules);
+const compiled = await compile("elmera-intl.json");
+const invalid = await compile("bad.json");
+stop();
+let hello = compiled.error;
+if (compiled.code !== undefined) {
+  const { createIntl } = await import("@elmeragroup/intl/core");
+  const { default: catalog } = await import("data:text/javascript," + encodeURIComponent(compiled.code));
+  hello = createIntl({ locale: "nb", catalog, timeZone: "UTC" }).t("Hello");
 }
-process.stdout.write(JSON.stringify({ loaded, result }));
+// The problem's location and code; the parser's own message after "not JSON: " varies by Node version.
+process.stdout.write(JSON.stringify({ loaded, result: { hello, invalid: (invalid.error ?? "compiled").split(": not JSON: ")[0] } }));
 `;
 
-/** What running a built entry loaded, as Node loads it: every import and require, eager or lazy. */
-type HostRun = {
-  /** Every URL Node loaded. */
-  readonly loaded: ReadonlyArray<string>;
+/** What a probe loaded, as what each module holds, and what it observed. */
+type ProbeRun = {
   /**
-   * Each loaded module as what it holds: a loaded chunk of this package by the sources its source map names (its own
-   * modules and any third-party code bundled into it), every other module by its URL. A chunk without a map holds no
-   * code (a generated re-export); the chunks it re-exports are loads of their own.
+   * Each loaded module as what it holds: a built file of this package by the sources its declared source map names
+   * (its own modules and any third-party code bundled into it), every other module by its URL.
    */
   readonly modules: ReadonlyArray<string>;
-  /** What the run produced (see RECORD_RUN). */
+  /** How many of this package's built files were inspected through their source maps. */
+  readonly inspected: number;
+  /** What the probe observed (see the probes). */
   readonly result: unknown;
+  /** NEXT_PROBE only: the loader path withIntl's rule names. */
+  readonly loader: string | undefined;
 };
 
 let root = "";
@@ -82,6 +100,8 @@ beforeEach(() => {
     JSON.stringify({ include: ["src/**/*.ts"], catalogs: "messages/{locale}.po", locales: ["nb"] })
   );
   writeFileSync(join(root, "bad.json"), "{ not json");
+  mkdirSync(join(root, "bad-app"));
+  writeFileSync(join(root, "bad-app/elmera-intl.json"), "{ not json");
   mkdirSync(join(root, "messages"));
   writeFileSync(
     join(root, "messages/nb.po"),
@@ -95,67 +115,118 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function chunkSources(url: string): ReadonlyArray<string> {
-  const map = `${fileURLToPath(url)}.map`;
+const SOURCE_MAPPING_URL = /\/\/# sourceMappingURL=(\S+)\s*$/u;
 
-  if (!existsSync(map)) {
+// Forwarding only: imports and re-exports, no statement that runs code of its own (tsdown's generated re-export
+// chunks, such as a dynamic import's facade).
+function forwardsOnly(file: string, code: string): boolean {
+  return parseSync(file, code).program.body.every(
+    (statement) =>
+      statement.type === "ImportDeclaration" ||
+      statement.type === "ExportAllDeclaration" ||
+      (statement.type === "ExportNamedDeclaration" && statement.declaration === null)
+  );
+}
+
+// The sources a built file holds, from the source map it declares: a sourceMappingURL comment naming a map file or
+// carrying an inline `data:` map. A file declaring none must only forward; one whose map cannot be read fails.
+function builtSources(url: string): ReadonlyArray<string> {
+  const file = fileURLToPath(url);
+  const code = readFileSync(file, "utf8");
+  const declared = SOURCE_MAPPING_URL.exec(code)?.[1];
+
+  if (declared === undefined) {
+    if (!forwardsOnly(file, code)) {
+      throw new Error(`${file} runs code but declares no source map, so what it bundles cannot be checked`);
+    }
+
     return [];
   }
 
-  // SAFETY: tsdown writes a source map beside every chunk with code, whose `sources` are paths relative to the chunk.
-  const { sources } = JSON.parse(readFileSync(map, "utf8")) as { readonly sources: ReadonlyArray<string> };
+  const mapUrl = new URL(declared, url);
+  let text: string;
+  if (mapUrl.protocol === "data:") {
+    const [header = "", payload = ""] = mapUrl.pathname.split(",", 2);
+    text = header.endsWith(";base64")
+      ? Buffer.from(payload, "base64").toString("utf8")
+      : decodeURIComponent(payload);
+  } else if (existsSync(fileURLToPath(mapUrl))) {
+    text = readFileSync(fileURLToPath(mapUrl), "utf8");
+  } else {
+    throw new Error(`${file} declares the source map ${declared}, which does not exist`);
+  }
 
-  return sources.map((source) => relative(PACKAGE, fileURLToPath(new URL(source, url))));
+  // SAFETY: a source map's `sources` are paths or URLs relative to the map.
+  const { sources } = JSON.parse(text) as { readonly sources: ReadonlyArray<string> };
+
+  return sources.map((source) =>
+    relative(PACKAGE, fileURLToPath(new URL(source, mapUrl.protocol === "data:" ? url : mapUrl)))
+  );
 }
 
-function run(entry: string, host: "loader" | "next"): HostRun {
-  const output = execFileSync(
-    process.execPath,
-    ["--input-type=module", "--eval", RECORD_RUN, `${DIST}${entry}`, host, root],
-    { cwd: PACKAGE, encoding: "utf8" }
-  );
-  // SAFETY: RECORD_RUN prints exactly this shape.
-  const { loaded, result } = JSON.parse(output) as {
+function isBuiltFile(url: string): boolean {
+  if (!url.startsWith("file:")) {
+    return false;
+  }
+
+  const path = relative(PACKAGE, fileURLToPath(url));
+
+  return !path.startsWith("..") && !path.split(sep).includes("node_modules");
+}
+
+function probe(script: string, args: ReadonlyArray<string>): ProbeRun {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", script, ...args], {
+    cwd: PACKAGE,
+    encoding: "utf8",
+  });
+  // SAFETY: both probes print exactly this shape.
+  const { loaded, result, loader } = JSON.parse(output) as {
     readonly loaded: ReadonlyArray<string>;
     readonly result: unknown;
+    readonly loader?: string;
   };
+  const built = loaded.filter((url) => isBuiltFile(url));
 
   return {
-    loaded,
-    modules: [...new Set(loaded.flatMap((url) => (url.startsWith(DIST) ? chunkSources(url) : [url])))],
+    modules: [
+      ...new Set([
+        ...built.flatMap((url) => builtSources(url)),
+        ...loaded.filter((url) => !isBuiltFile(url)),
+      ]),
+    ],
+    inspected: built.length,
     result,
+    loader,
   };
 }
 
-// Unit under test: what Node loads for the built po-loader compiling one catalog and reporting one invalid config.
-// Oracle: the loader runs in every Turbopack and webpack loader worker, which must not load the CLI, its commands or
-// the watcher; the fixture's "Hello" is "Hei" in nb, and a malformed config is a ConfigInvalid problem.
-it("compiles a catalog and reports an invalid config in the loader without loading the CLI", () => {
-  const { loaded, modules, result } = run("po-loader.js", "loader");
+// Unit under test: the public `./next` entry, as an app's next.config resolves and calls it, and then the loader its
+// rule names, in a fresh loader worker. Oracle: Next loads next.config in several processes, so withIntl loads no
+// extractor, oxc native binding or Effect, on a valid config or a malformed one; the loader runs in every Turbopack
+// and webpack worker, so it loads no CLI, commands or watcher, compiling or reporting. The fixture's "Hello" is "Hei"
+// in nb, and a malformed config is a ConfigInvalid problem.
+it("keeps the extractor, oxc and Effect out of withIntl, and the CLI out of the loader its rule names", () => {
+  const next = probe(NEXT_PROBE, [root]);
 
-  expect(loaded).toContain(`${DIST}po-loader.js`);
-  expect(result).toEqual({
-    hello: "Hei",
-    invalid: `${join(root, "bad.json")}: ConfigInvalid`,
+  expect(next.result).toEqual({
+    keys: ["*.po"],
+    invalid:
+      'withIntl: not JSON: …; write elmera-intl.json as { "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }',
   });
-  expect(modules.filter((module) => /(?:^|\/)src\/(?:cli-run|commands|watch)\.ts$/u.test(module))).toEqual(
-    []
-  );
-});
-
-// Unit under test: what Node loads for the built `./next` entry and one withIntl call. Oracle: Next loads next.config
-// in several processes, and withIntl reads only the config: no extractor, no oxc native binding, no Effect, whether
-// loaded as a package or bundled into a chunk.
-it("adds the rule with withIntl without loading the extractor, oxc or Effect", () => {
-  const { loaded, modules, result } = run("next.js", "next");
-
-  expect(loaded).toContain(`${DIST}next.js`);
-  expect(result).toEqual(["*.po"]);
+  expect(next.inspected).toBeGreaterThan(0);
   expect(
-    modules.filter(
+    next.modules.filter(
       (module) =>
         /(?:^|\/)src\/(?:extract[\w-]*|bindings|scopes)\.ts$/u.test(module) ||
         /\/(?:oxc-parser|oxc-transform|effect)\//u.test(module)
     )
+  ).toEqual([]);
+
+  const loader = probe(LOADER_PROBE, [next.loader ?? "", root]);
+
+  expect(loader.result).toEqual({ hello: "Hei", invalid: `${join(root, "bad.json")}: ConfigInvalid` });
+  expect(loader.inspected).toBeGreaterThan(0);
+  expect(
+    loader.modules.filter((module) => /(?:^|\/)src\/(?:cli-run|commands|watch)\.ts$/u.test(module))
   ).toEqual([]);
 });

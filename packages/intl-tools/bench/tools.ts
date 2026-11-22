@@ -151,13 +151,16 @@ function compileTimes(host: "loader" | "vite", root: string): CompileTimes {
   return parsed as CompileTimes;
 }
 
-// A sample counts only when the compile produced the catalog: the module it returned is imported, outside the timed
-// interval, and must translate a fixture message as the fixture's PO does. A hook that skipped the compile, or returned
-// a stub module, would otherwise record a near-zero time.
+// A sample counts only when the compile produced that sample's catalog. Each sample compiles its own revision of the
+// PO, with the probe message translated differently, so a host that memoised an earlier compile fails; the module it
+// returned is imported outside the timed interval and must carry that revision's translation. A hook that skipped the
+// compile, or returned a stub module, would otherwise record a near-zero time. The worker and its formats memo stay
+// warm: only the PO text changes.
 const PROBE = "Feature 0 overview";
-const PROBE_NB = "nb Feature 0 overview";
+const PROBE_MSGSTR = `msgstr "nb ${PROBE}"`;
+const probeTranslation = (sample: number): string => `nb ${PROBE} (revision ${sample})`;
 
-async function verifyCatalog(host: string, code: string | undefined): Promise<void> {
+async function verifyCatalog(host: string, code: string | undefined, sample: number): Promise<void> {
   if (code === undefined) {
     throw new Error(`${host} returned no module: the timing would not be a compile`);
   }
@@ -168,34 +171,54 @@ async function verifyCatalog(host: string, code: string | undefined): Promise<vo
   };
   const translated = createIntl({ locale: "nb", catalog, timeZone: "UTC" }).t(PROBE);
 
-  if (translated !== PROBE_NB) {
-    throw new Error(`${host} returned a module translating "${PROBE}" as "${translated}", not "${PROBE_NB}"`);
+  if (translated !== probeTranslation(sample)) {
+    throw new Error(
+      `${host} returned a module translating "${PROBE}" as "${translated}", not "${probeTranslation(sample)}": not this sample's compile`
+    );
   }
 }
 
-async function timeCompiles(host: string, compile: () => Promise<string | undefined>): Promise<CompileTimes> {
-  const time = async (): Promise<number> => {
+// Times one compile per PO revision, written to the catalog's path (where the Vite hook reads it) and passed as text
+// (as the loader receives it) before the clock starts; the original PO is restored afterwards.
+async function timeCompiles(
+  host: string,
+  root: string,
+  compile: (po: string) => Promise<string | undefined>
+): Promise<CompileTimes> {
+  const path = join(root, "messages/nb.po");
+  const original = readFileSync(path, "utf8");
+
+  if (!original.includes(PROBE_MSGSTR)) {
+    throw new Error(`the fixture PO has no ${PROBE_MSGSTR}`);
+  }
+
+  const time = async (sample: number): Promise<number> => {
+    const po = original.replace(PROBE_MSGSTR, `msgstr "${probeTranslation(sample)}"`);
+    writeFileSync(path, po);
     const start = performance.now();
-    const code = await compile();
+    const code = await compile(po);
     const elapsed = performance.now() - start;
-    await verifyCatalog(host, code);
+    await verifyCatalog(host, code, sample);
 
     return elapsed;
   };
   // One at a time: overlapping compiles would time the event loop, not a compile.
-  const timeRest = async (left: number, samples: ReadonlyArray<number>): Promise<ReadonlyArray<number>> =>
-    left === 0 ? samples : timeRest(left - 1, [...samples, await time()]);
-  const first = await time();
+  const timeRest = async (sample: number, samples: ReadonlyArray<number>): Promise<ReadonlyArray<number>> =>
+    sample > COMPILES ? samples : timeRest(sample + 1, [...samples, await time(sample)]);
+  try {
+    const first = await time(0);
 
-  return { first, mean: mean(await timeRest(COMPILES, [])) };
+    return { first, mean: mean(await timeRest(1, [])) };
+  } finally {
+    writeFileSync(path, original);
+  }
 }
 
 async function loaderCompile(root: string): Promise<CompileTimes> {
-  const po = readFileSync(join(root, "messages/nb.po"), "utf8");
   // SAFETY: the module at that path is the build of src/po-loader.ts.
   const { default: poLoader } = (await import(distUrl("po-loader.js"))) as typeof PoLoader;
 
-  return timeCompiles("the po-loader", async () => {
+  return timeCompiles("the po-loader", root, async (po) => {
     const done = Promise.withResolvers<string | undefined>();
     poLoader.call(
       {
@@ -238,7 +261,8 @@ async function viteCompile(root: string): Promise<CompileTimes> {
     },
   };
 
-  return timeCompiles("the vite load hook", async () => {
+  // The hook reads the revision timeCompiles wrote to the catalog's path.
+  return timeCompiles("the vite load hook", root, async () => {
     // SAFETY: Vite's full plugin context is not constructible here; the hook reads only the environment's root,
     // addWatchFile and error, which this context has, and a read of anything else fails the bench.
     const loaded = await load.call(context as never, join(root, "messages/nb.po"));

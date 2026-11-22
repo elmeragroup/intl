@@ -69,7 +69,8 @@ type CliRun = { readonly code: number; readonly stdout: string; readonly stderr:
 const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
 
 function bin(...args: Array<string>): CliRun {
-  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8" });
+  // The timeout is a hang guard: a CLI that starts watching never exits on its own.
+  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8", timeout: 10_000 });
 
   return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
 }
@@ -691,6 +692,44 @@ describe("usage", () => {
     ["--config followed by a flag", ["check", "--config", "--json"], "--config needs a path"],
     ["a stray argument", ["check", "extra"], "unexpected argument: extra"],
     ["a repeated flag", ["check", "--json", "--json"], "unexpected argument: --json"],
+    // Flag values only as separate arguments, and no `--` terminator: both are arguments the parser rejects.
+    ["a flag with an inline value", ["check", "--json=yes"], "unexpected argument: --json=yes"],
+    ["an argument terminator", ["check", "--"], "unexpected argument: --"],
+    // --watch runs instead of exiting; with check or --json it is refused before anything starts.
+    ["--watch with check", ["check", "--watch"], "--watch goes with extract only, without --json"],
+    [
+      "--watch with --json",
+      ["extract", "--watch", "--json"],
+      "--watch goes with extract only, without --json",
+    ],
+    // `--poll` takes a whole number of milliseconds from 10 to 2^31 - 1, and only with `--watch`: Node turns a delay
+    // past 2^31 - 1 ms into 1 ms, which would scan without pause, and under 10 ms a walk per tick is a continuous scan.
+    ["--poll without --watch", ["extract", "--poll", "50"], "--poll goes with extract --watch only"],
+    [
+      "--poll with no interval",
+      ["extract", "--watch", "--poll"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
+    [
+      "--poll with a zero interval",
+      ["extract", "--watch", "--poll", "0"],
+      "--poll 0: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+    [
+      "--poll with a fraction",
+      ["extract", "--watch", "--poll", "1.5"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
+    [
+      "--poll past Node's timer range",
+      ["extract", "--watch", "--poll", "2147483648"],
+      "--poll 2147483648: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+    [
+      "--poll under the 10 ms floor",
+      ["extract", "--watch", "--poll", "5"],
+      "--poll 5: the interval must be between 10 and 2147483647 milliseconds",
+    ],
   ])("exits 2 with usage on %s", (_label, args, reason) => {
     const { code, stdout, stderr } = bin(...args);
     expect([code, stdout]).toEqual([2, ""]);

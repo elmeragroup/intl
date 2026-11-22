@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -418,31 +418,6 @@ msgstr ""
     rmSync(join(root, "messages/nb.po"), { recursive: true });
     write("src/second.tsx", component("Second"));
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Second"`);
-  });
-
-  it.each([
-    ["check", ["check", "--watch"]],
-    ["--json", ["extract", "--watch", "--json"]],
-  ])("exits 2 with usage for --watch with %s instead of watching", (_label, args) => {
-    // The timeout is a hang guard: a CLI that starts watching never exits on its own.
-    const run = spawnSync(execPath, cliFromSource(...args), { cwd: root, encoding: "utf8", timeout: 10_000 });
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain("usage: elmera-intl");
-  });
-
-  // Oracle: the usage contract: `--poll` takes a positive whole number of milliseconds, and only with `--watch`.
-  it.each([
-    ["without --watch", ["extract", "--poll", "50"], "--poll goes with extract --watch only"],
-    ["with no interval", ["extract", "--watch", "--poll"], "--poll needs an interval in milliseconds"],
-    ["with a zero interval", ["extract", "--watch", "--poll", "0"], "between 10 and 2147483647"],
-    ["with a fraction", ["extract", "--watch", "--poll", "1.5"], "--poll needs an interval in milliseconds"],
-    // Node turns a delay past 2^31 - 1 ms into 1 ms, which would scan without pause; under 10 ms a walk per tick is a
-    // continuous scan of a real project.
-    ["past Node's timer range", ["extract", "--watch", "--poll", "2147483648"], "between 10 and 2147483647"],
-    ["under the 10 ms floor", ["extract", "--watch", "--poll", "5"], "between 10 and 2147483647"],
-  ])("exits 2 with usage for --poll %s", (_label, args, reason) => {
-    const run = spawnSync(execPath, cliFromSource(...args), { cwd: root, encoding: "utf8", timeout: 10_000 });
-    expect([run.status, run.stderr.split("\n")[0]]).toEqual([2, expect.stringContaining(reason)]);
   });
 
   it("exits 0 on SIGINT", async () => {
