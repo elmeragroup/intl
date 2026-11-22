@@ -148,6 +148,16 @@ function compileTimes(host: "loader" | "vite", root: string): CompileTimes {
   return parsed as CompileTimes;
 }
 
+// A sample counts only when the compile produced the catalog's module: a hook that returned nothing (skipped the
+// compile) would otherwise record a near-zero time.
+function requireModuleCode(host: string, code: string | undefined): void {
+  if (code === undefined || !code.startsWith("export default ")) {
+    throw new Error(
+      `${host} returned no catalog module (${String(code)}): the timing would not be a compile`
+    );
+  }
+}
+
 async function timeCompiles(compile: () => Promise<void>): Promise<CompileTimes> {
   const time = async (): Promise<number> => {
     const start = performance.now();
@@ -169,24 +179,24 @@ async function loaderCompile(root: string): Promise<CompileTimes> {
   const { default: poLoader } = (await import(distUrl("po-loader.js"))) as typeof PoLoader;
 
   return timeCompiles(async () => {
-    const done = Promise.withResolvers<string>();
+    const done = Promise.withResolvers<string | undefined>();
     poLoader.call(
       {
         resourcePath: join(root, "messages/nb.po"),
         getOptions: () => ({ config: join(root, "elmera-intl.json"), source: false }),
         addDependency: () => undefined,
         async: () => (error, code) => {
-          if (error === null && code !== undefined) {
+          if (error === null) {
             done.resolve(code);
           } else {
-            done.reject(error ?? new Error("the loader returned no code"));
+            done.reject(error);
           }
         },
       },
       po
     );
 
-    await done.promise;
+    requireModuleCode("the po-loader", await done.promise);
   });
 }
 
@@ -194,10 +204,12 @@ async function viteCompile(root: string): Promise<CompileTimes> {
   // SAFETY: the module at that path is the build of src/vite.ts.
   const { intlCatalogs } = (await import(distUrl("vite.js"))) as typeof Vite;
   const plugin = intlCatalogs();
-  const { load } = plugin;
+  // Either form Vite accepts: the hook itself, or an object holding it as `handler`.
+  const { load: hook } = plugin;
+  const load = hook !== undefined && "handler" in hook ? hook.handler : hook;
 
-  if (load === undefined || "handler" in load) {
-    throw new TypeError("intlCatalogs() has no plain load hook");
+  if (load === undefined) {
+    throw new TypeError("intlCatalogs() has no load hook");
   }
 
   // The part of Vite's plugin context the hook reads.
@@ -213,10 +225,7 @@ async function viteCompile(root: string): Promise<CompileTimes> {
     // SAFETY: Vite's full plugin context is not constructible here; the hook reads only the environment's root,
     // addWatchFile and error, which this context has, and a read of anything else fails the bench.
     const loaded = await load.call(context as never, join(root, "messages/nb.po"));
-
-    if (loaded === null) {
-      throw new Error("the load hook compiled nothing");
-    }
+    requireModuleCode("the vite load hook", loaded instanceof Object ? loaded.code : (loaded ?? undefined));
   });
 }
 

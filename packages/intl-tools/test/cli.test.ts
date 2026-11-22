@@ -6,7 +6,9 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -144,8 +146,12 @@ msgstr ""
     await cli("extract");
     await translateAll();
     const before = read("messages/nb.po");
+    // A fixed past mtime: a rewrite of the same bytes still moves it, and watchers key off it.
+    const past = new Date("2001-02-03T04:05:06Z");
+    utimesSync(join(root, "messages/nb.po"), past, past);
     expect((await cli("extract")).stdout).toBe("3 messages; wrote 0 file(s)\n");
     expect(read("messages/nb.po")).toBe(before);
+    expect(statSync(join(root, "messages/nb.po")).mtime).toEqual(past);
   });
 
   it("drops entries no source uses", async () => {
@@ -633,26 +639,51 @@ describe("check", () => {
     expect([code, report.ok]).toEqual([0, true]);
   });
 
+  // Oracle: the report tooling parses, written out by hand: two-space indentation, keys in the order ok, problems,
+  // messages, written, unreachable, and a trailing newline.
   it("writes only the JSON report to stdout", async () => {
     await cli("extract");
-    const { stdout, stderr } = await cli("check", "--json");
-    expect(() => readReport(stdout)).not.toThrow();
-    expect(stderr).toBe("");
+    const untranslated = (key: string) => `    {
+      "code": "TranslationMissing",
+      "message": "untranslated",
+      "fix": "translate it in messages/nb.po, then run \`elmera-intl extract\`",
+      "file": "messages/nb.po",
+      "locale": "nb",
+      "key": ${key}
+    }`;
+    const { code, stdout, stderr } = await cli("check", "--json");
+    expect([code, stderr]).toEqual([1, ""]);
+    expect(stdout).toBe(`{
+  "ok": false,
+  "problems": [
+${[untranslated('"Hello {name}, read the <x0>terms</x0>."'), untranslated('"status\\u0004Open"'), untranslated('"Order {id}"')].join(",\n")}
+  ],
+  "messages": 3,
+  "written": [],
+  "unreachable": []
+}
+`);
   });
 });
 
 describe("usage", () => {
+  // Oracle: the usage text, written out by hand.
+  const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to elmera-intl.json>]
+       elmera-intl extract --watch [--poll <ms>] [--config <path to elmera-intl.json>]
+`;
+
   it.each([
-    ["an unknown command", ["translate"]],
-    ["an unknown flag", ["check", "--unknown", "--json"]],
-    ["--config without a value", ["check", "--config"]],
-    ["--config followed by a flag", ["check", "--config", "--json"]],
-    ["a stray argument", ["check", "extra"]],
-    ["a repeated flag", ["check", "--json", "--json"]],
-  ])("exits 2 with usage on %s", async (_label, args) => {
+    ["an unknown command", ["translate"], "unknown command: translate"],
+    ["no command", [], "unknown command: (none)"],
+    ["an unknown flag", ["check", "--unknown", "--json"], "unexpected argument: --unknown"],
+    ["--config without a value", ["check", "--config"], "--config needs a path"],
+    ["--config followed by a flag", ["check", "--config", "--json"], "--config needs a path"],
+    ["a stray argument", ["check", "extra"], "unexpected argument: extra"],
+    ["a repeated flag", ["check", "--json", "--json"], "unexpected argument: --json"],
+  ])("exits 2 with usage on %s", async (_label, args, reason) => {
     const { code, stdout, stderr } = await cli(...args);
     expect([code, stdout]).toEqual([2, ""]);
-    expect(stderr).toContain("usage: elmera-intl");
+    expect(stderr).toBe(`${reason}\n${USAGE}`);
   });
 
   it("names the fix for a missing config", async () => {

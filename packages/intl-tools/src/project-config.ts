@@ -46,9 +46,10 @@ function configInvalid(path: string, message: string): ConfigLoaded {
 }
 
 /**
- * Read and parse the project config, synchronously.
+ * Read and parse the project config, synchronously. The read is the boundary that resolves a relative path, against
+ * the working directory; every caller passes an absolute one.
  *
- * @param path - Path of `elmera-intl.json`.
+ * @param path - Path of `elmera-intl.json`, as the problems name it.
  * @returns The config, or the problem with it.
  */
 export function loadConfig(path: string): ConfigLoaded {
@@ -65,14 +66,15 @@ export function loadConfig(path: string): ConfigLoaded {
     return configInvalid(path, `not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  return parseConfig(text, path);
+  return parseConfig(text, resolve(path));
 }
 
 /**
  * Parse the project config from the file's text.
  *
  * @param text - The content of `elmera-intl.json`.
- * @param path - Its path: the problem's file, and (resolved against the working directory) the config's root.
+ * @param path - Its absolute path: the problem's file, and its directory is the config's root. Absolute, so the result
+ *   is a function of the arguments alone, never of the working directory.
  * @returns The config, or the problem with it.
  */
 export function parseConfig(text: string, path: string): ConfigLoaded {
@@ -125,7 +127,7 @@ export function parseConfig(text: string, path: string): ConfigLoaded {
     return configInvalid(path, '"formats" must be the path of a .ts or .js module exporting `formats`');
   }
 
-  const root = dirname(resolve(path));
+  const root = dirname(path);
 
   return {
     _tag: "Config",
@@ -135,6 +137,7 @@ export function parseConfig(text: string, path: string): ConfigLoaded {
       exclude,
       catalogs,
       locales,
+      // resolve, not join: an absolute formats path stays as written; the root is absolute, so no working directory.
       formats: formats === undefined ? undefined : resolve(root, formats),
     },
   };
