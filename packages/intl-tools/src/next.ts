@@ -5,8 +5,8 @@ import { createRequire } from "node:module";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ProjectConfig } from "./project";
-import { CONFIG_FILE, loadConfig } from "./project";
+import type { ProjectConfig } from "./project-config";
+import { CONFIG_FILE, loadConfig } from "./project-config";
 
 /** Options for `withIntl`. */
 export type WithIntlOptions = {

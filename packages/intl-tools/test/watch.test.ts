@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "../src/cli-run";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import { parsePo } from "../src/po";
-import { loadConfig } from "../src/project";
+import { loadConfig } from "../src/project-config";
 import type { ProjectWatcher, WatchMode } from "../src/watch";
 import { watchProject } from "../src/watch";
 import { cliFromSource } from "./cli-source";
@@ -82,9 +82,9 @@ function component(text: string): string {
 }
 
 // One-shot extract, then a msgstr for each pair.
-function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): void {
+async function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): Promise<void> {
   const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-  expect(runCli(["extract"], io)).toBe(0);
+  expect(await runCli(["extract"], io)).toBe(0);
   let po = read("messages/nb.po");
   for (const [source, translation] of pairs) {
     po = po.replace(`msgid "${source}"\nmsgstr ""`, `msgid "${source}"\nmsgstr "${translation}"`);
@@ -310,7 +310,7 @@ describe("extract --watch", { timeout: 20_000 }, () => {
   });
 
   it("keeps a deleted message's entry and translation", async () => {
-    extractTranslated([["Hello", "Hei"]]);
+    await extractTranslated([["Hello", "Hei"]]);
     await startWatch();
     // The added message is the signal that the sync after the deletion ran.
     write("src/other.tsx", component("Other"));
@@ -329,7 +329,7 @@ msgstr ""
   });
 
   it("prints a syntax error, leaves the catalog byte-identical, and resumes once the file is fixed", async () => {
-    extractTranslated([["Hello", "Hei"]]);
+    await extractTranslated([["Hello", "Hei"]]);
     const po = read("messages/nb.po");
     const { output } = await startWatch();
     write("src/broken.tsx", `${IMPORT}export const C = () => <T>Broken</T;\n`);
@@ -347,7 +347,7 @@ msgstr ""
     files.forEach((i) => {
       write(`src/gen/f${i}.tsx`, component(`Message ${i}`));
     });
-    extractTranslated(files.map((i) => [`Message ${i}`, `Melding ${i}`]));
+    await extractTranslated(files.map((i) => [`Message ${i}`, `Melding ${i}`]));
     await startWatch();
     // A branch switch: every file rewritten at once.
     files.forEach((i) => {
@@ -394,7 +394,7 @@ msgstr ""
   it("keeps a moved-out directory's entries while syncing the one moved in", async () => {
     write("src/old/a.tsx", component("Moved out"));
     write("staging/new/b.tsx", component("Moved in"));
-    extractTranslated([["Moved out", "Flyttet ut"]]);
+    await extractTranslated([["Moved out", "Flyttet ut"]]);
     await startWatch();
     renameSync(join(root, "src/old"), join(root, "staging/old"));
     renameSync(join(root, "staging/new"), join(root, "src/new"));

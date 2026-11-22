@@ -5,8 +5,9 @@ import process from "node:process";
 
 import type { CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
-import type { Problem, ProjectConfig } from "./project";
-import { CONFIG_FILE, loadConfig } from "./project";
+import { describeProblem } from "./problem";
+import type { ProjectConfig } from "./project-config";
+import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { WatchMode } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
 
@@ -26,9 +27,15 @@ const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to ${
  *
  * @param args - The arguments after the program name.
  * @param io - Working directory and output streams.
- * @returns The exit code: 0 when clean, 1 on any problem, 2 on a usage error.
+ * @returns The exit code: 0 when clean, 1 on any problem, 2 on a usage error; rejects when the command throws.
  */
-export function runCli(args: ReadonlyArray<string>, io: CliIo): number {
+export function runCli(args: ReadonlyArray<string>, io: CliIo): Promise<number> {
+  // A Promise, though the commands still run synchronously, so the hosts already await what becomes an Effect
+  // program; Promise.try turns a throw into a rejection, which runGuarded maps to exit code 2.
+  return Promise.try(runOnceOrUsage, args, io);
+}
+
+function runOnceOrUsage(args: ReadonlyArray<string>, io: CliIo): number {
   const parsed = parseArgs(args);
 
   if (parsed._tag === "Watch") {
@@ -141,9 +148,10 @@ function runOnce(parsed: OnceArgs, io: CliIo): number {
  * @param io - Working directory and output streams.
  * @returns The CLI's exit code, or 2 when it threw.
  */
-export function runGuarded(args: ReadonlyArray<string>, io: CliIo): number {
+export async function runGuarded(args: ReadonlyArray<string>, io: CliIo): Promise<number> {
   try {
-    return runCli(args, io);
+    // Awaited inside the try: a returned rejection would pass the catch by.
+    return await runCli(args, io);
   } catch (error) {
     return failed(io, error instanceof Error ? (error.stack ?? error.message) : String(error));
   }
@@ -153,19 +161,6 @@ function failed(io: CliIo, reason: string): number {
   io.stderr(`elmera-intl failed: ${reason}\n`);
 
   return 2;
-}
-
-/**
- * A problem as the CLI prints it: location, code, message, key, and the fix on its own line.
- *
- * @param problem - The problem.
- * @returns Human-readable text, without a trailing newline.
- */
-export function describeProblem(problem: Problem): string {
-  const where = [problem.file, problem.line, problem.column].filter((part) => part !== undefined).join(":");
-  const key = problem.key === undefined ? "" : ` [${JSON.stringify(problem.key)}]`;
-
-  return `${where ? `${where}: ` : ""}${problem.code}: ${problem.message}${key}\n  fix: ${problem.fix}`;
 }
 
 type OnceArgs = {

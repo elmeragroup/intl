@@ -7,9 +7,11 @@ import type { Plugin } from "vite";
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { catalogModule } from "./catalog-module";
-import { describeProblem, runCli } from "./cli-run";
+import { runCli } from "./cli-run";
 import { compileCatalog } from "./compile";
-import { catalogLocale, catalogPath, CONFIG_FILE, loadConfig, loadFormats } from "./project";
+import { describeProblem } from "./problem";
+import { catalogLocale, catalogPath, loadFormats } from "./project";
+import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ProjectWatcher } from "./watch";
 import type { WatchMode } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, nearestExisting, pollEvery, watchProject } from "./watch";
@@ -109,14 +111,14 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
       },
       // Every build start checks: each environment, each build of a reused config, each watch rebuild. Uncached, so
       // no build can pass on a stale result; the check costs a fraction of the build.
-      buildStart() {
+      async buildStart() {
         const config = configPath(this.environment.config.root);
         // `vite build --watch` rebuilds when only the config or catalogs change, so a catalog repair unstalls it. A
         // missing input cannot be watched, so its nearest existing ancestor is (recursively), which sees it created.
         catalogInputs(config).forEach((input) => {
           this.addWatchFile(realpathSync(nearestExisting(input)));
         });
-        const result = check(config);
+        const result = await check(config);
 
         if (!result.ok) {
           this.error(result.output);
@@ -127,12 +129,14 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
 }
 
 // The CLI itself, so the build fails with exactly what `elmera-intl check` prints.
-function check(config: string): { readonly ok: true } | { readonly ok: false; readonly output: string } {
+async function check(
+  config: string
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly output: string }> {
   let output = "";
   const collect = (text: string) => {
     output += text;
   };
-  const code = runCli(["check", "--config", config], {
+  const code = await runCli(["check", "--config", config], {
     cwd: resolve(config, ".."),
     stdout: collect,
     stderr: collect,
@@ -181,42 +185,47 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
         return null;
       }
 
-      const loaded = loadConfig(resolve(this.environment.config.root, options.config ?? CONFIG_FILE));
+      // A Promise for each catalog (every other id stays a synchronous null), so a later layer can compile behind an
+      // Effect program; the compile itself is still synchronous, and Promise.try turns this.error's throw into the
+      // hook's rejection.
+      return Promise.try(() => {
+        const loaded = loadConfig(resolve(this.environment.config.root, options.config ?? CONFIG_FILE));
 
-      if (loaded._tag === "ConfigInvalid") {
-        this.error(describeProblem(loaded.problem));
-      }
+        if (loaded._tag === "ConfigInvalid") {
+          this.error(describeProblem(loaded.problem));
+        }
 
-      const { config } = loaded;
-      const locale = catalogLocale(config, file);
+        const { config } = loaded;
+        const locale = catalogLocale(config, file);
 
-      if (locale === undefined) {
-        this.error(
-          `${relative(config.root, file)} is not a configured catalog (${config.catalogs}, ${config.locales.join(", ")})`
-        );
-      }
+        if (locale === undefined) {
+          this.error(
+            `${relative(config.root, file)} is not a configured catalog (${config.catalogs}, ${config.locales.join(", ")})`
+          );
+        }
 
-      // Before loading, so saving a repaired formats module reloads an import that failed on it.
-      if (config.formats !== undefined) {
-        this.addWatchFile(config.formats);
-      }
+        // Before loading, so saving a repaired formats module reloads an import that failed on it.
+        if (config.formats !== undefined) {
+          this.addWatchFile(config.formats);
+        }
 
-      const formats = loadFormats(config);
+        const formats = loadFormats(config);
 
-      if (formats._tag === "ConfigInvalid") {
-        this.error(describeProblem(formats.problem));
-      }
+        if (formats._tag === "ConfigInvalid") {
+          this.error(describeProblem(formats.problem));
+        }
 
-      const source = new URLSearchParams(query).has("source");
-      const compiled = compileCatalog(readFileSync(file, "utf8"), source ? SOURCE_LOCALE : locale, {
-        formats: formats.formats,
+        const source = new URLSearchParams(query).has("source");
+        const compiled = compileCatalog(readFileSync(file, "utf8"), source ? SOURCE_LOCALE : locale, {
+          formats: formats.formats,
+        });
+
+        if (compiled._tag === "CatalogCompileError") {
+          this.error(compiled.message);
+        }
+
+        return { code: catalogModule(compiled.catalog), map: null };
       });
-
-      if (compiled._tag === "CatalogCompileError") {
-        this.error(compiled.message);
-      }
-
-      return { code: catalogModule(compiled.catalog), map: null };
     },
     hotUpdate({ file, server }) {
       // Once per save: hotUpdate runs per environment, and the client one exists in every dev server.

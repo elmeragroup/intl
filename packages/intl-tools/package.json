@@ -69,6 +69,7 @@
     }
   },
   "scripts": {
+    "bench": "node bench/tools.ts",
     "build": "tsdown",
     "clean": "git clean -xdf .cache .turbo dist node_modules",
     "dev": "tsdown --watch --no-clean",

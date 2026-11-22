@@ -1,0 +1,301 @@
+// Benchmark, not a test: what the build-time tools cost their hosts, the numbers each PR's G9 gate reports against
+// the last. Run `pnpm bench` from the repository root, which builds the packages first; it reads only the built package
+// (`dist`, `bin`), by path, as a consumer's host loads it.
+//
+// - The CLI's cold start: a fresh `elmera-intl extract` and `check` process on a settled fixture project (both exit 0,
+//   extract writes nothing), the cost a script or CI step pays.
+// - Compiling one `*.po` import through the Turbopack/webpack loader and through the Vite plugin's `load` hook: the
+//   first call (a fresh worker or dev server, which evaluates the formats module in a child Node) and the mean of the
+//   calls after it. Each runs in its own process, so neither inherits the other's memo.
+// - Each built entry's cold import, in a fresh process: the cost a host pays to load the plugin or loader at all.
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+import type * as PoLoader from "../src/po-loader";
+import type * as Vite from "../src/vite";
+
+const PROCESS_RUNS = 9;
+const COMPILES = 50;
+const SOURCE_FILES = 12;
+const LOCALES = ["nb", "sv"] as const;
+
+const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
+const BIN = join(PACKAGE, "bin/elmera-intl.js");
+const distUrl = (file: string): string => new URL(`../dist/${file}`, import.meta.url).href;
+
+// The host's own module caches stay out of the samples: every process loads every module cold.
+const childEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => name !== "NODE_COMPILE_CACHE" && name !== "NODE_OPTIONS")
+);
+
+function median(samples: ReadonlyArray<number>): number {
+  const sorted = samples.toSorted((a, b) => a - b);
+
+  return sorted[Math.floor(sorted.length / 2)] ?? Number.NaN;
+}
+
+function millis(value: number): string {
+  return value.toFixed(1);
+}
+
+function mean(samples: ReadonlyArray<number>): number {
+  return samples.reduce((sum, sample) => sum + sample, 0) / samples.length;
+}
+
+// A project shaped like an app's: several components, each with plain, placeholder, plural and formatted messages,
+// two locales and a formats module.
+function writeFixture(root: string): void {
+  const write = (path: string, text: string): void => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), text);
+  };
+  write(
+    "elmera-intl.json",
+    JSON.stringify({
+      include: ["src/**/*.{ts,tsx}"],
+      catalogs: "messages/{locale}.po",
+      locales: LOCALES,
+      formats: "src/intl-formats.ts",
+    })
+  );
+  write(
+    "src/intl-formats.ts",
+    'export const formats = { number: { money: { style: "currency", currency: "NOK" } } };\n'
+  );
+  for (let i = 0; i < SOURCE_FILES; i += 1) {
+    write(
+      `src/feature-${i}/view.tsx`,
+      `import { T, msg } from "@elmeragroup/intl/react";
+
+export const TITLE = msg("Feature ${i} overview");
+export const ORDER = msg("Order {id} for feature ${i}");
+export const ITEMS = msg("{n, plural, one {# item in feature ${i}} other {# items in feature ${i}}}");
+export const PRICE = msg("Feature ${i} costs {amount, number, money}");
+export const View = () => <T>Welcome to feature ${i}</T>;
+`
+    );
+  }
+}
+
+/** One spawned CLI process: how long it ran and its exit code. */
+type CliRun = { readonly ms: number; readonly status: number | null };
+
+function cli(root: string, args: ReadonlyArray<string>): CliRun {
+  const start = performance.now();
+  const run = spawnSync(process.execPath, [BIN, ...args], { cwd: root, env: childEnv, encoding: "utf8" });
+
+  return { ms: performance.now() - start, status: run.status };
+}
+
+function expectStatus(label: string, status: number | null, expected: number): void {
+  if (status !== expected) {
+    throw new Error(
+      `${label} exited ${String(status)}, not ${expected}: the fixture is broken, so the timing is not`
+    );
+  }
+}
+
+// Every msgstr filled with the locale's prefix before the source, which keeps each placeholder and plural arm.
+function translate(root: string): void {
+  for (const locale of LOCALES) {
+    const path = join(root, `messages/${locale}.po`);
+    const po = readFileSync(path, "utf8").replaceAll(/^msgid "(.+)"\nmsgstr ""$/gmu, (_, source: string) => {
+      return `msgid "${source}"\nmsgstr "${locale} ${source}"`;
+    });
+    writeFileSync(path, po);
+  }
+}
+
+function settle(root: string): void {
+  expectStatus("extract (first)", cli(root, ["extract"]).status, 0);
+  translate(root);
+  expectStatus("extract (settle)", cli(root, ["extract"]).status, 0);
+  expectStatus("check (settle)", cli(root, ["check"]).status, 0);
+}
+
+function cliColdStart(root: string, command: "extract" | "check"): number {
+  return median(
+    Array.from({ length: PROCESS_RUNS }, () => {
+      const { ms, status } = cli(root, [command]);
+      expectStatus(command, status, 0);
+
+      return ms;
+    })
+  );
+}
+
+type CompileTimes = { readonly first: number; readonly mean: number };
+
+// One host's compile timings, measured in this script run as a child process (`compile <host> <root>`).
+function compileTimes(host: "loader" | "vite", root: string): CompileTimes {
+  const run = spawnSync(process.execPath, [import.meta.filename, "compile", host, root], {
+    env: childEnv,
+    encoding: "utf8",
+  });
+
+  if (run.status !== 0) {
+    throw new Error(`compile ${host} failed:\n${run.stderr}`);
+  }
+
+  const parsed: unknown = JSON.parse(run.stdout);
+
+  // SAFETY: the child is this script's `compile` mode, which prints exactly this shape.
+  return parsed as CompileTimes;
+}
+
+async function timeCompiles(compile: () => Promise<void>): Promise<CompileTimes> {
+  const time = async (): Promise<number> => {
+    const start = performance.now();
+    await compile();
+
+    return performance.now() - start;
+  };
+  // One at a time: overlapping compiles would time the event loop, not a compile.
+  const timeRest = async (left: number, samples: ReadonlyArray<number>): Promise<ReadonlyArray<number>> =>
+    left === 0 ? samples : timeRest(left - 1, [...samples, await time()]);
+  const first = await time();
+
+  return { first, mean: mean(await timeRest(COMPILES, [])) };
+}
+
+async function loaderCompile(root: string): Promise<CompileTimes> {
+  const po = readFileSync(join(root, "messages/nb.po"), "utf8");
+  // SAFETY: the module at that path is the build of src/po-loader.ts.
+  const { default: poLoader } = (await import(distUrl("po-loader.js"))) as typeof PoLoader;
+
+  return timeCompiles(async () => {
+    const done = Promise.withResolvers<string>();
+    poLoader.call(
+      {
+        resourcePath: join(root, "messages/nb.po"),
+        getOptions: () => ({ config: join(root, "elmera-intl.json"), source: false }),
+        addDependency: () => undefined,
+        async: () => (error, code) => {
+          if (error === null && code !== undefined) {
+            done.resolve(code);
+          } else {
+            done.reject(error ?? new Error("the loader returned no code"));
+          }
+        },
+      },
+      po
+    );
+
+    await done.promise;
+  });
+}
+
+async function viteCompile(root: string): Promise<CompileTimes> {
+  // SAFETY: the module at that path is the build of src/vite.ts.
+  const { intlCatalogs } = (await import(distUrl("vite.js"))) as typeof Vite;
+  const plugin = intlCatalogs();
+  const { load } = plugin;
+
+  if (load === undefined || "handler" in load) {
+    throw new TypeError("intlCatalogs() has no plain load hook");
+  }
+
+  // The part of Vite's plugin context the hook reads.
+  const context = {
+    environment: { config: { root } },
+    addWatchFile: () => undefined,
+    error: (message: string) => {
+      throw new Error(message);
+    },
+  };
+
+  return timeCompiles(async () => {
+    // SAFETY: Vite's full plugin context is not constructible here; the hook reads only the environment's root,
+    // addWatchFile and error, which this context has, and a read of anything else fails the bench.
+    const loaded = await load.call(context as never, join(root, "messages/nb.po"));
+
+    if (loaded === null) {
+      throw new Error("the load hook compiled nothing");
+    }
+  });
+}
+
+// A fresh Node per sample, which imports the entry and prints how long the import took.
+function coldImport(url: string): number {
+  return median(
+    Array.from({ length: PROCESS_RUNS }, () => {
+      const run = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `const start = performance.now(); await import(${JSON.stringify(url)}); process.stdout.write(String(performance.now() - start));`,
+        ],
+        { cwd: PACKAGE, env: childEnv, encoding: "utf8" }
+      );
+      expectStatus(`import ${url}`, run.status, 0);
+
+      return Number(run.stdout);
+    })
+  );
+}
+
+const ENTRIES = [
+  ["./vite", "vite.js"],
+  ["./next", "next.js"],
+  ["./vitest", "vitest.js"],
+  ["./oxlint", "oxlint.js"],
+  ["./compile", "compile.js"],
+  ["po-loader (Turbopack/webpack loader)", "po-loader.js"],
+] as const;
+
+function main(): void {
+  const root = mkdtempSync(join(tmpdir(), "elmera-intl-bench-"));
+  try {
+    writeFixture(root);
+    settle(root);
+    const extract = cliColdStart(root, "extract");
+    const check = cliColdStart(root, "check");
+    const loader = compileTimes("loader", root);
+    const vite = compileTimes("vite", root);
+    const imports = ENTRIES.map(([entry, file]) => [entry, coldImport(distUrl(file))] as const);
+    // The bin's whole startup with no command: imports, then the usage error (exit 2).
+    const usage = median(
+      Array.from({ length: PROCESS_RUNS }, () => {
+        const { ms, status } = cli(root, []);
+        expectStatus("elmera-intl (no command)", status, 2);
+
+        return ms;
+      })
+    );
+
+    console.table([
+      { metric: `CLI cold start: extract, settled (median of ${PROCESS_RUNS}, ms)`, value: millis(extract) },
+      { metric: `CLI cold start: check (median of ${PROCESS_RUNS}, ms)`, value: millis(check) },
+      {
+        metric: `CLI cold start: no command, usage exit (median of ${PROCESS_RUNS}, ms)`,
+        value: millis(usage),
+      },
+      { metric: "po-loader compile: first call (ms)", value: millis(loader.first) },
+      { metric: `po-loader compile: mean of next ${COMPILES} (ms)`, value: millis(loader.mean) },
+      { metric: "vite load compile: first call (ms)", value: millis(vite.first) },
+      { metric: `vite load compile: mean of next ${COMPILES} (ms)`, value: millis(vite.mean) },
+      ...imports.map(([entry, value]) => ({
+        metric: `cold import ${entry} (median of ${PROCESS_RUNS}, ms)`,
+        value: millis(value),
+      })),
+      { metric: "cold import ./po", value: "n/a (types only)" },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const [mode, host, root] = process.argv.slice(2);
+
+if (mode === "compile" && root !== undefined) {
+  const times = host === "vite" ? await viteCompile(root) : await loaderCompile(root);
+  process.stdout.write(JSON.stringify(times));
+} else {
+  main();
+}

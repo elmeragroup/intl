@@ -5,8 +5,11 @@ import { existsSync, readdirSync, readFileSync, statSync, watch } from "node:fs"
 import { dirname, join, relative, sep } from "node:path";
 
 import { extractCatalogs } from "./commands";
-import type { ParseCache, Problem, ProjectConfig } from "./project";
-import { catalogPath, CONFIG_FILE, isExcludedDirectory, isProjectSource } from "./project";
+import type { Problem } from "./problem";
+import type { ParseCache } from "./project";
+import { catalogPath, isExcludedDirectory, isProjectSource } from "./project";
+import type { ProjectConfig } from "./project-config";
+import { CONFIG_FILE } from "./project-config";
 
 /** What one sync did. */
 export type SyncResult =

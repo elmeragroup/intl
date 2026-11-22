@@ -11,11 +11,14 @@ import { runGuarded } from "./cli-run";
  * Run `elmera-intl check` in the vitest project root; problems go to stderr.
  *
  * @param project - The vitest project (its `TestProject`) whose root holds `elmera-intl.json`.
- * @throws When check finds problems (exit 1) or could not run (exit 2): the test run must stop.
+ * @returns Once check is clean; vitest awaits a global setup.
+ * @throws When check finds problems (exit 1) or could not run (exit 2): the test run must stop (as a rejection).
  */
-export default function checkIntlCatalogs(project: { readonly config: { readonly root: string } }): void {
+export default async function checkIntlCatalogs(project: {
+  readonly config: { readonly root: string };
+}): Promise<void> {
   const app = project.config.root;
-  const code = runGuarded(["check"], {
+  const code = await runGuarded(["check"], {
     cwd: app,
     stdout: () => undefined,
     stderr: (text) => process.stderr.write(text),

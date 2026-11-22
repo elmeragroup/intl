@@ -30,6 +30,6 @@
       }
     ]
   },
-  "include": ["bin", "src", "test", "vitest.config.ts", "tsdown.config.ts"],
+  "include": ["bench", "bin", "src", "test", "vitest.config.ts", "tsdown.config.ts"],
   "exclude": ["dist", "node_modules"]
 }
