@@ -17,8 +17,8 @@ type Reference = typeof PoReference.Type;
 
 type Keyword = "msgctxt" | "msgid" | "msgstr";
 
-// A message while its lines are read, its strings under the keywords that set them (`finish` names them): each is
-// set once its keyword's line is read.
+// A message while its lines are read, its strings under the keywords that set them (`endEntry` names them):
+// each is set once its keyword's line is read.
 type Draft = {
   -readonly [K in Keyword]?: string;
 } & {
