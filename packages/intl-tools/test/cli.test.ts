@@ -15,6 +15,7 @@ import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
+import { CatalogFiles } from "../src/catalog-files";
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
 import { Reporter } from "../src/reporter";
 import { CatalogSync } from "../src/watch";
@@ -96,7 +97,13 @@ async function inProcess<ROut>(
   const exit = await project.within(
     Effect.runPromiseExit(
       cliProgram(args, { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, settings, io, CatalogSync.layer(), FileEvents.layer()])
+        Effect.provide([
+          CliPlatform,
+          settings,
+          io,
+          Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()),
+          FileEvents.layer(),
+        ])
       )
     ),
     `elmera-intl ${args.join(" ")}`
@@ -209,6 +216,68 @@ msgstr ""
     expect(code).toBe(1);
     expect(stderr).toContain("src/bad.tsx:4:9: ExtractFailed: t() takes a string literal");
     expect(() => project.read("messages/nb.po")).toThrow();
+  });
+
+  // A catalog path that cannot be read as a file (a symbolic link that loops, a path through a regular file) reads as
+  // absent, as the layer 4 CLI read it (62bfdb1): a malformed catalog beside it is the one problem, exit 1, and nothing
+  // is written. Neither path is looked up before its read.
+  it.for([
+    {
+      blocked: "a self-looping symbolic link",
+      catalogs: "messages/{locale}.po",
+      nb: "messages/nb.po",
+      block: (project: Project) => {
+        symlinkSync("sv.po", project.path("messages/sv.po"));
+      },
+    },
+    {
+      blocked: "a regular file where its directory goes",
+      catalogs: "messages/{locale}/catalog.po",
+      nb: "messages/nb/catalog.po",
+      block: (project: Project) => {
+        project.write("messages/sv", "");
+      },
+    },
+  ])("reports a malformed catalog beside $blocked", async ({ catalogs, nb, block }, { project }) => {
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, catalogs, locales: ["nb", "sv"] }));
+    project.write(nb, `msgid "Broken\n`);
+    block(project);
+    const { code, stdout } = await cli(project, "extract", "--json");
+
+    expect({ code, problems: readReport(stdout).problems.map(({ code: problem }) => problem) }).toEqual({
+      code: 1,
+      problems: ["CatalogUnreadable"],
+    });
+    expect(project.read(nb)).toBe(`msgid "Broken\n`);
+  });
+
+  // An absolute catalog path through a linked directory: `messages/{locale}/../catalog.po` with `nb -> ../other/sub`
+  // names `other/catalog.po` for nb and `messages/catalog.po` for sv, two files one lexical path. Each is read on its
+  // own, as the layer below read them (e5f111b): sv's malformed catalog is the one problem, exit 1, and nothing is
+  // written.
+  it("reads each catalog an absolute path through a linked directory names", BIN_TEST, ({ project }) => {
+    project.write(
+      "elmera-intl.json",
+      JSON.stringify({
+        ...CONFIG,
+        catalogs: `${project.root}/messages/{locale}/../catalog.po`,
+        locales: ["nb", "sv"],
+      })
+    );
+    project.write("messages/catalog.po", `msgid "Broken\n`);
+    project.write("messages/sv/.keep", "");
+    project.write("other/sub/.keep", "");
+    symlinkSync("../other/sub", project.path("messages/nb"));
+    const run = bin(project, "extract", "--json");
+
+    expect({ code: run.code, problems: readReport(run.stdout).problems.map(({ code }) => code) }).toEqual({
+      code: 1,
+      problems: ["CatalogUnreadable"],
+    });
+    expect({
+      sv: project.read("messages/catalog.po"),
+      nb: existsSync(project.path("other/catalog.po")),
+    }).toEqual({ sv: `msgid "Broken\n`, nb: false });
   });
 
   it("refuses to overwrite a PO it cannot read", async ({ project }) => {
@@ -924,6 +993,30 @@ describe("bin", BIN_TEST, () => {
     });
     expect(run.stdout.length).toBeGreaterThan(65536);
     expect([run.status, readReport(run.stdout).problems.length]).toEqual([1, 1503]);
+  });
+
+  // The failure surfaces where the write fails, as the layer 4 CLI's did (62bfdb1): nb's catalog is written first, then
+  // sv's directory cannot be made through the regular file at its place.
+  it("writes the catalogs before one whose directory cannot be made, then exits 2 with that failure", ({
+    project,
+  }) => {
+    project.write(
+      "elmera-intl.json",
+      JSON.stringify({ ...CONFIG, catalogs: "messages/{locale}/catalog.po", locales: ["nb", "sv"] })
+    );
+    project.write("messages/sv", "");
+    const run = bin(project, "extract");
+
+    expect({
+      code: run.code,
+      stdout: run.stdout,
+      written: existsSync(project.path("messages/nb/catalog.po")),
+    }).toEqual({
+      code: 2,
+      stdout: "",
+      written: true,
+    });
+    expect(run.stderr).toMatch(/^elmera-intl failed: Error: E[A-Z]+: .*mkdir/u);
   });
 
   it("exits 2 and names the failure when the CLI throws", ({ project }) => {

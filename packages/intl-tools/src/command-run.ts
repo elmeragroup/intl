@@ -6,6 +6,8 @@ import * as Effect from "effect/Effect";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
+import type { ProjectIoFailed } from "./catalog-files";
+import { CatalogFiles } from "./catalog-files";
 import type { CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
 import type { Problem } from "./problem";
@@ -27,18 +29,24 @@ export class ProblemsFound
 /** A one-shot command. */
 export type OneShotCommand = "extract" | "check";
 
-// The commands are still synchronous. This is the one place each is lifted into a program, until the commands layer
-// makes them effects; an exception is a defect, as before.
-const commandReport = (command: OneShotCommand, configPath: string) =>
-  Effect.sync((): CommandReport => {
-    const loaded = loadConfig(configPath);
+// The command's report. The config is still read synchronously (`FileSystem` is the next layer's). I/O the commands do
+// not classify is the crash it was: the thrown value is the defect, so it prints with its own stack and a host that
+// rejects on a crash rejects with it.
+const commandReport = /* @__PURE__ */ Effect.fn("elmera-intl.report")(function* (
+  command: OneShotCommand,
+  configPath: string
+) {
+  const loaded = yield* Effect.sync(() => loadConfig(configPath));
 
-    if (loaded._tag === "ConfigInvalid") {
-      return { problems: [loaded.problem], messages: 0, written: [], unreachable: [] };
-    }
+  if (loaded._tag === "ConfigInvalid") {
+    return { problems: [loaded.problem], messages: 0, written: [], unreachable: [] } satisfies CommandReport;
+  }
 
-    return command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
-  });
+  const report: Effect.Effect<CommandReport, ProjectIoFailed, CatalogFiles> =
+    command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
+
+  return yield* report.pipe(Effect.catchTag("ProjectIoFailed", (failure) => Effect.die(failure.cause)));
+});
 
 /**
  * Write each problem as its own line on the Reporter's stderr.
@@ -145,7 +153,7 @@ export const oneShot = /* @__PURE__ */ Effect.fn("elmera-intl.oneShot")(function
 });
 
 /**
- * Run `oneShot` outside an Effect program, on the host's output streams.
+ * Run `oneShot` outside an Effect program, on the host's output streams and Node's catalog files.
  *
  * @param command - The command to run.
  * @param options - The project's config path and how a crash is taken.
@@ -158,5 +166,7 @@ export async function runOnceInProcess(
   options: { readonly configPath: string; readonly crash: CrashHandling },
   io: ReporterIo
 ): Promise<OneShotOutcome> {
-  return Effect.runPromise(oneShot(command, options).pipe(Effect.provide(Reporter.layer(io))));
+  return Effect.runPromise(
+    oneShot(command, options).pipe(Effect.provide([Reporter.layer(io), CatalogFiles.layer()]))
+  );
 }

@@ -25,6 +25,7 @@ import * as Terminal from "effect/Terminal";
 import { relative, resolve } from "node:path";
 import process from "node:process";
 
+import { CatalogFiles } from "./catalog-files";
 import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
@@ -329,7 +330,7 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
 });
 
 /**
- * The executable's program: the arguments from `Stdio`, the command's output on `io`, the synchronous extract and
+ * The executable's program: the arguments from `Stdio`, the command's output on `io`, Node's catalog files, the extract and
  * Node's file events for a watch, provided once for the whole program, and a crash printed.
  *
  * @param io - The process's working directory and output streams.
@@ -341,7 +342,12 @@ export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
     yield* cliProgram(args, io);
   }).pipe(
     reportCrash,
-    Effect.provide([CliPlatform, Reporter.layer(io), CatalogSync.layer(), FileEvents.layer()])
+    Effect.provide([
+      CliPlatform,
+      Reporter.layer(io),
+      Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()),
+      FileEvents.layer(),
+    ])
   );
 }
 

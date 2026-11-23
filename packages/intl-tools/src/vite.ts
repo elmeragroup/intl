@@ -3,6 +3,7 @@
 import * as Layer from "effect/Layer";
 import type { Plugin } from "vite";
 
+import { CatalogFiles } from "./catalog-files";
 import type { IntlPluginOptions } from "./vite-plugins";
 import { intlPlugins } from "./vite-plugins";
 import { CatalogSync } from "./watch";
@@ -20,6 +21,9 @@ export { intlCatalogs } from "./vite-plugins";
  * @returns The catalog, dev and build plugins.
  */
 export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
-  // The services each session's runtime provides: the sync's extract and the file events.
-  return intlPlugins(options, Layer.mergeAll(CatalogSync.layer(), FileEvents.layer()));
+  // The services each session's runtime provides: Node's catalog files, the sync's extract on them and the file events.
+  return intlPlugins(
+    options,
+    Layer.mergeAll(Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()), FileEvents.layer())
+  );
 }
