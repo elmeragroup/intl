@@ -129,7 +129,7 @@ export const readText = (
  * @param path - The file.
  * @returns Its text; undefined when it is unreachable.
  */
-export const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
+const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
   files: FileSystem.FileSystem,
   path: string
 ) {

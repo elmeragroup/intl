@@ -113,8 +113,8 @@ const found = formats === undefined ? undefined : nonJson(formats, "formats");
 process.stdout.write(JSON.stringify(found === undefined ? { formats } : { nonJson: found }));
 `;
 
-/** The last evaluation of each module path, keyed by the content it evaluated. */
-export type FormatsMemo = Map<string, { readonly content: string; readonly result: Evaluated }>;
+/** The last successful evaluation of each module path, keyed by the content it evaluated: never a failure. */
+export type FormatsMemo = Map<string, { readonly content: string; readonly result: EvaluatedFormats }>;
 
 /**
  * The memo's evaluation of a module's content, if it kept one.
@@ -124,7 +124,7 @@ export type FormatsMemo = Map<string, { readonly content: string; readonly resul
  * @param content - The module's text, as read before the evaluation.
  * @returns The kept evaluation of exactly that text, or undefined.
  */
-export function remembered(memo: FormatsMemo, path: string, content: string): Evaluated | undefined {
+export function remembered(memo: FormatsMemo, path: string, content: string): EvaluatedFormats | undefined {
   const hit = memo.get(path);
 
   return hit?.content === content ? hit.result : undefined;
@@ -161,9 +161,14 @@ export function remember(
 const EVALUATED: FormatsMemo = new Map();
 
 /** What evaluating a formats module gave: its export and the first value JSON would not carry, or why it failed. */
-export type Evaluated =
-  | { readonly _tag: "Evaluated"; readonly exported: unknown; readonly nonJson: string | undefined }
-  | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
+export type Evaluated = EvaluatedFormats | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
+
+/** A formats module that evaluated: its export and the first value JSON would not carry. */
+export type EvaluatedFormats = {
+  readonly _tag: "Evaluated";
+  readonly exported: unknown;
+  readonly nonJson: string | undefined;
+};
 
 // The loaders' evaluation: synchronous, its memo the process's (see `remember` for what it keeps).
 function evaluateFormats(path: string): Evaluated {
