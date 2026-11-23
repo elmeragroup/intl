@@ -58,11 +58,19 @@ export function syncFailed(message: string): SyncResult {
   };
 }
 
-/** A running watch. */
+/** A watch a host has started: its start, and its stop, which the host may ask for at any time, the start included. */
 export type ProjectWatcher = {
   /**
-   * Stop watching: the watchers close and no change is accepted, a pending sync is dropped, a running one finishes,
-   * and every result made is reported. Rejects with a report's failure that ended the watch, or a failed close.
+   * Settles once the first sync's result is reported, or once a stop the host asked for during the start has run.
+   * Rejects with the watch's start failure, the first result's report failure, or an Error saying the runtime was
+   * disposed during the start, after the watch has stopped and closed every watcher it started.
+   */
+  readonly started: Promise<void>;
+  /**
+   * Stop watching, at once: no change is accepted, the watchers close (a tree still opening opens nothing more), a
+   * pending sync is dropped, a running one finishes, and every result made is reported. Settles when the watch has
+   * ended, every watcher it opened closed; the same shutdown for every call. Rejects, on the first call only, with a
+   * report's failure that ended the started watch, or a failed close; a failed start is the start's to report.
    */
   readonly close: () => Promise<void>;
 };
@@ -566,9 +574,9 @@ export type WatchServices = CatalogSync | FileEvents;
 
 /**
  * Start a watch outside an Effect program, on a runtime the host owns: `watchCatalogs` in a scope of its own, on one
- * fiber of `runtime`, which provides the sync's extract and the file events. Closing the watch is the ordered stop; the
- * runtime's disposal is the backstop, which interrupts that fiber and so closes the watch's scope, a start still
- * pending included.
+ * fiber of `runtime`, which provides the sync's extract and the file events. The stop handle is the host's at once, so
+ * a host that closes during the start stops it there; the runtime's disposal is the backstop, which interrupts that
+ * fiber and so closes the watch's scope, a start still pending included.
  *
  * @param runtime - The host's runtime.
  * @param config - The project config.
@@ -576,18 +584,16 @@ export type WatchServices = CatalogSync | FileEvents;
  *   When that throws too, the watch ends: on the first sync's result, by rejecting the start; later, by throwing the
  *   error on the host's event loop.
  * @param mode - Where change events come from; native file events unless the caller polls.
- * @returns The running watch, once the first sync's result is reported. Rejects with the watch's start failure, the
- *   first result's report failure, or an Error saying the runtime was disposed during the start, after the watch has
- *   stopped and closed every watcher it started.
+ * @returns The watch: its start, and its stop.
  */
-export async function watchProject(
+export function watchProject(
   runtime: ManagedRuntime.ManagedRuntime<WatchServices, never>,
   config: ProjectConfig,
   report: (result: SyncResult) => void,
   mode: WatchMode = NATIVE
-): Promise<ProjectWatcher> {
+): ProjectWatcher {
   const stop = Deferred.makeUnsafe<void>();
-  const started = Promise.withResolvers<"started">();
+  const firstReported = Promise.withResolvers<"started">();
   // The watch for its whole life, in a scope that closes as its fiber ends, after the start fails or the watch stops:
   // the scope's stop has then closed every watcher.
   const ended = runtime.runPromiseExit(
@@ -602,55 +608,82 @@ export async function watchProject(
         });
         yield* watching.reported;
         yield* Effect.sync(() => {
-          started.resolve("started");
+          firstReported.resolve("started");
         });
         yield* watching.done;
       })
     )
   );
-  const start = await Promise.race([started.promise, ended]);
-
-  if (start !== "started") {
-    const failure = endFailure(start);
-
-    // An end by interruption alone is the host's own disposal; Effect's squash of it names no cause.
-    throw failure === undefined
-      ? new Error(
-          Exit.isFailure(start)
-            ? "the watch's runtime was disposed during its start"
-            : "the watch ended before its first result was reported"
-        )
-      : Cause.squash(failure);
-  }
-
-  // Whether the watch's end is someone else's to report: the host's, once it asks the watch to stop, or the event
-  // loop's, once a failure that ended the watch was thrown there.
-  let closing = false;
-  void ended.then((exit) => {
-    const cause = endFailure(exit);
-
-    // Nothing is left to report a failure that ends the watch: it ends the host, as a throwing report always did.
-    if (!closing && cause !== undefined) {
-      closing = true;
-      queueMicrotask(() => {
-        throw Cause.squash(cause);
-      });
-    }
-  });
-
-  return {
-    close: () => {
-      const reports = !closing;
-      closing = true;
-      Deferred.doneUnsafe(stop, Effect.void);
-
-      return ended.then((exit) => {
+  // Whether the host has asked the watch to stop.
+  let stopRequested = false;
+  // Whether the watch's end is someone else's to report: the host's first close, or the event loop's, once a failure
+  // that ended the watch was thrown there.
+  let endReported = false;
+  const started = Promise.race([firstReported.promise, ended]).then((start) => {
+    if (start === "started") {
+      void ended.then((exit) => {
         const cause = endFailure(exit);
 
-        if (reports && cause !== undefined) {
-          throw Cause.squash(cause);
+        // Unless the host is stopping it, nothing is left to report a failure that ends the watch: it ends the host, as
+        // a throwing report always did.
+        if (!stopRequested && !endReported && cause !== undefined) {
+          endReported = true;
+          queueMicrotask(() => {
+            throw Cause.squash(cause);
+          });
         }
       });
+
+      return;
+    }
+
+    // The start's own failure is the start's to report, never a close's.
+    endReported = true;
+    const failure = endFailure(start);
+
+    if (failure !== undefined) {
+      throw Cause.squash(failure);
+    }
+
+    // A stop the host asked for during the start ends it cleanly. An end by interruption alone, unasked, is the host's
+    // own disposal; Effect's squash of it names no cause.
+    if (!stopRequested) {
+      throw new Error(
+        Exit.isFailure(start)
+          ? "the watch's runtime was disposed during its start"
+          : "the watch ended before its first result was reported"
+      );
+    }
+  });
+  // The one shutdown: the stop signalled, then the watch's end once the start has settled.
+  let shutdown: Promise<void> | undefined;
+
+  return {
+    started,
+    close: () => {
+      if (shutdown !== undefined) {
+        return shutdown.catch(() => undefined);
+      }
+
+      stopRequested = true;
+      Deferred.doneUnsafe(stop, Effect.void);
+      shutdown = started
+        .then(
+          () => ended,
+          () => undefined
+        )
+        .then((exit) => {
+          const cause = exit === undefined ? undefined : endFailure(exit);
+
+          if (!endReported && cause !== undefined) {
+            endReported = true;
+            throw Cause.squash(cause);
+          }
+
+          endReported = true;
+        });
+
+      return shutdown;
     },
   };
 }

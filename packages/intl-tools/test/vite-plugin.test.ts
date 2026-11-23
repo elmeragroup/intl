@@ -91,6 +91,8 @@ function viteConfig(
 
 /** One environment's watch build, as its watcher reports it. */
 type WatchLog = {
+  /** The environment's name. */
+  readonly name: string;
   /** Each build's BUNDLE_START, BUNDLE_END or error message, in order. */
   readonly outcomes: Array<string>;
   /** Each change the watcher reported, as its path under the root, in order. */
@@ -133,7 +135,7 @@ async function watchBuild(project: Project, extra: InlineConfig = {}): Promise<A
         }
       });
 
-      return { outcomes, changes, settled: () => last === "END" };
+      return { name: environment.name, outcomes, changes, settled: () => last === "END" };
     })
   );
 }
@@ -283,9 +285,10 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
   // reports that output's write, and rebuilds on it, in a loop. The watch covers the project root, where every
   // environment writes its output (the config is missing, so its nearest existing ancestor is watched).
   it.for([
-    { environments: "one environment", extra: {} },
+    { environments: "one environment", names: ["client"], extra: {} },
     {
       environments: "client and SSR",
+      names: ["client", "ssr"],
       // Each environment its own watch options (as when set per environment), so neither inherits the other's
       // exclude through a shared object.
       extra: {
@@ -298,10 +301,12 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     },
   ])(
     "rebuilds $environments when a missing config is created, then stays idle",
-    async ({ extra }, { project }) => {
+    async ({ names, extra }, { project }) => {
       const config = project.read("elmera-intl.json");
       rmSync(project.path("elmera-intl.json"));
       const builds = await watchBuild(project, extra);
+      // Every environment builds, each on its own watcher, so every assertion below holds for each of them.
+      expect(builds.map(({ name }) => name)).toEqual(names);
       const last = () => builds.map(({ outcomes }) => outcomes.at(-1));
       await expect
         .poll(() => last().map((outcome) => outcome?.includes("elmera-intl.json")), project.guard())
@@ -414,15 +419,14 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   // Unit under test: the dev plugin's own hooks, called in the order Vite calls them when a dev server closes while the
   // watch is still starting: `configureServer`, not yet settled, then `closeBundle`, once per environment and in
-  // parallel. Oracle: layer 2's plugin, by hand: the close closes the watch once its start has settled, whatever point
-  // the start has reached, so its first sync is written and no watcher stays open once every hook settles. Each close
-  // is safe, the second included: it waits for the first's stop and finds the runtime already going.
+  // parallel. Oracle: layer 3's lifecycle contract, by hand: a stop during the start opens nothing more and returns
+  // only after every watcher opened is closed, so the dev server's start settles cleanly and no watcher stays open once
+  // every hook settles. Each close is safe, the second included: it waits for the same shutdown and finds the runtime
+  // already going.
   it.for([1, 2])(
     "closes a watch whose start is still pending when %i environment(s) close the bundle",
     async (closes, { project }) => {
       const before = watches();
-      // A message the first sync adds, so the watch has started once its start settles.
-      project.write("src/first.tsx", component("First"));
       // A real dev server, for the config the plugin reads; the plugin's hooks are called below, as Vite would. Its own
       // file watcher is off: on Linux it opens a handle per directory and file shortly after the server starts, and
       // keeps them until teardown, so only the plugin's watchers are counted.
@@ -435,18 +439,38 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
         Promise.all(Array.from({ length: closes }, () => Promise.resolve(closeBundle?.call(HOOK_CONTEXT)))),
         "the closes"
       );
-      await project.within(Promise.resolve(starting), "the start");
+      await expect(project.within(Promise.resolve(starting), "the start")).resolves.toBeUndefined();
 
-      expect(project.read("messages/nb.po")).toContain(`msgid "First"`);
       await expect.poll(watches, project.guard()).toBe(before);
     }
   );
 
   // Unit under test: the build plugin's own hooks, called as a build of two environments calls them in parallel: both
-  // environments' `closeBundle` while a `buildStart` check is under way. Oracle: the check's contract, by hand: a
-  // synced project passes, and a build after both ends checks again on a fresh runtime (an out-of-sync catalog fails it
-  // with its problem).
-  it("passes a check its environments' closes race, then checks again", async ({ project }) => {
+  // environments' `closeBundle` while a `buildStart` check is still reporting (thousands of problems, so the check
+  // yields mid-report). Oracle: the CLI's own check output, as `elmera-intl check` prints it in-process: the plugin's
+  // contract is a build that fails with `elmera-intl check failed:` and exactly that output, every problem and the
+  // summary; and a build after both ends checks again, with the same output.
+  it("reports a check in full when its environments' closes land during it, then checks again", async ({
+    project,
+  }) => {
+    project.write(
+      "src/many.tsx",
+      `import { msg } from "@elmeragroup/intl/react";\n${Array.from(
+        { length: 3000 },
+        (_, index) => `export const M${index} = msg("Message ${index}");\n`
+      ).join("")}`
+    );
+    let printed = "";
+    const print = (text: string) => {
+      printed += text;
+    };
+    expect(
+      await runOnceInProcess(
+        "check",
+        { configPath: project.path("elmera-intl.json"), crash: "reject" },
+        { stdout: print, stderr: print }
+      )
+    ).toBe("problems");
     const { buildStart, closeBundle } = hooksOf("elmera-intl:check");
     const context = {
       meta: { watchMode: false },
@@ -460,16 +484,38 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     // error, which this has.
     const call = <A extends ReadonlyArray<unknown>, R>(hook: ((...args: A) => R) | undefined, ...args: A) =>
       Promise.resolve(hook?.call(context as never, ...args));
+    // The build's whole error text, nothing before or after it.
+    const report = { message: `elmera-intl check failed:\n${printed}` };
 
     const checking = call(buildStart, BUILD_OPTIONS);
     const closing = Promise.all([call(closeBundle), call(closeBundle)]);
-    await expect(project.within(checking, "the running check")).resolves.toBeUndefined();
+    await expect(project.within(checking, "the running check")).rejects.toMatchObject(report);
     await project.within(closing, "the closes");
 
-    project.write("src/new.tsx", component("New"));
-    await expect(project.within(call(buildStart, BUILD_OPTIONS), "the next check")).rejects.toThrow(
-      "CatalogOutOfSync"
+    await expect(project.within(call(buildStart, BUILD_OPTIONS), "the next check")).rejects.toMatchObject(
+      report
     );
+  });
+
+  // Unit under test: one intl() instance hosting both a dev server and a build, as a config shared by `vite` and
+  // `vite build` in one process does. Oracle: layer 2's plugin, by hand: the build's end leaves the dev server's watch
+  // running, so a message saved after the build still reaches the PO.
+  it("keeps its dev watch syncing after a build of the same instance", async ({ project }) => {
+    const plugins = intl();
+    await devServer(project, { server: SERVER_WATCH, plugins });
+    await expect(build({ ...viteConfig(project), plugins })).resolves.toBeDefined();
+
+    // Rewritten until a sync shows it, so the save lands on a live watch whatever its timing.
+    await expect
+      .poll(
+        () => {
+          project.write("src/new.tsx", component("New"));
+
+          return project.read("messages/nb.po");
+        },
+        { ...project.guard(), interval: PROBE_INTERVAL_MS }
+      )
+      .toContain(`msgid "New"`);
   });
 
   // Oracle: the poll interval contract (10 ms to Node's timer maximum): the dev server's interval feeds the same

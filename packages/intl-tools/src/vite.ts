@@ -45,12 +45,12 @@ const NAME = "elmera-intl";
  */
 export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
   const configPath = (root: string) => resolve(root, options.config ?? CONFIG_FILE);
-  // What this instance runs its programs on: the dev server's watch, and each build's check.
-  const runtime = pluginRuntime();
-  // The watch as soon as its start begins: a dev server that closes while it is still starting closes it too.
-  let watcher: Promise<ProjectWatcher> | undefined;
-  // Every stop of the watch begun so far, settled: the runtime's disposal waits for them, so it never cuts one short.
-  let stopped: Promise<unknown> = Promise.resolve();
+  // What this instance runs its programs on: one runtime for the dev server's watch, another for the builds' checks, so
+  // an instance that both serves and builds never ends one with the other.
+  const serving = pluginRuntime();
+  const building = pluginRuntime();
+  // The watch as soon as its start begins: a dev server that closes while it is still starting stops it there.
+  let watcher: ProjectWatcher | undefined;
 
   return [
     intlCatalogs(options),
@@ -85,7 +85,7 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
               ? { _tag: "poll", intervalMs: DEFAULT_POLL_MS }
               : polled;
         watcher = watchProject(
-          runtime.current(),
+          serving.current(),
           loaded.config,
           (result) => {
             if (result._tag === "Written") {
@@ -100,31 +100,22 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
         );
 
         try {
-          await watcher;
+          await watcher.started;
         } catch (error) {
           // The failed start fails createServer, and Vite closes no plugin of a server it never made: the runtime goes
           // here, its watchers already closed by the start.
-          await runtime.dispose();
+          await serving.dispose();
           throw error;
         }
       },
-      // Once per environment as the dev server closes, in parallel: the first stops the watch (once its start has
-      // settled), in order, reporting how it ended; each then waits for every stop begun, and the runtime goes, with
-      // anything a stop did not reach.
+      // Once per environment as the dev server closes, in parallel: each asks the watch to stop at once, a start still
+      // pending included, and waits for its one ordered shutdown (the first close reports how it ended); then the
+      // runtime goes, with anything a stop did not reach.
       async closeBundle() {
-        const starting = watcher;
-        watcher = undefined;
-        // A start that failed has stopped already, and failed the dev server's start with its error.
-        const stopping = starting?.then(
-          (running) => running.close(),
-          () => undefined
-        );
-        stopped = Promise.allSettled([stopped, stopping]);
         try {
-          await stopping;
+          await watcher?.close();
         } finally {
-          await stopped;
-          await runtime.dispose();
+          await serving.dispose();
         }
       },
     },
@@ -155,7 +146,7 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
         catalogInputs(config).forEach((input) => {
           this.addWatchFile(realpathSync(nearestExisting(input)));
         });
-        const result = await check(runtime, config);
+        const result = await check(building, config);
 
         if (!result.ok) {
           this.error(result.output);
@@ -166,11 +157,11 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
       // disposes it.
       async closeBundle() {
         if (!this.meta.watchMode) {
-          await runtime.dispose();
+          await building.dispose();
         }
       },
       async closeWatcher() {
-        await runtime.dispose();
+        await building.dispose();
       },
     },
   ];
@@ -181,31 +172,42 @@ type PluginRuntime = {
   /** The runtime, made now unless one is live. */
   readonly current: () => ManagedRuntime.ManagedRuntime<WatchServices, never>;
   /**
-   * Runs `effect` on the current runtime.
+   * Runs `effect` on the current runtime, which is disposed only once the run has ended.
    *
    * @throws What the effect failed or died with.
    */
   readonly run: <A, E>(effect: Effect.Effect<A, E, WatchServices>) => Promise<A>;
   /**
-   * Retires the current runtime, so the next use makes a new one, and disposes it: any watch still on it is interrupted
-   * and closed. Safe to call again, or with no runtime: it then waits for the disposal already under way.
+   * Retires the current runtime, so the next use makes a new one, and disposes it once its runs have ended: any watch
+   * still on it is interrupted and closed. Safe to call again, or with no runtime: it then waits for the disposal
+   * already under way.
    */
   readonly dispose: () => Promise<void>;
 };
 
-// The build reuses one plugin instance for every environment and every build of a reused config: a build after an end
-// must find a runtime. The check is synchronous within its fiber, so a disposal cannot cut one short (layer 6, whose
-// check is asynchronous, makes the disposal wait for running checks).
+// The build reuses one plugin instance for every environment and every build of a reused config, and its environments
+// build in parallel: one environment's end must not cut another's check (a check yields while it reports), and a build
+// after an end must find a runtime.
 function pluginRuntime(): PluginRuntime {
-  let runtime: ManagedRuntime.ManagedRuntime<WatchServices, never> | undefined;
+  type Session = {
+    readonly runtime: ManagedRuntime.ManagedRuntime<WatchServices, never>;
+    readonly running: Set<Promise<unknown>>;
+  };
+  let session: Session | undefined;
   let disposed: Promise<void> = Promise.resolve();
-  const current = () =>
-    (runtime ??= ManagedRuntime.make(Layer.mergeAll(CatalogSync.layer(), FileEvents.layer())));
+  const current = (): Session =>
+    (session ??= {
+      runtime: ManagedRuntime.make(Layer.mergeAll(CatalogSync.layer(), FileEvents.layer())),
+      running: new Set(),
+    });
 
   return {
-    current,
+    current: () => current().runtime,
     run: async (effect) => {
-      const exit = await current().runPromiseExit(effect);
+      const { runtime, running } = current();
+      const run = runtime.runPromiseExit(effect);
+      running.add(run);
+      const exit = await run.finally(() => running.delete(run));
 
       if (Exit.isFailure(exit)) {
         throw Cause.squash(exit.cause);
@@ -214,11 +216,12 @@ function pluginRuntime(): PluginRuntime {
       return exit.value;
     },
     dispose: () => {
-      const retired = runtime;
-      runtime = undefined;
+      const retired = session;
+      session = undefined;
 
       if (retired !== undefined) {
-        disposed = Promise.all([disposed, retired.dispose()]).then(() => undefined);
+        const disposing = Promise.allSettled(retired.running).then(() => retired.runtime.dispose());
+        disposed = Promise.all([disposed, disposing]).then(() => undefined);
       }
 
       return disposed;
