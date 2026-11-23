@@ -2,9 +2,7 @@
 // command line, and the hosts (the Vite build check, the Vitest setup) call it directly, so they print, and exit,
 // alike without loading effect/cli.
 
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
@@ -160,13 +158,5 @@ export async function runOnceInProcess(
   options: { readonly configPath: string; readonly crash: CrashHandling },
   io: ReporterIo
 ): Promise<OneShotOutcome> {
-  const exit = await Effect.runPromiseExit(
-    oneShot(command, options).pipe(Effect.provide(Reporter.layer(io)))
-  );
-
-  if (Exit.isSuccess(exit)) {
-    return exit.value;
-  }
-
-  throw Cause.squash(exit.cause);
+  return Effect.runPromise(oneShot(command, options).pipe(Effect.provide(Reporter.layer(io))));
 }
