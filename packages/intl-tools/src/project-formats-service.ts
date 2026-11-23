@@ -1,5 +1,5 @@
 // The app's `formats` as the hosts' Effect programs load them (`check`): the module read through `FileSystem`,
-// evaluated in a Node child process by `evaluateModule` (project-formats.ts, `spawnSync`: see there why not
+// evaluated in a Node child process by `loadSnapshot` (project-formats.ts, `spawnSync`: see there why not
 // effect/process), and judged as the loaders judge it. The memo of evaluations lives in the service, so each host
 // runtime (a CLI run, a Vite session) owns its own.
 import * as Context from "effect/Context";
@@ -10,8 +10,8 @@ import * as Layer from "effect/Layer";
 import { ioEdge, nodeSyncError, readText } from "./catalog-files";
 import type { ProjectIoFailed } from "./catalog-files";
 import type { ProjectConfig } from "./project-config";
-import type { Evaluated, FormatsLoaded, FormatsMemo } from "./project-formats";
-import { evaluateModule, judgeFormats, remember, remembered } from "./project-formats";
+import type { FormatsLoaded, FormatsMemo } from "./project-formats";
+import { loadSnapshot, unreadableFormats } from "./project-formats";
 
 /** The app's `formats`, loaded for a host runtime. */
 export class ProjectFormats
@@ -39,35 +39,30 @@ export class ProjectFormats
         const files = yield* FileSystem.FileSystem;
         const memo: FormatsMemo = new Map();
 
-        const evaluated = Effect.fnUntraced(function* (path: string) {
-          const content = yield* readText(files, path).pipe(Effect.result);
+        // As `loadFormats`: each read of the module goes to `loadSnapshot`, which evaluates, retries and memoizes;
+        // this service owns only the read, through `FileSystem`, and runs the evaluation at its I/O edge.
+        const loaded = Effect.fnUntraced(function* (root: string, module: string) {
+          for (let attempt = 1; ; attempt += 1) {
+            const content = yield* readText(files, module).pipe(Effect.result);
 
-          if (content._tag === "Failure") {
-            return {
-              _tag: "FormatsUnloadable",
-              reason: nodeSyncError(content.failure).message,
-            } satisfies Evaluated;
+            if (content._tag === "Failure") {
+              return unreadableFormats(root, module, nodeSyncError(content.failure).message);
+            }
+
+            const text = content.success;
+            const step = yield* ioEdge("formats", () => loadSnapshot(memo, root, module, text, attempt));
+
+            if (step._tag !== "ReadAgain") {
+              return step;
+            }
           }
-
-          const hit = remembered(memo, path, content.success);
-
-          if (hit !== undefined) {
-            return hit;
-          }
-
-          const result = yield* ioEdge("formats", () => evaluateModule(path));
-          // Kept as `remember` decides: a success, while the module still holds the text read before it.
-          const after = yield* readText(files, path).pipe(Effect.orElseSucceed(() => undefined));
-          remember(memo, path, content.success, after, result);
-
-          return result;
         });
 
         return {
           load: Effect.fn("ProjectFormats.load")(function* (config: ProjectConfig) {
             return config.formats === undefined
               ? ({ _tag: "Formats", formats: undefined } satisfies FormatsLoaded)
-              : judgeFormats(config.root, config.formats, yield* evaluated(config.formats));
+              : yield* loaded(config.root, config.formats);
           }),
         };
       })

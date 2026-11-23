@@ -24,7 +24,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process, { execPath } from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, test } from "vitest";
 
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
@@ -484,6 +484,74 @@ describe("check", () => {
       ]);
     }
   );
+
+  // The evaluating Node's diagnostics name its own script: a stable module whose top-level await never settles is
+  // reported with Node's warning, which quotes the line of that script. Oracle: 963d3e4's script and the stack's base
+  // (c2cf828), whose text this is, line 2 of `[eval1]` in the child's working directory (the project root); the
+  // comparison with the text read lives in a preload, so the script and its diagnostics stay as they were.
+  it(
+    "reports a formats module whose top-level await never settles as the base did",
+    BIN_TEST,
+    ({ project }) => {
+      project.write("package.json", `{ "type": "module" }\n`);
+      project.write("formats.js", "await new Promise(() => {});\nexport const formats = {};\n");
+      project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "formats.js" }));
+      const run = bin(project, "check", "--json");
+
+      expect([run.code, readReport(run.stdout).problems.map(({ message }) => message)]).toEqual([
+        1,
+        [
+          `cannot load: Warning: Detected unsettled top-level await at ${pathToFileURL(realpathSync(project.root)).href}/[eval1]:2\nconst { formats } = await import(process.argv[1]);\n                    ^`,
+        ],
+      ]);
+    }
+  );
+
+  // The child reads the module's text from stdin to EOF before the module loads, so the module sees stdin at EOF, as
+  // it did when stdin carried nothing. Oracle: the contract by hand: a module that reads stdin gets "".
+  it("gives the formats module stdin at EOF", async ({ project }) => {
+    await cli(project, "extract");
+    await translateAll(project);
+    project.write(
+      "intl-formats.ts",
+      `import { readFileSync } from "node:fs";\nconst stdin = readFileSync(0, "utf8");\nif (stdin !== "") throw new Error(\`stdin held \${stdin.length} characters\`);\nexport const formats = {};\n`
+    );
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
+    const { code, report } = await check(project);
+
+    expect([code, report.problems]).toEqual([0, []]);
+  });
+
+  // The host's NODE_OPTIONS belong to the host: the evaluating Node runs without them. Oracle: the contract by hand: a
+  // preload in NODE_OPTIONS that records each process it runs in records the executable alone (no Node flags), never
+  // the evaluating Node (run with --input-type=module), and the check passes. The executable, so the host's environment
+  // is its own.
+  it("evaluates the formats module without the host's NODE_OPTIONS", BIN_TEST, async ({ project }) => {
+    await cli(project, "extract");
+    await translateAll(project);
+    project.write("intl-formats.ts", "export const formats = {};\n");
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
+    const log = project.path("preloaded.log");
+    project.write(
+      "preload.cjs",
+      `require("node:fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.execArgv) + "\\n");\n`
+    );
+    const run = spawnSync(execPath, [BIN, "check", "--json"], {
+      cwd: project.root,
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: `--require=${project.path("preload.cjs")}` },
+      ...project.spawnGuard(),
+    });
+
+    expect({
+      status: run.status,
+      problems: readReport(run.stdout).problems,
+      preloaded: project
+        .read("preloaded.log")
+        .split("\n")
+        .filter((line) => line !== ""),
+    }).toEqual({ status: 0, problems: [], preloaded: ["[]"] });
+  });
 
   // Oracle: CLDR's nb and en `one`, which is 1 alone among integers: the exact arms take it, and the search cannot
   // prove that, so check lists the arm as information and passes.
