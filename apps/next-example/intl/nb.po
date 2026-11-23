@@ -1,0 +1,149 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nb\n"
+"X-Elmera-Serializer: 1\n"
+
+#: components/cart.tsx
+msgid "Add an item"
+msgstr "Legg til en vare"
+
+#: components/api-demo.tsx
+msgid "Call the API"
+msgstr "Kall API-et"
+
+#: components/api-demo.tsx
+msgid "Confirm the order"
+msgstr "Bekreft bestillingen"
+
+#: intl/messages.ts
+msgid "Delivered"
+msgstr "Levert"
+
+#: app/page.tsx
+msgid "Delivered to your {place, select, home {home} office {office} other {pickup point}}."
+msgstr "Leveres til {place, select, home {hjemmet ditt} office {kontoret ditt} other {hentestedet ditt}}."
+
+#: app/page.tsx
+msgid "Delivery window"
+msgstr "Leveringsvindu"
+
+#: app/page.tsx
+msgid "Hello {name}, you have {count, plural, =0 {no new messages} one {# new message} other {# new messages}}."
+msgstr "Hei {name}, du har {count, plural, =0 {ingen nye meldinger} one {# ny melding} other {# nye meldinger}}."
+
+#: components/locale-switcher.tsx
+msgid "Language"
+msgstr "Språk"
+
+#: intl/messages.ts
+msgctxt "shop opening state"
+msgid "Open"
+msgstr "Åpen"
+
+#: app/page.tsx
+msgctxt "verb"
+msgid "Open"
+msgstr "Åpne"
+
+#: app/page.tsx
+msgid "Order date"
+msgstr "Bestillingsdato"
+
+#: app/page.tsx
+msgid "Order status"
+msgstr "Bestillingsstatus"
+
+#: app/page.tsx
+msgid "Order {id}"
+msgstr "Bestilling {id}"
+
+#: components/cart.tsx
+msgid "Order {id}: {status}, {placedAt}"
+msgstr "Bestilling {id}: {status}, {placedAt}"
+
+#: app/page.tsx
+msgid "Orders ship within two working days, and you can return an item within 30 days."
+msgstr "Bestillinger sendes innen to virkedager, og du kan returnere en vare innen 30 dager."
+
+#: app/page.tsx
+msgid "Pickup points"
+msgstr "Hentesteder"
+
+#: intl/messages.ts
+msgid "Placed"
+msgstr "Bestilt"
+
+#: app/page.tsx
+msgid "Placed on {placedAt, date, short}"
+msgstr "Bestilt {placedAt, date, short}"
+
+#. <x0> = <a href>
+#: app/page.tsx
+msgid "Read our <x0>terms of sale</x0> before you order."
+msgstr "Les <x0>salgsvilkårene</x0> våre før du bestiller."
+
+#: components/api-demo.tsx
+msgid "Server answers"
+msgstr "Svar fra serveren"
+
+#: intl/messages.ts
+msgid "Shipped"
+msgstr "Sendt"
+
+#: app/page.tsx
+msgid "Shipping"
+msgstr "Frakt"
+
+#: app/page.tsx
+msgid "Shop"
+msgstr "Butikk"
+
+#: app/page.tsx
+msgid "Terms of sale"
+msgstr "Salgsvilkår"
+
+#: app/actions.ts
+msgid "Thank you! Order {id} is confirmed."
+msgstr "Takk! Bestilling {id} er bekreftet."
+
+#: components/api-demo.tsx
+msgid "The server did not answer. Try again."
+msgstr "Serveren svarte ikke. Prøv igjen."
+
+#: app/page.tsx
+msgid "This page was rendered on the server."
+msgstr "Denne siden ble gjengitt på serveren."
+
+#: app/api/greeting/route.ts
+msgid "This text was translated by an API route."
+msgstr "Denne teksten ble oversatt av en API-rute."
+
+#: app/page.tsx
+msgid "Total"
+msgstr "Totalt"
+
+#: components/cart.tsx
+msgid "Total: {total, number, price}"
+msgstr "Totalt: {total, number, price}"
+
+#: app/page.tsx
+msgid "Welcome to the example shop"
+msgstr "Velkommen til eksempelbutikken"
+
+#: components/cart.tsx
+msgid "Your cart"
+msgstr "Handlekurven din"
+
+#: components/locale-switcher.tsx
+msgid "Your language choice was not saved. Try again."
+msgstr "Språkvalget ditt ble ikke lagret. Prøv igjen."
+
+#: components/locale-switcher.tsx
+msgid "Your language choice was saved. Reload the page to see it."
+msgstr "Språkvalget ditt er lagret. Last inn siden på nytt for å se det."
+
+#: components/cart.tsx
+msgid "{count, plural, =0 {Your cart is empty} one {# item in your cart} other {# items in your cart}}"
+msgstr "{count, plural, =0 {Handlekurven er tom} one {# vare i handlekurven} other {# varer i handlekurven}}"

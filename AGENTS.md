@@ -1,7 +1,7 @@
 # Working in this repository
 
 This pnpm workspace holds `@elmeragroup/intl`, a source-keyed i18n runtime for React, and
-`@elmeragroup/intl-tools`, its build-time tools. Read the root [README](README.md),
+`@elmeragroup/intl-tools`, its build-time tools, with one example app per host in `apps/`. Read the root [README](README.md),
 [CONTEXT.md](CONTEXT.md) for the domain language, and the affected package's README before changing
 behavior.
 
@@ -16,6 +16,10 @@ behavior.
   the `elmera-intl/extractable` lint rule and the Vitest catalog check. Public.
 - `packages/intl-e2e` holds the Next.js and TanStack Start fixture apps and their Playwright gates.
   Private; nothing depends on it, so its framework dependencies stay out of consumers' installs.
+- `apps/next-example` (Next.js App Router) and `apps/start-example` (TanStack Start) are the example
+  apps: the recommended setup of both packages on each host, in English and Norwegian Bokmål, each
+  with its own Playwright specs against its production build and its own Vitest unit tests. Private
+  and never published; nothing depends on or imports an app.
 - `tooling/typescript` contains the shared TypeScript configuration.
 - `tooling/lint` holds this workspace's own contracts as lint: the `elmera-workspace` oxlint plugin
   and the manifest test for what lives in JSON and YAML. Private.
@@ -24,7 +28,9 @@ behavior.
   `version-packages.yml`, and by maintainers for `promote`).
 
 Keep the dependency direction `intl-e2e` → `intl-tools` → `intl`
-(`elmera-workspace/import-boundaries`). The tools reach the runtime's serializer, catalog codec and
+(`elmera-workspace/import-boundaries`). The example apps consume `intl` and `intl-tools` from the
+workspace as any app does, and are leaves: no package declares one (the manifest test), and no file
+outside an app imports one (`elmera-workspace/import-boundaries`). The tools reach the runtime's serializer, catalog codec and
 formatter through its `/internal/*` subpaths. Both published packages are self-contained: they import
 no other `@elmeragroup` package, so a consumer installs nothing else of ours.
 
@@ -52,13 +58,13 @@ Run commands from the repository root unless stated otherwise.
 ```sh
 pnpm install --frozen-lockfile
 pnpm ci:checks     # format, lint, type-check and every package's tests (CI's checks job)
-pnpm test:e2e      # fixture apps on linked, then packed, packages (CI's e2e job)
+pnpm test:e2e      # fixture apps on linked, then packed, packages, and the example apps (CI's e2e job)
 ```
 
 While iterating:
 
 ```sh
-pnpm dev                                    # rebuild packages on change (turbo watch)
+pnpm dev                                    # rebuild packages on change (turbo watch); serve the example apps
 pnpm tcw                                    # type-check in watch mode
 pnpm --filter @elmeragroup/intl test        # one package's tests in watch mode
 pnpm turbo run test:run --filter=@elmeragroup/intl -- conformance   # one package, one file filter
@@ -126,6 +132,10 @@ Each kind of test lives with its owner:
   the linked packages, then on `pnpm pack` archives installed as real copies, and runs the
   Playwright specs in `tests/` against each build. A new host adapter or build plugin adds a
   fixture app there.
+- The recommended setup on each host: `apps/<name>/tests`, Playwright specs against the example
+  app's production build, run by its `e2e` script, and `apps/<name>/test`, its Vitest unit tests
+  (pure logic and the compiled catalog, behind the catalog check). A change to an API an example uses
+  updates the example and its specs with it.
 
 ## Public behavior and releases
 
@@ -151,8 +161,9 @@ the browser-facing runtime ships no ICU parser, and G7 proves it.
 
 The workspace grows by package, not by folders inside one. A new workspace package:
 
-1. Lives in `packages/<name>` (a library or test harness) or `tooling/<name>` (workspace tooling),
-   with a kebab-case directory and an `@elmeragroup/<name>` name.
+1. Lives in `packages/<name>` (a library or test harness), `tooling/<name>` (workspace tooling) or
+   `apps/<name>` (a private example app, which nothing depends on), with a kebab-case directory and
+   an `@elmeragroup/<name>` name.
 2. Extends a preset from `tooling/typescript` (`base.json`, `react-library.json`, `nextjs.json`,
    `internal-package.json`) and declares `tsrs` and `typescript` as `catalog:` dev dependencies.
 3. Defines the scripts turbo runs, as applicable: `build`, `dev`, `type-check`, `tcw`, `test`,

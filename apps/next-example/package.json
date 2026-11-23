@@ -1,0 +1,43 @@
+{
+  "name": "@elmeragroup/next-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a Next.js App Router app, in English and Norwegian Bokmål. sideEffects: true keeps `import \"../intl/configure\"` from being dropped.",
+  "type": "module",
+  "sideEffects": true,
+  "scripts": {
+    "build": "elmera-intl check && next build",
+    "clean": "git clean -xdf .next .turbo node_modules playwright-report test-results",
+    "dev": "pnpm run \"/^dev:/\"",
+    "dev:intl": "elmera-intl extract --watch",
+    "dev:next": "next dev -p 3030",
+    "e2e": "pnpm build && playwright test",
+    "intl:check": "elmera-intl check",
+    "intl:extract": "elmera-intl extract",
+    "start": "next start -p 3030",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --customConditions null --watch",
+    "type-check": "tsrs --noEmit --customConditions null",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@elmeragroup/intl": "workspace:*",
+    "effect": "catalog:",
+    "next": "catalog:",
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19"
+  },
+  "devDependencies": {
+    "@elmeragroup/intl-tools": "workspace:*",
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:react19",
+    "@types/react-dom": "catalog:react19",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

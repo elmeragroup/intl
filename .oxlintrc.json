@@ -209,12 +209,12 @@
     }
   },
   "overrides": [
-    // The e2e fixture apps: React rules. The runtime's React code is held by its tests and the conformance suite
-    // instead, which render keyless child arrays on purpose. The fixtures use the automatic JSX runtime; their <T>
-    // children are message sources written as an app writes them, apostrophes included; and a page imports
-    // `../intl/configure` for its effect (the fixture's `sideEffects: true`).
+    // The e2e fixture apps and the example apps (apps/*): React rules. The runtime's React code is held by its tests
+    // and the conformance suite instead, which render keyless child arrays on purpose. The apps use the automatic JSX
+    // runtime; their <T> children are message sources written as an app writes them, apostrophes included; and a Next
+    // page imports `intl/configure` for its effect, which configureNextIntl requires (the app's `sideEffects: true`).
     {
-      "files": ["packages/intl-e2e/**/*.{ts,tsx}"],
+      "files": ["packages/intl-e2e/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}"],
       "plugins": ["typescript", "oxc", "unicorn", "import", "react", "jsx-a11y"],
       "rules": {
         "react/react-in-jsx-scope": "off",

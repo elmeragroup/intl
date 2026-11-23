@@ -62,9 +62,11 @@ jobs:
         if: ${{ steps.prepare.outputs.channel == 'canary' }}
         run: echo "::notice::canary releases are off until the packages are ready (#4); nothing is published"
 
+      # Only the published packages: the example apps' builds (Next, Vite, Nitro) would run more dependency code
+      # in the job that holds the OIDC token, for nothing it publishes.
       - name: Build
         if: ${{ steps.prepare.outputs.channel == 'stable' }}
-        run: pnpm build
+        run: pnpm turbo run build --filter=@elmeragroup/intl --filter=@elmeragroup/intl-tools
 
       # pnpm publish and npm dist-tag exchange the job's OIDC token for a short-lived token (trusted
       # publishing); no npm token is stored. PNPM_CONFIG_PROVENANCE makes pnpm sign provenance or fail,

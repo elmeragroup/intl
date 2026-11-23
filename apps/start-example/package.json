@@ -1,0 +1,43 @@
+{
+  "name": "@elmeragroup/start-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a TanStack Start app, in English and Norwegian Bokmål.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "clean": "git clean -xdf .nitro .output .tanstack .turbo node_modules playwright-report test-results",
+    "dev": "vite dev",
+    "e2e": "pnpm build && playwright test",
+    "intl:check": "elmera-intl check",
+    "intl:extract": "elmera-intl extract",
+    "start": "node .output/server/index.mjs",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --customConditions null --watch",
+    "type-check": "tsrs --noEmit --customConditions null",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@elmeragroup/intl": "workspace:*",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19"
+  },
+  "devDependencies": {
+    "@elmeragroup/intl-tools": "workspace:*",
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:react19",
+    "@types/react-dom": "catalog:react19",
+    "@vitejs/plugin-react": "catalog:",
+    "nitro": "catalog:",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

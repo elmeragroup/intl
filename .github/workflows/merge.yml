@@ -60,7 +60,7 @@ jobs:
   # pass. A job of its own, so a unit or type failure does not wait on the builds.
   e2e:
     runs-on: ubuntu-latest
-    # The e2e script builds four fixture apps and starts their servers; a hung server would
+    # The e2e scripts build the fixture apps and the example apps and start their servers; a hung server would
     # otherwise hold the runner for GitHub's 360-minute default.
     timeout-minutes: 45
     steps:
@@ -100,6 +100,8 @@ jobs:
           path: |
             packages/*/test-results/
             packages/*/playwright-report/
+            apps/*/test-results/
+            apps/*/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
 

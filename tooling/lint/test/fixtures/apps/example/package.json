@@ -1,0 +1,5 @@
+{
+  "name": "@elmeragroup/example",
+  "private": true,
+  "description": "Fixture: an example app under the workspace's apps/, which nothing outside it imports."
+}

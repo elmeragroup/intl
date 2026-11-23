@@ -2,7 +2,7 @@
 // the surface a published package commits. The plugin's one JSON boundary: manifests and surfaces are parsed here,
 // once each, into the fields the rules use.
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 /** The export condition that maps every workspace subpath to its source file. */
 export const SOURCE_CONDITION = "elmera-source";
@@ -37,6 +37,8 @@ export const RUNTIME = "@elmeragroup/intl";
 export const TOOLS = "@elmeragroup/intl-tools";
 /** The private e2e harness package. */
 export const E2E = "@elmeragroup/intl-e2e";
+/** The workspace directory that holds the example apps (`apps/<name>`), as pnpm-workspace.yaml globs it. */
+export const APPS_DIRECTORY = "apps";
 
 const byDirectory = new Map<string, WorkspacePackage | undefined>();
 
@@ -105,6 +107,17 @@ export function packageOf(filename: string): WorkspacePackage | undefined {
   byDirectory.set(directory, found);
 
   return found;
+}
+
+/**
+ * Whether the package is an example app: a private package directly under the workspace's `apps/`. Nothing depends on
+ * an app, and none publishes.
+ *
+ * @param pkg - A workspace package.
+ * @returns `true` for `apps/<name>`.
+ */
+export function isApp(pkg: WorkspacePackage): boolean {
+  return !pkg.published && basename(dirname(pkg.root)) === APPS_DIRECTORY;
 }
 
 /**

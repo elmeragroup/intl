@@ -1,8 +1,8 @@
 import { importBoundaries } from "../src/rules/import-boundaries.ts";
 import { createTester, fixture } from "./rule-tester.ts";
 
-// Unit under test: elmera-workspace/import-boundaries. Oracle: the dependency direction intl-e2e → intl-tools → intl
-// and the fixture manifests (runtime: intl-messageformat, peers react and effect, dev @types/react; tools:
+// Unit under test: elmera-workspace/import-boundaries. Oracle: the dependency direction intl-e2e → intl-tools → intl,
+// the rule that nothing outside an example app (fixtures/apps/example) imports it, and the fixture manifests (runtime: intl-messageformat, peers react and effect, dev @types/react; tools:
 // @elmeragroup/intl, oxc-parser, dev @oxlint/plugins), per case.
 createTester().run("import-boundaries", importBoundaries, {
   valid: [
@@ -43,8 +43,29 @@ createTester().run("import-boundaries", importBoundaries, {
       code: `import { T } from "@elmeragroup/intl/react";\nimport { withIntl } from "@elmeragroup/intl-tools/next";`,
       filename: fixture("app/src/page.tsx"),
     },
+    // An example app imports its own files, at any depth.
+    {
+      code: `import { formats } from "../intl/formats";\nimport { LocaleSwitcher } from "../../components/locale-switcher";`,
+      filename: fixture("apps/example/app/api/route.ts"),
+    },
   ],
   invalid: [
+    // Nothing outside an example app reaches into it, by a relative path from any other package.
+    {
+      code: `import { formats } from "../../apps/example/intl/formats";`,
+      filename: fixture("app/src/page.tsx"),
+      errors: [
+        {
+          messageId: "app",
+          data: { specifier: "../../apps/example/intl/formats", app: "@elmeragroup/example" },
+        },
+      ],
+    },
+    {
+      code: `export type { Locale } from "../../../apps/example/intl/locale.ts";`,
+      filename: fixture("tools/test/vite/plugin.test.ts"),
+      errors: [{ messageId: "app" }],
+    },
     {
       code: `import { T } from "@elmeragroup/intl-e2e/fixtures";`,
       filename: fixture("app/src/page.tsx"),
