@@ -5,8 +5,9 @@ import { catalogModule } from "./catalog-module";
 import { compileCatalog } from "./compile";
 import type { PoLoaderOptions } from "./next";
 import { describeProblem } from "./problem";
-import { catalogLocale, loadFormats } from "./project";
+import { catalogLocale } from "./project-catalogs";
 import { loadConfig } from "./project-config";
+import { loadFormats } from "./project-formats";
 
 /** The part of Turbopack's webpack-loader context the loader uses. */
 type LoaderContext = {

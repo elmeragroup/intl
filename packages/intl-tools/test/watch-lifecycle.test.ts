@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import { existsSync, rmSync } from "node:fs";
@@ -22,6 +23,7 @@ import {
   component,
   CONFIG,
   deliveredEvents,
+  hostRuntime,
   it,
   lockedRoot,
   POLL_MS,
@@ -79,7 +81,8 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
 
     async function watchPolling(project: Project): Promise<Array<string>> {
       const reported: Array<string> = [];
-      const watcher = await watchProject(
+      const watcher = watchProject(
+        hostRuntime(project),
         projectConfig(project),
         (result) => {
           if (result._tag === "Failed") {
@@ -89,6 +92,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
         POLLING
       );
       project.defer(() => watcher.close());
+      await project.within(watcher.started, "the start");
 
       return reported;
     }
@@ -459,7 +463,8 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
   }) => {
     const results: Array<string> = [];
     let written = 0;
-    const watcher = await watchProject(
+    const watcher = watchProject(
+      hostRuntime(project),
       projectConfig(project),
       (result) => {
         if (result._tag === "Written" && ++written === 2) {
@@ -475,6 +480,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       POLLING
     );
     project.defer(() => watcher.close());
+    await project.within(watcher.started, "the start");
     await expect.poll(() => results, project.guard()).toEqual(["Written"]);
     project.write("src/middle.tsx", component("Middle"));
     await expect.poll(() => results, project.guard()).toEqual(["Written", "SyncFailed: logger busy"]);
@@ -542,6 +548,179 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     expect(log).toEqual(["gate released", "sync resumed", "layer released"]);
   });
 
+  // Unit under test: `watchProject` on a host's runtime, which the host disposes while the start is pending (its
+  // first sync held). Oracle: the contract by hand: the runtime's disposal is the watch's backstop, so it ends the start
+  // (rejecting it) and closes every tree the watch opened, once the running sync has finished; nothing stays open.
+  it("closes every watcher when its runtime is disposed during the start", async ({ project }) => {
+    const events = deliveredEvents();
+    const held = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const holding = Layer.succeed(CatalogSync, {
+      extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+        held.resolve();
+        yield* Effect.promise(() => gate.promise);
+
+        return extractCatalogs(config, options);
+      }),
+    });
+    const runtime = hostRuntime(project, events.layer, holding);
+    const watcher = watchProject(runtime, projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    // First at teardown, so a failed assertion never leaves the sync, and so the start and the runtime, held.
+    project.defer(() => {
+      gate.resolve();
+    });
+    await project.within(held.promise, "the first sync");
+    // The catalogs and the sources share the project root, so the watch opens that one tree.
+    expect(events.open()).toEqual([project.root]);
+
+    const disposed = runtime.dispose();
+    gate.resolve();
+    await project.within(disposed, "the disposal");
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow(
+      "the watch's runtime was disposed during its start"
+    );
+    expect(events.open()).toEqual([]);
+  });
+
+  // Unit under test: `watchProject`'s stop handle, as a dev server that closes during the watch's start uses it: the
+  // close lands while one tree is open and another is still opening (a host watcher that opens asynchronously, held).
+  // Oracle: layer 3's lifecycle contract, by hand: a stop during the start opens nothing more and returns only after
+  // every opened watcher is closed, with no first sync; so the close settles while the other tree is still held. The
+  // opened tree's watcher fails to close: that close stopped the watch, so it rejects with the failure, and the start,
+  // stopped by the host, settles cleanly.
+  it("stops at once when closed during its start, closing the tree it opened, and owns its failure", async ({
+    project,
+  }) => {
+    // The catalogs' directory exists, so it is a tree of its own beside the sources'. The trees open in path order: the
+    // catalogs' opens, the sources' is held.
+    project.write("messages/.keep", "");
+    const held = Promise.withResolvers<void>();
+    const events = deliveredEvents({
+      opening: (dir) => (dir === project.path("src") ? held.promise : undefined),
+      closeFails: new Error("watcher close failed"),
+    });
+    const watcher = watchProject(hostRuntime(project, events.layer), projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    // First at teardown, so a failed assertion never leaves the tree, and so the start and its close, held.
+    project.defer(() => {
+      held.resolve();
+    });
+    await expect
+      .poll(() => [events.open(), events.opening()], project.guard())
+      .toEqual([[project.path("messages")], 1]);
+
+    await expect(project.within(watcher.close(), "the close")).rejects.toThrow("watcher close failed");
+
+    expect([events.open(), existsSync(project.path("messages/nb.po"))]).toEqual([[], false]);
+    await expect(project.within(watcher.started, "the start")).resolves.toBeUndefined();
+  });
+
+  // Unit under test: `watchProject`'s stop handle, asked for after the watch's start has already failed on its own: the
+  // sources' tree fails to open while the catalogs' tree, already open, is still closing (a host watcher that closes
+  // asynchronously, held). Oracle: the `ProjectWatcher` contract, by hand: the watch's own failure stopped it, so the
+  // start rejects with that failure, whatever the close does later, and the close, which stopped nothing, settles.
+  it("keeps a start that failed on its own failed when closed during its cleanup", async ({ project }) => {
+    // The catalogs' directory exists, so it is a tree of its own; the trees open in path order: the catalogs' opens,
+    // then the sources' fails.
+    project.write("messages/.keep", "");
+    const cleanup = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const events = deliveredEvents({
+      refuses: { dir: project.path("src"), error: new Error("EACCES: permission denied, watch") },
+      releasing: () => {
+        cleanup.resolve();
+
+        return held.promise;
+      },
+    });
+    const watcher = watchProject(hostRuntime(project, events.layer), projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    // First at teardown, so a failed assertion never leaves the cleanup, and so the watch, held.
+    project.defer(() => {
+      held.resolve();
+    });
+    await project.within(cleanup.promise, "the cleanup");
+
+    const closing = watcher.close();
+    held.resolve();
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow(
+      "EACCES: permission denied, watch"
+    );
+    await expect(project.within(closing, "the close")).resolves.toBeUndefined();
+    expect(events.open()).toEqual([]);
+  });
+
+  // Unit under test: `watchProject`'s stop handle, asked for while a start ends before the watch's body has claimed the
+  // stop signal: the host disposes the runtime as the start begins (every fiber yielding after one step, so the
+  // disposal lands before the watch has opened anything), then closes. Oracle: the `ProjectWatcher` contract, by hand:
+  // the close stopped nothing, so the start rejects as any start the runtime's disposal ends, and the close settles.
+  it("keeps a start its runtime's disposal ended failed when closed after the disposal", async ({
+    project,
+  }) => {
+    const runtime = ManagedRuntime.make(
+      Layer.mergeAll(CatalogSync.layer(), FileEvents.layer(), Layer.succeed(References.MaxOpsBeforeYield, 1))
+    );
+    const watcher = watchProject(runtime, projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+
+    const disposed = runtime.dispose();
+    const closing = watcher.close();
+    await project.within(disposed, "the disposal");
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow(
+      "the watch's runtime was disposed during its start"
+    );
+    await expect(project.within(closing, "the close")).resolves.toBeUndefined();
+  });
+
+  // Unit under test: `watchProject`'s stop handle, asked for while the runtime's layer is failing to build, before the
+  // watch's body runs (the layer's cleanup held). Oracle: the `ProjectWatcher` contract, by hand: the layer's failure
+  // ended the start, never the close, so the start rejects with it whatever the close does, and the close settles.
+  it("keeps a start its runtime's layer failed failed when closed during the layer's cleanup", async ({
+    project,
+  }) => {
+    const cleanup = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const failing = Layer.effectDiscard(
+      Effect.acquireRelease(Effect.void, () => {
+        cleanup.resolve();
+
+        return Effect.promise(() => held.promise);
+      }).pipe(Effect.andThen(Effect.die(new Error("layer init failed"))))
+    );
+    const runtime = hostRuntime(project, FileEvents.layer(), Layer.merge(CatalogSync.layer(), failing));
+    const watcher = watchProject(runtime, projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    // First at teardown, so a failed assertion never leaves the cleanup, and so the start, held.
+    project.defer(() => {
+      held.resolve();
+    });
+    await project.within(cleanup.promise, "the layer's cleanup");
+
+    const closing = watcher.close();
+    held.resolve();
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow("layer init failed");
+    await expect(project.within(closing, "the close")).resolves.toBeUndefined();
+  });
+
+  // Unit under test: `watchProject`'s stop handle, closing a started watch whose watcher fails to close. Oracle: the
+  // `ProjectWatcher` contract, by hand: the first close rejects with the failed close (the Vite plugin's closeBundle
+  // awaits it, so the dev server's close reports it); a later close settles on the same shutdown without reporting it
+  // again.
+  it("rejects its close with a watcher's failure to close, once", async ({ project }) => {
+    const events = deliveredEvents({ closeFails: new Error("watcher close failed") });
+    const watcher = watchProject(hostRuntime(project, events.layer), projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    await project.within(watcher.started, "the start");
+
+    await expect(project.within(watcher.close(), "the close")).rejects.toThrow("watcher close failed");
+    await expect(project.within(watcher.close(), "the second close")).resolves.toBeUndefined();
+  });
+
   // Unit under test: `watchProject`, as the Vite plugin starts it. Oracle: layer 2's plugin, by hand: when the first
   // sync's report throws and so does its SyncFailed, the start fails with that error (layer 2 threw it from the
   // plugin's start), and only after every watcher it opened is closed, rather than the error escaping later.
@@ -550,12 +729,12 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
   }) => {
     const before = watches();
     const reports: Array<SyncResult["_tag"]> = [];
-    const starting = watchProject(projectConfig(project), (result) => {
+    const { started } = watchProject(hostRuntime(project), projectConfig(project), (result) => {
       reports.push(result._tag);
       throw new Error(result._tag === "Failed" ? "logger.error gone" : "logger.info gone");
     });
 
-    await expect(project.within(starting, "the start")).rejects.toThrow("logger.error gone");
+    await expect(project.within(started, "the start")).rejects.toThrow("logger.error gone");
     expect(reports).toEqual(["Written", "Failed"]);
     await expect.poll(watches, project.guard()).toBe(before);
   });
@@ -751,7 +930,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
 
       await expect(
         project.within(
-          watchProject(projectConfig(project), () => undefined),
+          watchProject(hostRuntime(project), projectConfig(project), () => undefined).started,
           "the start"
         )
       ).rejects.toThrow(/EACCES/u);

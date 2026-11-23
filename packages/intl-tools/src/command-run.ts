@@ -2,9 +2,7 @@
 // command line, and the hosts (the Vite build check, the Vitest setup) call it directly, so they print, and exit,
 // alike without loading effect/cli.
 
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
@@ -95,12 +93,13 @@ function renderJsonReport(report: CommandReport): string {
  * Print a defect as `elmera-intl failed: ` and the thrown Error's own stack. It stays a defect, which the
  * executable reads as exit 2.
  *
+ * @template A - The program's result.
  * @template E - The program's failures.
  * @template R - The program's requirements.
  * @param program - The program whose defect to print.
  * @returns The program, printing its defect on the Reporter's stderr.
  */
-export function reportCrash<E, R>(program: Effect.Effect<void, E, R>): Effect.Effect<void, E, R | Reporter> {
+export function reportCrash<A, E, R>(program: Effect.Effect<A, E, R>): Effect.Effect<A, E, R | Reporter> {
   return program.pipe(
     Effect.tapDefect((defect) =>
       Reporter.use((reporter) =>
@@ -123,8 +122,30 @@ export type CrashHandling =
 export type OneShotOutcome = "ok" | "problems" | "crashed";
 
 /**
- * Run `elmera-intl <command> --config <configPath>` in-process, for a host: the same output as the executable, without
- * parsing arguments.
+ * `elmera-intl <command> --config <configPath>` as a host runs it in-process: the same output as the executable,
+ * without parsing arguments, ending in how it went.
+ *
+ * @param command - The command to run.
+ * @param options - The project's config path and how a crash is taken.
+ * @returns An effect that writes the report on the Reporter and succeeds with `"ok"` when clean, `"problems"` when the
+ *   command printed problems, `"crashed"` on a reported crash; with `crash: "reject"`, a crash stays its defect.
+ */
+export const oneShot = /* @__PURE__ */ Effect.fn("elmera-intl.oneShot")(function* (
+  command: OneShotCommand,
+  options: { readonly configPath: string; readonly crash: CrashHandling }
+) {
+  const program = runOnce(command, false, options.configPath).pipe(
+    Effect.as<OneShotOutcome>("ok"),
+    Effect.catchTag("ProblemsFound", () => Effect.succeed<OneShotOutcome>("problems"))
+  );
+
+  return yield* options.crash === "report"
+    ? reportCrash(program).pipe(Effect.catchDefect(() => Effect.succeed<OneShotOutcome>("crashed")))
+    : program;
+});
+
+/**
+ * Run `oneShot` outside an Effect program, on the host's output streams.
  *
  * @param command - The command to run.
  * @param options - The project's config path and how a crash is taken.
@@ -137,23 +158,5 @@ export async function runOnceInProcess(
   options: { readonly configPath: string; readonly crash: CrashHandling },
   io: ReporterIo
 ): Promise<OneShotOutcome> {
-  const program = runOnce(command, false, options.configPath);
-  const exit = await Effect.runPromiseExit(
-    (options.crash === "report" ? reportCrash(program) : program).pipe(Effect.provide(Reporter.layer(io)))
-  );
-
-  if (Exit.isSuccess(exit)) {
-    return "ok";
-  }
-
-  if (Cause.hasDies(exit.cause)) {
-    if (options.crash === "reject") {
-      throw Cause.squash(exit.cause);
-    }
-
-    return "crashed";
-  }
-
-  // The only failure a one-shot run has is its problems; anything else is an interruption, which nothing here sends.
-  return Cause.hasFails(exit.cause) ? "problems" : "crashed";
+  return Effect.runPromise(oneShot(command, options).pipe(Effect.provide(Reporter.layer(io))));
 }
