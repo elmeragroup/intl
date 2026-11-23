@@ -4,7 +4,7 @@
 //
 // Every platform module is imported when it is first needed, never with an entry: Node's file system and paths when a
 // runtime is built. Importing `./vite` or `./vitest` pays for none of them. (A formats module is evaluated with
-// `spawnSync`, not Node's `ChildProcessSpawner`: see `evaluateModule`.)
+// `spawnSync`, not Node's `ChildProcessSpawner`: see `evaluateModule` in project-formats.ts.)
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
