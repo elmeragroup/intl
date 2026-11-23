@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import { existsSync, rmSync } from "node:fs";
@@ -650,6 +651,60 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     );
     await expect(project.within(closing, "the close")).resolves.toBeUndefined();
     expect(events.open()).toEqual([]);
+  });
+
+  // Unit under test: `watchProject`'s stop handle, asked for while a start ends before the watch's body has claimed the
+  // stop signal: the host disposes the runtime as the start begins (every fiber yielding after one step, so the
+  // disposal lands before the watch has opened anything), then closes. Oracle: the `ProjectWatcher` contract, by hand:
+  // the close stopped nothing, so the start rejects as any start the runtime's disposal ends, and the close settles.
+  it("keeps a start its runtime's disposal ended failed when closed after the disposal", async ({
+    project,
+  }) => {
+    const runtime = ManagedRuntime.make(
+      Layer.mergeAll(CatalogSync.layer(), FileEvents.layer(), Layer.succeed(References.MaxOpsBeforeYield, 1))
+    );
+    const watcher = watchProject(runtime, projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+
+    const disposed = runtime.dispose();
+    const closing = watcher.close();
+    await project.within(disposed, "the disposal");
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow(
+      "the watch's runtime was disposed during its start"
+    );
+    await expect(project.within(closing, "the close")).resolves.toBeUndefined();
+  });
+
+  // Unit under test: `watchProject`'s stop handle, asked for while the runtime's layer is failing to build, before the
+  // watch's body runs (the layer's cleanup held). Oracle: the `ProjectWatcher` contract, by hand: the layer's failure
+  // ended the start, never the close, so the start rejects with it whatever the close does, and the close settles.
+  it("keeps a start its runtime's layer failed failed when closed during the layer's cleanup", async ({
+    project,
+  }) => {
+    const cleanup = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const failing = Layer.effectDiscard(
+      Effect.acquireRelease(Effect.void, () => {
+        cleanup.resolve();
+
+        return Effect.promise(() => held.promise);
+      }).pipe(Effect.andThen(Effect.die(new Error("layer init failed"))))
+    );
+    const runtime = hostRuntime(project, FileEvents.layer(), Layer.merge(CatalogSync.layer(), failing));
+    const watcher = watchProject(runtime, projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    // First at teardown, so a failed assertion never leaves the cleanup, and so the start, held.
+    project.defer(() => {
+      held.resolve();
+    });
+    await project.within(cleanup.promise, "the layer's cleanup");
+
+    const closing = watcher.close();
+    held.resolve();
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow("layer init failed");
+    await expect(project.within(closing, "the close")).resolves.toBeUndefined();
   });
 
   // Unit under test: `watchProject`'s stop handle, closing a started watch whose watcher fails to close. Oracle: the

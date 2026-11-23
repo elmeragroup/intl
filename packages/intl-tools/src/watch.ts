@@ -214,11 +214,9 @@ type Pipeline = {
   readonly triggers: Queue.Queue<void>;
   // Held by a sync from its read until it has recorded its writes, and by each classification.
   readonly syncing: Semaphore.Semaphore;
-  // Done once the watch must stop: a write that fails for good, a defect, its scope closing, or the stop itself. With
-  // the caller's stop signal, the stop gate.
-  readonly halt: Deferred.Deferred<void>;
-  // The caller's stop signal, which the watch claims itself (completes first) the moment it halts on its own: whoever
-  // completed it first started the stop.
+  // Done once the watch must stop, and from then on the stop gate: the caller's stop signal, which the watch completes
+  // itself the moment it halts on its own (a write that fails for good, a defect, its scope closing): whoever completed
+  // it first started the stop.
   readonly stop: Deferred.Deferred<void>;
   // Done once every tree is watched (a poll's first walks taken): the first sync starts then.
   readonly sourcesOpened: Deferred.Deferred<void>;
@@ -243,7 +241,6 @@ const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (
     results: yield* Queue.unbounded<Output, Cause.Done>(),
     triggers: yield* Queue.dropping<void>(1),
     syncing: yield* Semaphore.make(1),
-    halt: yield* Deferred.make<void>(),
     sourcesOpened: yield* Deferred.make<void>(),
     firstSynced: yield* Deferred.make<void>(),
     readyWritten: yield* Deferred.make<void>(),
@@ -368,12 +365,11 @@ function debouncer(pipeline: Pipeline, sync: Effect.Effect<void>) {
   });
 }
 
-// The watch's own scope, and the two children its stop closes.
-// The watch halts on its own (a write that fails for good, a defect, its scope closing): it claims the stop signal
-// first, synchronously, so a stop asked for from then on never counts as the one that stopped it.
-const haltOnOwn = (pipeline: Pipeline) =>
-  Deferred.succeed(pipeline.stop, undefined).pipe(Effect.andThen(Deferred.succeed(pipeline.halt, undefined)));
+// The watch halts on its own (a write that fails for good, a defect, its scope closing): it completes the stop signal
+// itself, so a stop asked for from then on never counts as the one that stopped it.
+const haltOnOwn = (pipeline: Pipeline) => Deferred.succeed(pipeline.stop, undefined);
 
+// The watch's own scope, and the two children its stop closes.
 type Scopes = {
   readonly own: Scope.Scope;
   readonly sources: Scope.Closeable;
@@ -381,7 +377,7 @@ type Scopes = {
 };
 
 // The watch's one stop, and the outcome everyone who waits for it shares. One fiber runs it, uninterruptibly, once the
-// stop signal or a halt comes: it shuts the gate (`halt`); closes `sources`, so the watchers close at once; closes
+// stop signal comes (the gate, shut by the caller or a halt): it closes `sources`, so the watchers close at once; closes
 // `workers`, which drops a pending sync and waits for a running one; ends the results; and joins the writer, so every
 // result already made is written. It ends as the writing ended, then as a worker's defect, then as the watchers closed,
 // and settles `finished` with that.
@@ -394,10 +390,8 @@ type Scopes = {
 const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
   pipeline: Pipeline,
   scopes: Scopes,
-  writes: Effect.Effect<void, never, R>,
-  stop: Deferred.Deferred<void>
+  writes: Effect.Effect<void, never, R>
 ) {
-  const { halt } = pipeline;
   // A worker's defect: it halts the watch, and the stop ends with it.
   let defect: Cause.Cause<never> | undefined;
   // Whether the stop's outcome reached someone (`done`'s caller, or a start that failed with it).
@@ -405,7 +399,6 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
   const finished = yield* Deferred.make<void>();
   const shutdown = Effect.fnUntraced(
     function* (writing: Fiber.Fiber<void>) {
-      yield* Deferred.succeed(halt, undefined);
       const closed = yield* Effect.exit(Scope.close(scopes.sources, Exit.void));
       yield* Scope.close(scopes.workers, Exit.void);
       yield* Queue.end(pipeline.results);
@@ -423,7 +416,7 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
   const fibers = yield* Effect.acquireRelease(
     Effect.gen(function* () {
       const writing = yield* Effect.forkDetach(writes);
-      const stopping = yield* Effect.raceFirst(Deferred.await(stop), Deferred.await(halt)).pipe(
+      const stopping = yield* Deferred.await(pipeline.stop).pipe(
         Effect.andThen(shutdown(writing)),
         Effect.forkDetach
       );
@@ -505,7 +498,7 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
 ) {
   const catalogSync = yield* CatalogSync;
   const pipeline = yield* makePipeline(config, stop);
-  const { halt, results } = pipeline;
+  const { results } = pipeline;
   // The watch's own scope: closed in order whatever the caller's strategy, its stop first.
   const own = yield* Scope.fork(yield* Effect.scope, "sequential");
   const sources = yield* Scope.fork(own, "sequential");
@@ -514,8 +507,8 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
   const watchers = yield* Scope.fork(sources, "sequential");
   const opening = yield* Scope.fork(sources, "sequential");
   const workers = yield* Scope.fork(own, "sequential");
-  const owned = yield* ownedStop(pipeline, { own, sources, workers }, writer(pipeline, output), stop);
-  const isHalted = () => Deferred.isDoneUnsafe(stop) || Deferred.isDoneUnsafe(halt);
+  const owned = yield* ownedStop(pipeline, { own, sources, workers }, writer(pipeline, output));
+  const isHalted = () => Deferred.isDoneUnsafe(stop);
 
   // The stop gate, at delivery: each warning and change is admitted at once, synchronously, as the tree delivers it
   // (its warnings to the writer, its changes to classification), or from the stop on not at all. What was admitted
@@ -610,11 +603,15 @@ export function watchProject(
 ): ProjectWatcher {
   const stop = Deferred.makeUnsafe<void>();
   const firstReported = Promise.withResolvers<"started">();
+  // Whether the watch's body ran: a start that failed before it (its runtime's layer failing, the runtime already
+  // disposed) never reached the stop signal, so no close stopped it.
+  let entered = false;
   // The watch for its whole life, in a scope that closes as its fiber ends, after the start fails or the watch stops:
   // the scope's stop has then closed every watcher.
   const ended = runtime.runPromiseExit(
     Effect.scoped(
       Effect.gen(function* () {
+        entered = true;
         const watching = yield* watchCatalogs(config, mode, stop, {
           report: (result) =>
             Effect.sync(() => {
@@ -630,13 +627,14 @@ export function watchProject(
       })
     )
   );
-  // Whether the host has asked the watch to stop, and whether that request is what stopped it: decided as the request
-  // claims the stop signal, which the watch claims itself the moment it halts on its own, before any cleanup.
-  let closing = false;
+  // The one shutdown, once the host asks the watch to stop: the stop signalled, then the watch's end once the start has
+  // settled.
+  let shutdown: Promise<void> | undefined;
+  // Whether the host's request is what stopped the watch: decided as the request claims the stop signal, which the
+  // watch claims itself the moment it halts on its own, before any cleanup.
   let stoppedByHost = false;
-  // Whether the watch's end is someone else's to report: the host's first close, or the event loop's, once a failure
-  // that ended the watch was thrown there.
-  let endReported = false;
+  // Whether a failure that ended the watch was thrown on the host's event loop, so no close reports it again.
+  let endThrown = false;
   const started = Promise.race([firstReported.promise, ended]).then((start) => {
     if (start === "started") {
       void ended.then((exit) => {
@@ -644,8 +642,8 @@ export function watchProject(
 
         // Unless the host is stopping it, nothing is left to report a failure that ends the watch: it ends the host, as
         // a throwing report always did.
-        if (!closing && !endReported && cause !== undefined) {
-          endReported = true;
+        if (shutdown === undefined && cause !== undefined) {
+          endThrown = true;
           queueMicrotask(() => {
             throw Cause.squash(cause);
           });
@@ -656,13 +654,15 @@ export function watchProject(
     }
 
     // A stop the host asked for during the start, before the watch halted on its own, ends the start cleanly, and the
-    // end (a watcher's failure to close, say) is the first close's to report.
-    if (stoppedByHost) {
+    // end (a watcher's failure to close, say) is the first close's to report. A start that failed before the watch's
+    // body ran, or that the runtime's disposal interrupted, was never stopped by the host, whatever close came.
+    const disposed = Exit.isFailure(start) && Cause.hasInterruptsOnly(start.cause);
+
+    if (stoppedByHost && entered && !disposed) {
       return;
     }
 
     // Otherwise the start's own failure is the start's to report, never a close's, whenever a close comes.
-    endReported = true;
     const failure = endFailure(start);
 
     if (failure !== undefined) {
@@ -676,8 +676,6 @@ export function watchProject(
         : "the watch ended before its first result was reported"
     );
   });
-  // The one shutdown: the stop signalled, then the watch's end once the start has settled.
-  let shutdown: Promise<void> | undefined;
 
   return {
     started,
@@ -686,8 +684,8 @@ export function watchProject(
         return shutdown.catch(() => undefined);
       }
 
-      closing = true;
       stoppedByHost = Deferred.doneUnsafe(stop, Effect.void);
+      // A start that failed is the start's to report, so a close after it reports nothing.
       shutdown = started
         .then(
           () => ended,
@@ -696,12 +694,9 @@ export function watchProject(
         .then((exit) => {
           const cause = exit === undefined ? undefined : endFailure(exit);
 
-          if (!endReported && cause !== undefined) {
-            endReported = true;
+          if (!endThrown && cause !== undefined) {
             throw Cause.squash(cause);
           }
-
-          endReported = true;
         });
 
       return shutdown;
