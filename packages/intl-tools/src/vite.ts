@@ -14,7 +14,8 @@ import { catalogLocale, catalogPath, loadFormats } from "./project";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ProjectWatcher } from "./watch";
 import type { WatchMode } from "./watch";
-import { MAX_POLL_MS, MIN_POLL_MS, nearestExisting, pollEvery, watchProject } from "./watch";
+import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
+import { nearestExisting } from "./watch-trees";
 
 // chokidar's default interval, which Vite's `server.watch` passes on when polling sets none.
 const DEFAULT_POLL_MS = 100;

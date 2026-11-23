@@ -2,18 +2,22 @@ import { describe, expect } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import { existsSync } from "node:fs";
 
 import type { ExtractOptions } from "../src/commands";
-import { extractCatalogs } from "../src/commands";
+import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import type { SyncResult, Watching, WatchMode, WatchOutput } from "../src/watch";
-import { CatalogSync, FileEvents, watchCatalogs } from "../src/watch";
+import { CatalogSync, watchCatalogs } from "../src/watch";
+import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { component, deliveredEvents, it, POLLING, projectConfig, syncing } from "./watch-project";
 
@@ -31,15 +35,18 @@ describe("extract --watch on the test clock", () => {
     readonly watching: Watching;
   };
 
-  // Runs `effect` from a sleep the test clock wakes, so the clock waits until everything it sets off (the classifying of
-  // a backlog, a sync) has suspended before it moves on.
-  const woken = Effect.fnUntraced(function* <A>(effect: Effect.Effect<A>) {
+  // Starts `effect` from a sleep the test clock wakes, so the clock waits until everything it sets off (the classifying
+  // of a backlog, a sync) has suspended before it moves on. Returns the fiber that finishes it.
+  const wake = Effect.fnUntraced(function* <A, E>(effect: Effect.Effect<A, E>) {
     // oxlint-disable-next-line tests/no-fixed-delay -- a test-clock sleep, woken by the TestClock.adjust below: no real time passes.
     const running = yield* Effect.sleep("1 millis").pipe(Effect.andThen(effect), Effect.forkChild);
     yield* TestClock.adjust("1 millis");
 
-    return yield* Fiber.join(running);
+    return running;
   });
+  // Runs `effect` from a test-clock wake (see `wake`).
+  const woken = <A>(effect: Effect.Effect<A>) =>
+    wake(effect).pipe(Effect.flatMap((fiber) => Fiber.join(fiber)));
 
   type Options = {
     /** The sync step; `extractCatalogs` unless a test holds or changes it. */
@@ -52,6 +59,13 @@ describe("extract --watch on the test clock", () => {
     readonly mode?: WatchMode;
     /** The native file events; Node's unless a test delivers them itself. */
     readonly events?: Layer.Layer<FileEvents>;
+    /** How the watch's caller scope runs its finalizers; sequential unless a test closes it in parallel. */
+    readonly strategy?: "sequential" | "parallel";
+    /**
+     * Whether a fiber gives the stop signal as the watch starts, with the scheduler yielding after every operation, so
+     * the stop lands while the start is still running.
+     */
+    readonly stopDuringStart?: boolean;
   };
 
   // Starts the watch in a scope of its own inside the test's, with its sync step built in that scope so it lives as long
@@ -59,7 +73,7 @@ describe("extract --watch on the test clock", () => {
   // has run up to its first suspension (a held first sync), with the fiber that finishes it.
   const launch = Effect.fnUntraced(function* (project: Project, options: Options = {}) {
     const reports: Array<SyncResult["_tag"]> = [];
-    const scope = yield* Scope.fork(yield* Effect.scope);
+    const scope = yield* Scope.fork(yield* Effect.scope, options.strategy ?? "sequential");
     const stop = yield* Deferred.make<void>();
     const services = yield* Layer.buildWithScope(
       Layer.merge(options.layer ?? CatalogSync.layer(), options.events ?? FileEvents.layer()),
@@ -78,16 +92,18 @@ describe("extract --watch on the test clock", () => {
       Scope.provide(scope),
       Effect.provideContext(services)
     );
-    // oxlint-disable-next-line tests/no-fixed-delay -- a test-clock sleep, woken by the TestClock.adjust below: no real time passes.
-    const watching = yield* Effect.sleep("1 millis").pipe(
-      Effect.andThen(
-        options.clock === undefined
-          ? starting
-          : starting.pipe(Effect.provideService(Clock.Clock, options.clock))
-      ),
-      Effect.forkChild
+    const clocked =
+      options.clock === undefined
+        ? starting
+        : starting.pipe(Effect.provideService(Clock.Clock, options.clock));
+    const watching = yield* wake(
+      options.stopDuringStart === true
+        ? Effect.forkChild(Deferred.succeed(stop, undefined)).pipe(
+            Effect.andThen(clocked),
+            Effect.provideService(References.MaxOpsBeforeYield, 1)
+          )
+        : clocked
     );
-    yield* TestClock.adjust("1 millis");
 
     return { reports, stop, scope, watching };
   });
@@ -116,6 +132,58 @@ describe("extract --watch on the test clock", () => {
 
     return { layer, calls: () => calls };
   }
+
+  // The test clock, counting the sleeps of `ms` the watch takes (its debounce's, for DEBOUNCE_MS).
+  const counting = Effect.fnUntraced(function* (ms: number) {
+    const testClock = yield* Clock.Clock;
+    let sleeps = 0;
+    const clock: Clock.Clock = {
+      currentTimeMillisUnsafe: () => testClock.currentTimeMillisUnsafe(),
+      currentTimeMillis: testClock.currentTimeMillis,
+      currentTimeNanosUnsafe: () => testClock.currentTimeNanosUnsafe(),
+      currentTimeNanos: testClock.currentTimeNanos,
+      monotonicTimeNanosUnsafe: () => testClock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: testClock.monotonicTimeNanos,
+      sleep: (duration) => {
+        if (Duration.toMillis(duration) === ms) {
+          sleeps += 1;
+        }
+
+        return testClock.sleep(duration);
+      },
+    };
+
+    return { clock, sleeps: () => sleeps };
+  });
+
+  // The sync step: `extractCatalogs`, dying on its `call`th call.
+  function dying(call: number) {
+    let calls = 0;
+
+    return syncing((config, options) => {
+      calls += 1;
+
+      if (calls === call) {
+        throw new Error("extract died");
+      }
+
+      return extractCatalogs(config, options);
+    });
+  }
+
+  // Closes the watch's scope while `gate` holds a sync: the close is still pending a turn later, and ends once the sync
+  // is released.
+  const closeWhileHeld = (scope: Scope.Closeable, gate: Deferred.Deferred<void>) =>
+    Effect.gen(function* () {
+      const close = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* Effect.yieldNow;
+      expect(close.pollUnsafe()).toBeUndefined();
+
+      return close;
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(gate, undefined)),
+      Effect.flatMap((fiber) => Fiber.join(fiber))
+    );
 
   it.effect("folds a burst into one sync, a debounce after its last change", ({ project }) =>
     Effect.gen(function* () {
@@ -447,14 +515,7 @@ describe("extract --watch on the test clock", () => {
       yield* TestClock.adjust("150 millis");
       expect(sync.calls()).toBe(2);
 
-      const closing = yield* Effect.gen(function* () {
-        const close = yield* Effect.forkChild(Scope.close(scope, Exit.void));
-        yield* Effect.yieldNow;
-        expect(close.pollUnsafe()).toBeUndefined();
-
-        return close;
-      }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
-      yield* Fiber.join(closing);
+      yield* closeWhileHeld(scope, gate);
       project.write("src/b.tsx", component("B"));
       yield* TestClock.adjust("1 second");
       expect({ calls: sync.calls(), reports }).toEqual({ calls: 2, reports: ["Written", "Written"] });
@@ -472,14 +533,7 @@ describe("extract --watch on the test clock", () => {
         const { reports, scope } = yield* launch(project, { layer: sync.layer });
         expect(sync.calls()).toBe(1);
 
-        const closing = yield* Effect.gen(function* () {
-          const close = yield* Effect.forkChild(Scope.close(scope, Exit.void));
-          yield* Effect.yieldNow;
-          expect(close.pollUnsafe()).toBeUndefined();
-
-          return close;
-        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
-        yield* Fiber.join(closing);
+        yield* closeWhileHeld(scope, gate);
         expect(reports).toEqual(["Written"]);
         expect(project.read("messages/nb.po")).toContain(`msgid "Hello"`);
       })
@@ -505,6 +559,252 @@ describe("extract --watch on the test clock", () => {
       yield* Fiber.join(watching);
       yield* TestClock.adjust("1 second");
       expect(reports).toEqual(["Written"]);
+    })
+  );
+
+  // A save that lands right after the sync's writes, inside the sync step: the next sync merges it rather than writing
+  // the PO it read before.
+  it.effect("keeps a msgstr saved right after the sync that added its message", ({ project }) =>
+    Effect.gen(function* () {
+      const po = project.path("messages/nb.po");
+      let saved = false;
+      yield* start(project, {
+        layer: syncing((config, options) => {
+          const result = extractCatalogs(config, options);
+          const added = result.written.find(
+            ({ path, text }) => path === po && text.includes(`msgid "Ready"`)
+          );
+
+          if (!saved && added !== undefined) {
+            saved = true;
+            project.write(
+              "messages/nb.po",
+              added.text.replace(`msgid "Ready"\nmsgstr ""`, `msgid "Ready"\nmsgstr "Klar"`)
+            );
+          }
+
+          return result;
+        }),
+      });
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+      expect(project.read("messages/nb.po")).toContain(`msgid "Ready"\nmsgstr "Klar"`);
+
+      project.write("src/after.tsx", component("After"));
+      yield* TestClock.adjust("1 second");
+      expect(project.read("messages/nb.po")).toContain(`msgid "Ready"\nmsgstr "Klar"`);
+      expect(project.read("messages/nb.po")).toContain(`msgid "After"`);
+    })
+  );
+
+  // A save that lands after a sync read the PO and before it writes: the sync yields, and the next one merges the save.
+  it.effect("keeps a msgstr saved while a sync runs", ({ project }) =>
+    Effect.gen(function* () {
+      const po = project.path("messages/nb.po");
+      let saved = false;
+      yield* start(project, {
+        layer: syncing((config, options) => {
+          const plan = planCatalogs(config, options);
+
+          if (
+            !saved &&
+            plan.outputs.some(({ path, text }) => path === po && text.includes(`msgid "Ready"`))
+          ) {
+            saved = true;
+            project.write(
+              "messages/nb.po",
+              project
+                .read("messages/nb.po")
+                .replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hei"`)
+            );
+          }
+
+          return writeCatalogs(plan, options);
+        }),
+      });
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+      expect(project.read("messages/nb.po")).toContain(`msgid "Hello"\nmsgstr "Hei"`);
+      expect(project.read("messages/nb.po")).toContain(`msgid "Ready"`);
+    })
+  );
+
+  // The watch's own scope closing stops it in order, whatever stage it is in: its watchers close first, while the sync
+  // still holds, so an error the platform already dispatched is not admitted; then the sync finishes and its result is
+  // written.
+  it.effect(
+    "closes its watchers first when its scope closes during a sync, and admits nothing after",
+    ({ project }) =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const sync = holding(gate);
+        const events = deliveredEvents();
+        const { reports, scope } = yield* start(project, {
+          layer: sync.layer,
+          mode: { _tag: "native" },
+          events: events.layer,
+        });
+        const listener = events.listener(project.root);
+        project.write("src/a.tsx", component("A"));
+        listener.change("rename", "src/a.tsx");
+        yield* TestClock.adjust("150 millis");
+        expect(sync.calls()).toBe(2);
+
+        const close = yield* Effect.gen(function* () {
+          const closing = yield* wake(Scope.close(scope, Exit.void));
+          expect([closing.pollUnsafe(), events.open()]).toEqual([undefined, []]);
+          listener.error(new Error("EMFILE: too many open files"));
+
+          return closing;
+        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
+        yield* Fiber.join(close);
+        expect(reports).toEqual(["Written", "Written"]);
+      })
+  );
+
+  it.effect(
+    "closes its watchers first when its scope closes during the first sync, then reports it",
+    ({ project }) =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const sync = holding(gate, 1);
+        const events = deliveredEvents();
+        const { reports, scope } = yield* launch(project, {
+          layer: sync.layer,
+          mode: { _tag: "native" },
+          events: events.layer,
+        });
+        const listener = events.listener(project.root);
+
+        const close = yield* Effect.gen(function* () {
+          const closing = yield* wake(Scope.close(scope, Exit.void));
+          expect([closing.pollUnsafe(), events.open()]).toEqual([undefined, []]);
+          listener.error(new Error("EMFILE: too many open files"));
+
+          return closing;
+        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
+        yield* Fiber.join(close);
+        expect(reports).toEqual(["Written"]);
+      })
+  );
+
+  // The watch owns its stop's order: a caller scope that closes its finalizers in parallel still gets the drain.
+  it.effect("reports a held sync when a parallel caller scope closes", ({ project }) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const sync = holding(gate);
+      const { reports, scope } = yield* start(project, { layer: sync.layer, strategy: "parallel" });
+      project.write("src/a.tsx", component("A"));
+      yield* TestClock.adjust("150 millis");
+      expect(sync.calls()).toBe(2);
+
+      yield* closeWhileHeld(scope, gate);
+      expect(reports).toEqual(["Written", "Written"]);
+    })
+  );
+
+  // `done` reports the stop whatever stopped the watch: its scope closing included.
+  it.effect("ends `done` when its scope closes", ({ project }) =>
+    Effect.gen(function* () {
+      const { scope, watching } = yield* start(project);
+      yield* Scope.close(scope, Exit.void);
+      const exit = yield* Effect.exit(watching.done);
+
+      expect(exit).toEqual(Exit.void);
+    })
+  );
+
+  // A stop that lands while the watch is still starting, before its first sync: the start ends with no first sync, and
+  // nothing is written.
+  it.effect("runs no first sync when the stop lands during the start", ({ project }) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const sync = holding(gate, 0);
+      const { reports, watching } = yield* start(project, { layer: sync.layer, stopDuringStart: true });
+      yield* watching.done;
+      yield* TestClock.adjust("1 second");
+
+      expect({ calls: sync.calls(), reports, written: existsSync(project.path("messages/nb.po")) }).toEqual({
+        calls: 0,
+        reports: [],
+        written: false,
+      });
+    })
+  );
+
+  // A defect in a sync is no lost worker: it stops the watch, and the start (for the first sync) or `done` (for a
+  // later one) ends with it.
+  it.effect("fails the start with a defect in the first sync", ({ project }) =>
+    Effect.gen(function* () {
+      const { watching } = yield* launch(project, { layer: dying(1) });
+      const exit = yield* Fiber.await(watching);
+
+      expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("extract died"));
+    })
+  );
+
+  it.effect("ends `done` with a defect in a later sync", ({ project }) =>
+    Effect.gen(function* () {
+      const { watching } = yield* start(project, { layer: dying(2) });
+      project.write("src/a.tsx", component("A"));
+      yield* TestClock.adjust("1 second");
+      const exit = yield* Effect.exit(watching.done);
+
+      expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("extract died"));
+    })
+  );
+
+  // A burst of native events is one sync, a debounce after it: every change still syncs, once.
+  it.effect("folds a burst of 200 native events into one sync", ({ project }) =>
+    Effect.gen(function* () {
+      const events = deliveredEvents();
+      const { reports } = yield* start(project, { mode: { _tag: "native" }, events: events.layer });
+      const listener = events.listener(project.root);
+      project.write("src/a.tsx", component("A"));
+
+      for (let event = 0; event < 200; event += 1) {
+        listener.change("change", "src/a.tsx");
+      }
+
+      yield* TestClock.adjust("1 second");
+      expect(reports).toEqual(["Written", "Written"]);
+    })
+  );
+
+  // A burst that lands while a sync holds: every batch admitted meanwhile is one classification once the sync ends,
+  // one trigger and one debounce, and exactly one follow-up sync.
+  it.effect("folds a burst of 200 native events during a held sync into one follow-up", ({ project }) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const sync = holding(gate);
+      const events = deliveredEvents();
+      const debounce = yield* counting(100);
+      const { reports } = yield* start(project, {
+        layer: sync.layer,
+        mode: { _tag: "native" },
+        events: events.layer,
+        clock: debounce.clock,
+      });
+      const listener = events.listener(project.root);
+      project.write("src/a.tsx", component("A"));
+      listener.change("change", "src/a.tsx");
+      yield* TestClock.adjust("150 millis");
+      expect(sync.calls()).toBe(2);
+
+      project.write("src/b.tsx", component("B"));
+
+      for (let event = 0; event < 200; event += 1) {
+        listener.change("change", "src/b.tsx");
+      }
+
+      const before = debounce.sleeps();
+      yield* woken(Deferred.succeed(gate, undefined));
+      yield* TestClock.adjust("1 second");
+      expect({ calls: sync.calls(), reports, sleeps: debounce.sleeps() - before }).toEqual({
+        calls: 3,
+        reports: ["Written", "Written", "Written"],
+        sleeps: 1,
+      });
     })
   );
 

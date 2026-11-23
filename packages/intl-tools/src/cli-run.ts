@@ -30,7 +30,8 @@ import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
-import { CatalogSync, FileEvents, MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchCatalogs } from "./watch";
+import { CatalogSync, MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchCatalogs } from "./watch";
+import { FileEvents } from "./watch-trees";
 
 /** The directory the default config path resolves in. */
 export type CliOptions = {

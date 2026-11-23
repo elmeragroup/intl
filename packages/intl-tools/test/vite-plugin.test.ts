@@ -64,6 +64,25 @@ function component(text: string): string {
   return `import { T } from "@elmeragroup/intl/react";\nexport const C = () => <T>${text}</T>;\n`;
 }
 
+// The file watchers open in this process.
+function watches(): number {
+  return process.getActiveResourcesInfo().filter((name) => name === "FSEventWrap").length;
+}
+
+// The two hooks called here return nothing, or (configureServer) a function Vite calls after its middlewares.
+type HookResult = void | (() => void) | Promise<void | (() => void)>;
+
+// A plugin hook's function, whether the plugin gave it bare or as `{ handler }`.
+function handlerOf<F extends (...args: never) => HookResult>(
+  hook: F | { readonly handler: F } | undefined
+): F | undefined {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Vite's ObjectHook is a function or `{ handler }`, and Vite itself tells them apart by typeof.
+  return hook === undefined || typeof hook === "function" ? hook : hook.handler;
+}
+
+// SAFETY: the dev plugin's hooks never read `this`; Vite's context for them is not needed to call them as Vite does.
+const HOOK_CONTEXT = {} as Rolldown.PluginContext;
+
 // The project's library build, writing nothing unless `overrides` say so.
 function viteConfig(
   options: Parameters<typeof intl>[0] = {},
@@ -316,7 +335,6 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
   // first sync's own report, while the start still waits for it. Oracle: layer 2's plugin, by hand: closing the dev
   // server closes the watch, whatever point its start has reached, so every file watcher it opened is closed.
   it("closes a watch still starting when the dev server closes", async () => {
-    const watches = () => process.getActiveResourcesInfo().filter((name) => name === "FSEventWrap").length;
     const before = watches();
     // A message the first sync adds, so it reports a write.
     write("src/first.tsx", component("First"));
@@ -346,6 +364,30 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect.poll(() => closing !== undefined, HANG_GUARD).toBe(true);
     await closing;
     server = await created;
+
+    expect(read("messages/nb.po")).toContain(`msgid "First"`);
+    await expect.poll(watches, HANG_GUARD).toBe(before);
+  });
+
+  // Unit under test: the dev plugin's own hooks, called in the order Vite calls them when a dev server closes while the
+  // watch is still starting: `configureServer`, not yet settled, then `closeBundle`. Oracle: layer 2's plugin, by hand:
+  // the close closes the watch, whatever point its start has reached, so no watcher stays open once both settle.
+  it("closes a watch whose start is still pending when the bundle closes", async () => {
+    const before = watches();
+    // A message the first sync adds, so the watch has started once its start settles.
+    write("src/first.tsx", component("First"));
+    // A real dev server, for the config the plugin reads; the plugin's hooks are called below, as Vite would.
+    const dev = await createServer({ root, configFile: false, logLevel: "silent", plugins: [] });
+    server = dev;
+    const watch = intl().find((plugin) => plugin.name === "elmera-intl:watch");
+    const configureServer = handlerOf(watch?.configureServer);
+    const closeBundle = handlerOf(watch?.closeBundle);
+    expect([configureServer, closeBundle].map((hook) => hook === undefined)).toEqual([false, false]);
+
+    const starting = configureServer?.call(HOOK_CONTEXT, dev);
+    await closeBundle?.call(HOOK_CONTEXT);
+    await starting;
+    await dev.close();
 
     expect(read("messages/nb.po")).toContain(`msgid "First"`);
     await expect.poll(watches, HANG_GUARD).toBe(before);

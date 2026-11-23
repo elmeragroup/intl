@@ -1,12 +1,15 @@
 import { makeMethods, test } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { mkdirSync } from "node:fs";
 
 import type { ExtractOptions, ExtractResult } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
-import type { TreeListener, WatchMode } from "../src/watch";
-import { CatalogSync, FileEvents } from "../src/watch";
+import type { WatchMode } from "../src/watch";
+import { CatalogSync } from "../src/watch";
+import type { TreeListener } from "../src/watch-trees";
+import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 
@@ -94,6 +97,8 @@ export type DeliveredEvents = {
   readonly layer: Layer.Layer<FileEvents>;
   /** The trees the watch is listening to now, in the order it opened them. */
   readonly open: () => ReadonlyArray<string>;
+  /** How many trees the watch has begun to open (and not yet opened, when `opening` holds them). */
+  readonly opening: () => number;
   /**
    * The listener of an open tree, to deliver an event or an error to.
    *
@@ -104,29 +109,49 @@ export type DeliveredEvents = {
   readonly listener: (dir: string) => TreeListener;
 };
 
+/** How a `deliveredEvents` fake opens and closes. */
+export type DeliveredEventsOptions = {
+  /** Each tree opens only once this settles, as a host's watcher that opens asynchronously. */
+  readonly opening?: Promise<void>;
+  /** Each tree's close dies with this, as a watcher that fails to close. */
+  readonly closeFails?: Error;
+};
+
 /**
  * A `FileEvents` fake: it records each listener while its scope is open, and a test delivers events through it.
  *
+ * @param options - How its trees open and close.
  * @returns The fake.
  */
-export function deliveredEvents(): DeliveredEvents {
+export function deliveredEvents(options: DeliveredEventsOptions = {}): DeliveredEvents {
   const listeners = new Map<string, TreeListener>();
+  let opening = 0;
 
   return {
     layer: Layer.succeed(FileEvents, {
       watch: Effect.fn("DeliveredEvents.watch")(function* (dir: string, listener: TreeListener) {
+        opening += 1;
+
+        if (options.opening !== undefined) {
+          const opened = options.opening;
+          yield* Effect.promise(() => opened);
+        }
+
         yield* Effect.acquireRelease(
           Effect.sync(() => {
             listeners.set(dir, listener);
           }),
           () =>
-            Effect.sync(() => {
+            Effect.suspend(() => {
               listeners.delete(dir);
+
+              return options.closeFails === undefined ? Effect.void : Effect.die(options.closeFails);
             })
         );
       }),
     }),
     open: () => [...listeners.keys()],
+    opening: () => opening - listeners.size,
     listener: (dir) => {
       const listener = listeners.get(dir);
 
@@ -137,4 +162,28 @@ export function deliveredEvents(): DeliveredEvents {
       return listener;
     },
   };
+}
+
+/**
+ * The file watchers open in this process: one per native watch on macOS, one per watched directory on Linux.
+ *
+ * @returns Their count.
+ */
+export function watches(): number {
+  return process.getActiveResourcesInfo().filter((name) => name === "FSEventWrap").length;
+}
+
+/**
+ * A project with a third include root that cannot be read: `messages` and `src` are watched first, in order, then the
+ * watch of `zz-locked` fails (on Linux, where a recursive watch of an unreadable directory fails as it starts).
+ *
+ * @param project - The project.
+ */
+export function lockedRoot(project: Project): void {
+  project.write(
+    "elmera-intl.json",
+    JSON.stringify({ ...CONFIG, include: [...CONFIG.include, "zz-locked/**/*.tsx"] })
+  );
+  mkdirSync(project.path("messages"));
+  project.lock("zz-locked");
 }

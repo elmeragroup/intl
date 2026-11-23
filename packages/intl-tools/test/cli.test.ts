@@ -17,7 +17,8 @@ import { describe, expect, test } from "vitest";
 
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
 import { Reporter } from "../src/reporter";
-import { CatalogSync, FileEvents } from "../src/watch";
+import { CatalogSync } from "../src/watch";
+import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 

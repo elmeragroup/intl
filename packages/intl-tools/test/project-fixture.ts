@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 
 // What a test keeps after its deadline to fail, and report why, before its own timeout fires: a tenth of the timeout,
 // at most this, so a short in-process test keeps most of its time.
@@ -108,21 +108,20 @@ export function openProject(prefix: string, timeoutMs: number): OpenProject {
   const defer = (cleanup: Cleanup) => {
     cleanups.push(cleanup);
   };
+  // A race against the deadline's timer, which it clears: it settles on the turn `waiting` settles.
   const within = async <A>(waiting: Promise<A>, what: string): Promise<A> => {
-    let settled = false;
-    const settling = waiting.finally(() => {
-      settled = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_resolve, reject) => {
+      // oxlint-disable-next-line tests/no-fixed-delay -- the hang guard's deadline, not a wait on an outcome: it rejects only when `waiting` has not settled by then.
+      timer = setTimeout(() => {
+        reject(new Error(`hang guard: ${what} did not settle before the deadline`));
+      }, remainingMs());
     });
-    // Handled here too: a rejection that lands while the poll still waits is not reported as unhandled.
-    settling.catch(() => undefined);
-    await expect
-      .poll(() => settled, {
-        timeout: remainingMs(),
-        message: `hang guard: ${what} did not settle before the deadline`,
-      })
-      .toBe(true);
-
-    return settling;
+    try {
+      return await Promise.race([waiting, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const project: Project = {
