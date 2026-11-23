@@ -6,9 +6,10 @@ import { relative } from "node:path";
 // it read is pure, in `catalog-plan.ts` and `catalog-check.ts`.
 import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
-import { checkCatalogs, compileLocale } from "./catalog-check";
+import { checkLocale, checkSources, compileLocale } from "./catalog-check";
+import type { CatalogIdentity } from "./catalog-files";
 import { CatalogFiles, ioEdge } from "./catalog-files";
-import type { CatalogPlan, CatalogText, WrittenCatalog } from "./catalog-plan";
+import type { CatalogPlan, CatalogSnapshot, CatalogText, WrittenCatalog } from "./catalog-plan";
 import { mergeCatalogs } from "./catalog-plan";
 import type { UnreachableArm } from "./compile";
 import type { UnusedEntries } from "./po";
@@ -55,14 +56,32 @@ export type ExtractResult = Omit<CommandReport, "written" | "unreachable"> & {
 
 const scan = (config: ProjectConfig, cache: ParseCache) => ioEdge("scan", () => scanProject(config, cache));
 
-// Each locale's PO as it is now, in the config's order.
-const readCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig) {
+// A locale's PO as it is now.
+const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig, locale: string) {
   const files = yield* CatalogFiles;
+  const path = catalogPath(config, locale);
 
-  const catalogs: Array<CatalogText> = [];
+  return {
+    locale,
+    path,
+    shown: relative(config.root, path),
+    text: yield* files.read(path),
+  } satisfies CatalogText;
+});
+
+// Each locale's PO, in the config's order, each file read once: a locale whose path names a file another locale's
+// already did (a duplicate locale, a `{locale}/..` path, a link) shares that read, so every output to one file merges
+// from one snapshot of it.
+const snapshotCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig) {
+  const files = yield* CatalogFiles;
+  const texts = new Map<CatalogIdentity, string | undefined>();
+  const catalogs: Array<CatalogSnapshot> = [];
   for (const locale of config.locales) {
     const path = catalogPath(config, locale);
-    catalogs.push({ locale, path, shown: relative(config.root, path), text: yield* files.read(path) });
+    const identity = yield* files.identify(path);
+    const text = texts.has(identity) ? texts.get(identity) : yield* files.read(path);
+    texts.set(identity, text);
+    catalogs.push({ locale, path, shown: relative(config.root, path), text, identity });
   }
 
   return catalogs;
@@ -135,7 +154,7 @@ export const planCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.planCatalogs"
     } satisfies CatalogPlan;
   }
 
-  return mergeCatalogs(yield* readCatalogs(config), scanned.messages, options.unused);
+  return mergeCatalogs(yield* snapshotCatalogs(config), scanned.messages, options.unused);
 });
 
 /**
@@ -160,23 +179,23 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
   const files = yield* CatalogFiles;
 
   if (options.concurrentSave === "yield") {
-    for (const [path, text] of plan.read) {
+    for (const { path, text } of plan.read.values()) {
       if ((yield* files.read(path)) !== text) {
         return { problems, messages, written: [], superseded: true } satisfies ExtractResult;
       }
     }
   }
 
-  // What each catalog holds, as this sync last saw or wrote it: a later output to a path several locales share is
-  // compared with this sync's own write, not taken for a save.
-  const expected = new Map(plan.read);
+  // What each file holds, as this sync last read or wrote it: a later output to a file several locales' paths name is
+  // compared with this sync's own write to it, not taken for a save.
+  const expected = new Map([...plan.read].map(([identity, { text }]) => [identity, text] as const));
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
     const outcome = yield* files.write(
       output.path,
       output.text,
       options.concurrentSave === "yield"
-        ? { _tag: "IfUnchangedFrom", text: expected.get(output.path) }
+        ? { _tag: "IfUnchangedFrom", text: expected.get(output.identity) }
         : { _tag: "Overwrite" }
     );
 
@@ -185,10 +204,10 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
     }
 
     if (outcome === "written") {
-      written.push(output);
+      written.push({ path: output.path, text: output.text });
     }
 
-    expected.set(output.path, output.text);
+    expected.set(output.identity, output.text);
   }
 
   return { problems, messages, written, superseded: false } satisfies ExtractResult;
@@ -218,7 +237,12 @@ export const runCheck = /* @__PURE__ */ Effect.fn("elmera-intl.check")(function*
   }
 
   const messages = scanned.messages.length;
-  const problems = checkCatalogs(scanned, yield* readCatalogs(config));
+  // The sources are analysed once; each locale's PO is read and checked against them in turn, holding one at a time.
+  const sources = checkSources(scanned);
+  const problems: Array<Problem> = [...sources.problems];
+  for (const locale of config.locales) {
+    problems.push(...checkLocale(yield* readCatalog(config, locale), sources.compiled));
+  }
 
   if (problems.length > 0) {
     return { problems, messages, written: [], unreachable: [] } satisfies CommandReport;

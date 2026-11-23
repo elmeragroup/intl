@@ -2,12 +2,14 @@ import { describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
+import { linkSync, mkdirSync, symlinkSync } from "node:fs";
+import { relative } from "node:path";
 
-import { CatalogFiles } from "../src/catalog-files";
+import { CatalogFiles, NODE_CATALOG_FILES } from "../src/catalog-files";
 import type { ExtractOptions } from "../src/commands";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
-import type { WatchMode } from "../src/watch";
+import type { SyncResult, WatchMode } from "../src/watch";
 import type { Project } from "./project-fixture";
 import { component, deliveredEvents, it, startWatch, syncing } from "./watch-project";
 
@@ -30,12 +32,68 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
       CatalogFiles.use((live) => Effect.succeed(wrap(live)))
     ).pipe(Layer.provide(CatalogFiles.layer()));
 
-  // A translator's save of sv's "Hello", as its editor writes it.
-  const translateSv = (project: Project) => {
+  // Each result as the CLI's watch prints it (`wrote` and the files, relative to the root), or its tag.
+  const recorded = (project: Project) => {
+    const lines: Array<string> = [];
+    const report = (result: SyncResult) =>
+      Effect.sync(() => {
+        lines.push(
+          result._tag === "Written"
+            ? `wrote ${result.files.map((file) => relative(project.root, file)).join(", ")}`
+            : result._tag
+        );
+      });
+
+    return { lines, report };
+  };
+
+  // A translator's save of "Hello" in `po`, as its editor writes it.
+  const translate = (project: Project, po: string, text: string) => {
     project.write(
-      "messages/sv.po",
-      project.read("messages/sv.po").replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hej"`)
+      po,
+      project.read(po).replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "${text}"`)
     );
+  };
+
+  // Node's catalog files, translating "Hello" in `po` right after the first read of it once `armed` is called, and
+  // recording whether any write after the save dropped it.
+  const savingAfterRead = (project: Project, po: string) => {
+    const path = project.path(po);
+    let armed = false;
+    let saved = false;
+    let overwritten = false;
+    const layer = wrapped((live) => ({
+      ...live,
+      write: (written, text, guard) =>
+        live.write(written, text, guard).pipe(
+          Effect.tap((outcome) =>
+            Effect.sync(() => {
+              overwritten ||=
+                saved && written === path && outcome === "written" && !text.includes(`msgstr "Hei"`);
+            })
+          )
+        ),
+      read: (read) =>
+        live.read(read).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (armed && !saved && read === path) {
+                saved = true;
+                translate(project, po, "Hei");
+              }
+            })
+          )
+        ),
+    }));
+
+    return {
+      layer,
+      arm: () => {
+        armed = true;
+      },
+      saved: () => saved,
+      overwritten: () => overwritten,
+    };
   };
 
   // Node's catalog files, saving sv's "Hello" right after the sync writes nb with "Ready" in it.
@@ -50,7 +108,7 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
             Effect.sync(() => {
               if (!saved && outcome === "written" && path === nb && text.includes(`msgid "Ready"`)) {
                 saved = true;
-                translateSv(project);
+                translate(project, "messages/sv.po", "Hej");
               }
             })
           )
@@ -149,49 +207,95 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     })
   );
 
-  // The runtime yields to another fiber at any step of a sync. One that saves sv just after the sync's last storage
-  // operation on it (once nb is written) runs at that yield: it lands after sv's write, never between the check of sv
-  // and the write, so it is kept.
-  it.effect("keeps a msgstr another fiber saves while the sync yields at a catalog", ({ project }) =>
-    Effect.gen(function* () {
-      project.write("elmera-intl.json", TWO_LOCALES);
-      const nb = project.path("messages/nb.po");
-      const sv = project.path("messages/sv.po");
-      let nbWritten = false;
-      let saved = false;
-      // After an operation on sv, once nb holds "Ready": another fiber saves sv, and the sync yields to it.
-      const yieldingToSave = Effect.suspend(() => {
-        if (saved || !nbWritten) {
-          return Effect.void;
-        }
+  // The runtime yields to another fiber at any step of a sync. A fiber that saves sv just after the sync's storage
+  // operation on it (once nb is written) runs at that yield: the check of sv and its write are one operation, so the
+  // save lands after the write, never between them, and the next sync merges it.
+  it.effect(
+    "keeps a msgstr another fiber saves while the sync yields between catalog operations",
+    ({ project }) =>
+      Effect.gen(function* () {
+        project.write("elmera-intl.json", TWO_LOCALES);
+        const nb = project.path("messages/nb.po");
+        const sv = project.path("messages/sv.po");
+        let nbWritten = false;
+        let saved = false;
+        // After an operation on sv, once nb holds "Ready": another fiber saves sv, and the sync yields to it.
+        const yieldingToSave = Effect.suspend(() => {
+          if (saved || !nbWritten) {
+            return Effect.void;
+          }
 
-        saved = true;
+          saved = true;
 
-        return Effect.forkChild(Effect.sync(() => translateSv(project))).pipe(
-          Effect.andThen(Effect.yieldNow)
-        );
-      });
-      const files = wrapped((live) => ({
-        read: (path) => live.read(path).pipe(Effect.tap(() => (path === sv ? yieldingToSave : Effect.void))),
-        readExisting: live.readExisting,
-        write: (path, text, guard) =>
-          live.write(path, text, guard).pipe(
-            Effect.tap((outcome) =>
-              Effect.suspend(() => {
-                nbWritten ||= outcome === "written" && path === nb && text.includes(`msgid "Ready"`);
+          return Effect.forkChild(Effect.sync(() => translate(project, "messages/sv.po", "Hej"))).pipe(
+            Effect.andThen(Effect.yieldNow)
+          );
+        });
+        const files = wrapped((live) => ({
+          ...live,
+          read: (path) =>
+            live.read(path).pipe(Effect.tap(() => (path === sv ? yieldingToSave : Effect.void))),
+          write: (path, text, guard) =>
+            live.write(path, text, guard).pipe(
+              Effect.tap((outcome) =>
+                Effect.suspend(() => {
+                  nbWritten ||= outcome === "written" && path === nb && text.includes(`msgid "Ready"`);
 
-                return path === sv ? yieldingToSave : Effect.void;
-              })
-            )
-          ),
-      }));
-      yield* startWatch(project, { files });
-      project.write("src/ready.tsx", component("Ready"));
-      yield* TestClock.adjust("1 second");
+                  return path === sv ? yieldingToSave : Effect.void;
+                })
+              )
+            ),
+        }));
+        yield* startWatch(project, { files });
+        project.write("src/ready.tsx", component("Ready"));
+        yield* TestClock.adjust("1 second");
 
-      expect(saved).toBe(true);
-      expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hej"[\s\S]*msgid "Ready"/u);
-    })
+        expect(saved).toBe(true);
+        expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hej"[\s\S]*msgid "Ready"/u);
+      })
+  );
+
+  // Within the guarded write too: a fiber that saves sv, started from the storage's own read of sv inside sv's guarded
+  // write, runs at the sync's next yield, which comes only after the write.
+  it.effect(
+    "keeps a msgstr another fiber saves while the sync yields inside a guarded write",
+    ({ project }) =>
+      Effect.gen(function* () {
+        project.write("elmera-intl.json", TWO_LOCALES);
+        const nb = project.path("messages/nb.po");
+        const sv = project.path("messages/sv.po");
+        const context = yield* Effect.context();
+        let nbWritten = false;
+        let saved = false;
+        const files = CatalogFiles.layer({
+          ...NODE_CATALOG_FILES,
+          read: (path) => {
+            const text = NODE_CATALOG_FILES.read(path);
+
+            if (path === sv && nbWritten && !saved) {
+              saved = true;
+              // Starts now and yields at once: it saves at the first yield of the fiber that read.
+              Effect.runForkWith(context)(
+                Effect.yieldNow.pipe(
+                  Effect.andThen(Effect.sync(() => translate(project, "messages/sv.po", "Hej")))
+                )
+              );
+            }
+
+            return text;
+          },
+          write: (path, text) => {
+            NODE_CATALOG_FILES.write(path, text);
+            nbWritten ||= path === nb && text.includes(`msgid "Ready"`);
+          },
+        });
+        yield* startWatch(project, { files });
+        project.write("src/ready.tsx", component("Ready"));
+        yield* TestClock.adjust("1 second");
+
+        expect(saved).toBe(true);
+        expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hej"[\s\S]*msgid "Ready"/u);
+      })
   );
 
   // Every catalog the superseded sync wrote is reported and recorded as the watch's own: nb's own change event,
@@ -200,10 +304,12 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     Effect.gen(function* () {
       project.write("elmera-intl.json", TWO_LOCALES);
       const events = deliveredEvents();
-      const { reports } = yield* startWatch(project, {
+      const reports = recorded(project);
+      yield* startWatch(project, {
         files: savingAfterNb(project).layer,
         mode: NATIVE,
         events: events.layer,
+        report: reports.report,
       });
       project.write("src/ready.tsx", component("Ready"));
       events.listener(project.root).change("rename", "src/ready.tsx");
@@ -211,7 +317,74 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
       events.listener(project.root).change("change", "messages/nb.po");
       yield* TestClock.adjust("1 second");
 
-      expect(reports).toEqual(["Written", "Written", "Written"]);
+      expect(reports.lines).toEqual([
+        "wrote messages/nb.po, messages/sv.po",
+        "wrote messages/nb.po",
+        "wrote messages/sv.po",
+      ]);
+    })
+  );
+
+  // Paths that name one file are read once per sync: a save after that read is seen by the check before the writes,
+  // whichever locale names the file again later, so no output merged from the earlier text is ever written over it
+  // (not even for a moment, before a later locale's output merged from the save).
+  it.effect.each([
+    {
+      alias: "a duplicate locale",
+      config: `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv", "nb"] }`,
+      po: "messages/nb.po",
+    },
+    {
+      alias: "a {locale}/.. path",
+      config: `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}/../catalog.po", "locales": ["nb", "nested/fr", "sv"] }`,
+      po: "messages/catalog.po",
+    },
+  ])("keeps a msgstr saved after the one read of a file $alias names again", ({ config, po }, { project }) =>
+    Effect.gen(function* () {
+      project.write("elmera-intl.json", config);
+      const saving = savingAfterRead(project, po);
+      yield* startWatch(project, { files: saving.layer });
+      saving.arm();
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+
+      expect({ saved: saving.saved(), overwritten: saving.overwritten() }).toEqual({
+        saved: true,
+        overwritten: false,
+      });
+      expect(project.read(po)).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
+    })
+  );
+
+  // Locales whose catalogs are links to one file write it in turn, as the layer 4 watch did (62bfdb1): every write
+  // reported, and the file left with the last locale's catalog.
+  it.effect("writes a catalog a symbolic link names, after the file it links to", ({ project }) =>
+    Effect.gen(function* () {
+      project.write("elmera-intl.json", TWO_LOCALES);
+      mkdirSync(project.path("messages"));
+      symlinkSync("nb.po", project.path("messages/sv.po"));
+      const reports = recorded(project);
+      yield* startWatch(project, { report: reports.report });
+
+      expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po"]);
+      expect(project.read("messages/nb.po")).toContain(String.raw`"Language: sv\n"`);
+    })
+  );
+
+  it.effect("writes catalogs that are hard links to one file, each in turn", ({ project }) =>
+    Effect.gen(function* () {
+      project.write(
+        "elmera-intl.json",
+        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv", "da"] }`
+      );
+      project.write("messages/nb.po", "");
+      linkSync(project.path("messages/nb.po"), project.path("messages/sv.po"));
+      linkSync(project.path("messages/nb.po"), project.path("messages/da.po"));
+      const reports = recorded(project);
+      yield* startWatch(project, { report: reports.report });
+
+      expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po, messages/da.po"]);
+      expect(project.read("messages/sv.po")).toContain(String.raw`"Language: da\n"`);
     })
   );
 

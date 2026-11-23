@@ -18,8 +18,8 @@ const IGNORE_SAME = "ignore-same";
 
 type SlotsOrError = ReturnType<typeof messageSlots>;
 
-// A scanned message with its source compiled once; every locale compares its translations against these slots.
-type CompiledSource = { readonly message: ProjectMessage; readonly slots: SlotsOrError };
+/** A scanned message with its source compiled once; every locale compares its translations against these slots. */
+export type CompiledSource = { readonly message: ProjectMessage; readonly slots: SlotsOrError };
 
 /** What compiling the catalogs found. */
 export type CompiledCatalogs = {
@@ -28,27 +28,38 @@ export type CompiledCatalogs = {
   readonly unreachable: ReadonlyArray<UnreachableArm>;
 };
 
+/** The sources as `check` judges them: their problems, and each message compiled once for every locale's checks. */
+export type CheckedSources = {
+  /** Include patterns that match no file, wire-key collisions, and sources that do not compile or conflict. */
+  readonly problems: ReadonlyArray<Problem>;
+  /** Each message with its source's slots, which every locale compares its translations against. */
+  readonly compiled: ReadonlyArray<CompiledSource>;
+};
+
 /**
- * Check that every catalog is in sync with the sources: each source message is present and translated, no entry is
- * obsolete, every msgid and msgstr parses, each translation keeps its source's arguments and tags, no two keys share a
- * wire key, and the serializer version matches.
+ * Check the sources: no include pattern matches nothing, no two keys share a wire key, and every source compiles as
+ * ICU with each argument of one kind.
  *
  * @param scanned - The messages the sources declare, and the include patterns that match no file.
- * @param catalogs - Each locale's PO as read, in the config's order.
- * @returns Every problem found, each naming its fix.
+ * @returns The problems found, and the compiled sources `checkLocale` compares each catalog against.
  */
-export function checkCatalogs(
-  scanned: { readonly messages: ReadonlyArray<ProjectMessage>; readonly unmatched: ReadonlyArray<Problem> },
-  catalogs: ReadonlyArray<CatalogText>
-): ReadonlyArray<Problem> {
-  const sources = scanned.messages.map((message) => ({ message, slots: messageSlots(message.source, "en") }));
+export function checkSources(scanned: {
+  readonly messages: ReadonlyArray<ProjectMessage>;
+  readonly unmatched: ReadonlyArray<Problem>;
+}): CheckedSources {
+  const compiled = scanned.messages.map((message) => ({
+    message,
+    slots: messageSlots(message.source, "en"),
+  }));
 
-  return [
-    ...scanned.unmatched,
-    ...keyCollisions(scanned.messages),
-    ...sources.flatMap(({ message, slots }) => checkSource(message, slots)),
-    ...catalogs.flatMap((catalog) => checkLocale(catalog, sources)),
-  ];
+  return {
+    problems: [
+      ...scanned.unmatched,
+      ...keyCollisions(scanned.messages),
+      ...compiled.flatMap(({ message, slots }) => checkSource(message, slots)),
+    ],
+    compiled,
+  };
 }
 
 /**
@@ -123,7 +134,16 @@ function checkSource(message: ProjectMessage, slots: SlotsOrError): Array<Proble
   }));
 }
 
-function checkLocale(catalog: CatalogText, sources: ReadonlyArray<CompiledSource>): Array<Problem> {
+/**
+ * Check one locale's catalog against the sources: it exists and parses, its serializer version matches, each source
+ * message is present and translated, no entry is obsolete, and each translation parses and keeps its source's
+ * arguments and tags.
+ *
+ * @param catalog - The locale's PO as read.
+ * @param sources - The compiled sources, from `checkSources`.
+ * @returns Every problem found, each naming its fix.
+ */
+export function checkLocale(catalog: CatalogText, sources: ReadonlyArray<CompiledSource>): Array<Problem> {
   const po = catalog.shown;
   const read = parseCatalog(catalog);
 

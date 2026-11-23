@@ -5,8 +5,17 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 /**
  * I/O the commands do not classify threw, such as a file a checkout deletes mid-scan or a directory where a catalog
@@ -62,6 +71,63 @@ export type WriteOutcome =
   /** The catalog no longer holds what the guard expected, so nothing was written. */
   | "changed";
 
+/**
+ * Which file a catalog path names, whatever path names it: one key for every alias of one file (a duplicate locale, a
+ * `{locale}/..` path, a symbolic link, a hard link), so a sync reads each file once and guards each write against its
+ * own last write to that file.
+ */
+export type CatalogIdentity = string;
+
+/**
+ * The synchronous file operations the live `CatalogFiles` runs, each of its operations one call of them, so a guarded
+ * write's read, comparison and write never yield in between.
+ */
+export type CatalogFileSystem = {
+  /** A file's text; undefined when it does not exist. */
+  readonly read: (path: string) => string | undefined;
+  /** A file's text; throws as Node's read when it does not exist. */
+  readonly readExisting: (path: string) => string;
+  /** Writes a file's text, making its directory. */
+  readonly write: (path: string, text: string) => void;
+  /** Which file `path` names (see `CatalogIdentity`). */
+  readonly identify: (path: string) => CatalogIdentity;
+};
+
+/** Node's file system, as `CatalogFiles.layer()` reads and writes it. */
+export const NODE_CATALOG_FILES: CatalogFileSystem = {
+  read: (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined),
+  readExisting: (path) => readFileSync(path, "utf8"),
+  write: (path, text) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+  },
+  identify: (path) => {
+    // An existing file is its device and inode, through every link; one not created yet is where it will be created.
+    const stats = statSync(path, { throwIfNoEntry: false });
+
+    return stats === undefined ? `new:${pendingPath(path, 0)}` : `file:${stats.dev}:${stats.ino}`;
+  },
+};
+
+// The symbolic links one path may follow before the path counts as unresolved, as the kernel's own limit.
+const MAX_LINKS = 40;
+
+// Where a file that does not exist yet will be created: a dangling link's target, else the real path of its nearest
+// existing directory joined with the rest.
+function pendingPath(path: string, links: number): string {
+  if (links < MAX_LINKS && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+    return pendingPath(resolve(dirname(path), readlinkSync(path)), links + 1);
+  }
+
+  const parent = dirname(path);
+
+  if (parent === path) {
+    return path;
+  }
+
+  return join(existsSync(parent) ? realpathSync(parent) : pendingPath(parent, links), basename(path));
+}
+
 /** Where catalogs are read and written. */
 export class CatalogFiles
   extends /* @__PURE__ */ Context.Service<
@@ -71,6 +137,8 @@ export class CatalogFiles
       readonly read: (path: string) => Effect.Effect<string | undefined, ProjectIoFailed>;
       /** A catalog's text; a catalog that does not exist fails as its read did. */
       readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
+      /** Which file a catalog path names (see `CatalogIdentity`). */
+      readonly identify: (path: string) => Effect.Effect<CatalogIdentity, ProjectIoFailed>;
       /**
        * Write a catalog's text, making its directory, unless it already holds the text or (under `IfUnchangedFrom`)
        * changed. One operation: its read, its comparison and its write never yield to another fiber in between, so a
@@ -85,22 +153,26 @@ export class CatalogFiles
   >()("elmera-intl-tools/CatalogFiles")
 {
   /**
-   * The catalogs on Node's file system, each operation one synchronous call.
+   * The catalogs on a synchronous file system, each operation one synchronous call.
    *
-   * @returns A layer reading and writing through `node:fs`.
+   * @param fs - The file operations; Node's unless a test runs something between them.
+   * @returns A layer reading and writing through `fs`.
    */
-  static layer(): Layer.Layer<CatalogFiles> {
+  static layer(fs: CatalogFileSystem = NODE_CATALOG_FILES): Layer.Layer<CatalogFiles> {
     return Layer.succeed(CatalogFiles, {
       read: Effect.fn("CatalogFiles.read")(function* (path: string) {
-        return yield* ioEdge("read", () => textAt(path));
+        return yield* ioEdge("read", () => fs.read(path));
       }),
       readExisting: Effect.fn("CatalogFiles.readExisting")(function* (path: string) {
-        return yield* ioEdge("read", () => readFileSync(path, "utf8"));
+        return yield* ioEdge("read", () => fs.readExisting(path));
+      }),
+      identify: Effect.fn("CatalogFiles.identify")(function* (path: string) {
+        return yield* ioEdge("read", () => fs.identify(path));
       }),
       // The read, the comparison and the write are one synchronous call: nothing can run between them.
       write: Effect.fn("CatalogFiles.write")(function* (path: string, text: string, guard: WriteGuard) {
         return yield* ioEdge("write", (): WriteOutcome => {
-          const current = textAt(path);
+          const current = fs.read(path);
 
           if (guard._tag === "IfUnchangedFrom" && current !== guard.text) {
             return "changed";
@@ -110,16 +182,11 @@ export class CatalogFiles
             return "unchanged";
           }
 
-          mkdirSync(dirname(path), { recursive: true });
-          writeFileSync(path, text);
+          fs.write(path, text);
 
           return "written";
         });
       }),
     });
   }
-}
-
-function textAt(path: string): string | undefined {
-  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }
