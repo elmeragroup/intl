@@ -57,61 +57,70 @@ it("reads a config that starts with a byte order mark as withIntl reads it", asy
   expect(read._tag).toBe("ConfigInvalid");
 });
 
-// Unit under test: `decodeConfig`, the Schema decode the CLI, Vite and Vitest run. Oracle: `parseConfig`, the hand
-// parser `withIntl` runs inside next.config: for each text, the same config or the same first problem, word for word.
-// The texts reach every problem, each field's ways to be wrong, and the order between them (an escaping glob beside an
-// invalid exclude or invalid locales), so the two cannot drift apart unseen.
-const CONFIG_TEXTS: ReadonlyArray<string> = [
-  '{ "include": ["./src/**/*.tsx"], "exclude": ["./src/skip/**"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv"], "formats": "./src/formats.ts", "extra": 1 }',
-  '{ "include": ["src/**"], "catalogs": "/abs/{locale}.po", "locales": ["nb"], "formats": "/abs/formats.mjs" }',
-  "{ not json",
-  "﻿{}",
-  "5",
-  "null",
-  '"text"',
-  "[]",
-  '["src/**"]',
-  "{}",
-  '{ "include": [] }',
-  '{ "include": "src/**" }',
-  '{ "include": ["src/**", 1] }',
-  '{ "include": ["../a"], "exclude": 5 }',
-  '{ "include": [], "exclude": 5 }',
-  '{ "include": ["src/**"], "exclude": null }',
-  '{ "include": ["src/**"], "exclude": ["/abs/**"] }',
-  '{ "include": ["./../x"] }',
-  '{ "include": ["../a"], "locales": [] }',
-  '{ "include": ["src/**"] }',
-  '{ "include": ["src/**"], "locales": [] }',
-  '{ "include": ["src/**"], "locales": ["nb", 2] }',
-  '{ "include": ["src/**"], "locales": ["nb"] }',
-  '{ "include": ["src/**"], "locales": ["nb"], "catalogs": "messages/nb.po" }',
-  '{ "include": ["src/**"], "locales": ["nb"], "catalogs": "messages/{locale}.json" }',
-  '{ "include": ["src/**"], "locales": ["nb"], "catalogs": 5 }',
-  '{ "include": ["src/**"], "locales": ["nb"], "catalogs": "{locale}.po", "formats": null }',
-  '{ "include": ["src/**"], "locales": ["nb"], "catalogs": "{locale}.po", "formats": "formats.json" }',
-  '{ "include": ["src/**"], "locales": [], "catalogs": 5, "formats": 1 }',
+// Unit under test: `decodeConfig`, the Schema decode the CLI, Vite and Vitest run. Oracles: `parseConfig`, the hand
+// parser `withIntl` runs inside next.config (for each text, the same config or the same first problem, word for word),
+// and, for each text, its first diagnostic as a literal, so each message is checked against the field it names. The
+// texts reach every problem, each field's ways to be wrong, and the precedence between them: include before exclude,
+// both before an escaping glob, which comes before the locales, then the catalogs, then the formats. "not JSON" is
+// pinned by its prefix: the JSON parser's own message after it varies by Node version.
+const INCLUDE = '"include" must be a non-empty array of glob strings';
+const EXCLUDE = '"exclude" must be an array of glob strings';
+const LOCALES = '"locales" must be a non-empty array of locale strings';
+const CATALOGS = '"catalogs" must be a path pattern with {locale} ending in .po';
+const FORMATS = '"formats" must be the path of a .ts or .js module exporting `formats`';
+const NOT_OBJECT = "not a JSON object";
+const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, first: string]> = [
+  [
+    '{ "include": ["./src/**/*.tsx"], "exclude": ["./src/skip/**"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv"], "formats": "./src/formats.ts", "extra": 1 }',
+    "valid",
+  ],
+  [
+    '{ "include": ["src/**"], "catalogs": "/abs/{locale}.po", "locales": ["nb"], "formats": "/abs/formats.mjs" }',
+    "valid",
+  ],
+  ["{ not json", "not JSON"],
+  ["\uFEFF{}", "not JSON"],
+  ["5", NOT_OBJECT],
+  ["null", NOT_OBJECT],
+  ['"text"', NOT_OBJECT],
+  ["[]", INCLUDE],
+  ['["src/**"]', INCLUDE],
+  ["{}", INCLUDE],
+  ['{ "include": [] }', INCLUDE],
+  ['{ "include": "src/**" }', INCLUDE],
+  ['{ "include": ["src/**", 1] }', INCLUDE],
+  ['{ "include": ["../a"], "exclude": 5 }', EXCLUDE],
+  ['{ "include": [], "exclude": 5 }', INCLUDE],
+  ['{ "include": ["src/**"], "exclude": 5 }', EXCLUDE],
+  ['{ "include": ["src/**"], "exclude": null }', EXCLUDE],
+  ['{ "include": ["src/**"], "exclude": ["/abs/**"] }', 'glob "/abs/**" reaches outside the project root'],
+  ['{ "include": ["./../x"] }', 'glob "../x" reaches outside the project root'],
+  ['{ "include": ["../a"], "locales": [] }', 'glob "../a" reaches outside the project root'],
+  ['{ "include": ["src/**"] }', LOCALES],
+  ['{ "include": ["src/**"], "locales": [] }', LOCALES],
+  ['{ "include": ["src/**"], "locales": ["nb", 2] }', LOCALES],
+  ['{ "include": ["src/**"], "locales": ["nb"] }', CATALOGS],
+  ['{ "include": ["src/**"], "locales": ["nb"], "catalogs": "messages/nb.po" }', CATALOGS],
+  ['{ "include": ["src/**"], "locales": ["nb"], "catalogs": "messages/{locale}.json" }', CATALOGS],
+  ['{ "include": ["src/**"], "locales": ["nb"], "catalogs": 5 }', CATALOGS],
+  ['{ "include": ["src/**"], "locales": ["nb"], "catalogs": 5, "formats": 1 }', CATALOGS],
+  ['{ "include": ["src/**"], "locales": ["nb"], "catalogs": "{locale}.po", "formats": null }', FORMATS],
+  [
+    '{ "include": ["src/**"], "locales": ["nb"], "catalogs": "{locale}.po", "formats": "formats.json" }',
+    FORMATS,
+  ],
+  ['{ "include": ["src/**"], "locales": [], "catalogs": 5, "formats": 1 }', LOCALES],
 ];
 
-it("decodes every config as the hand parser withIntl runs parses it", ({ project }) => {
+it("decodes every config as the hand parser withIntl runs parses it, each first diagnostic as pinned", ({
+  project,
+}) => {
   const path = `${project.root}/./elmera-intl.json`;
-  const outcome = (loaded: ReturnType<typeof parseConfig>) =>
-    loaded._tag === "Config" ? "valid" : loaded.problem.message.replace(/^(not JSON|glob)[: ].*/u, "$1");
+  const first = (loaded: ReturnType<typeof parseConfig>) =>
+    loaded._tag === "Config" ? "valid" : loaded.problem.message.replace(/^not JSON: .*/u, "not JSON");
 
-  const decoded = CONFIG_TEXTS.map((text) => decodeConfig(text, path, project.root, { resolve }));
+  const decoded = CONFIG_TEXTS.map(([text]) => decodeConfig(text, path, project.root, { resolve }));
 
-  expect(decoded).toEqual(CONFIG_TEXTS.map((text) => parseConfig(text, path, project.root)));
-  expect(new Set(decoded.map((loaded) => outcome(loaded)))).toEqual(
-    new Set([
-      "valid",
-      "not JSON",
-      "not a JSON object",
-      "glob",
-      '"include" must be a non-empty array of glob strings',
-      '"exclude" must be an array of glob strings',
-      '"locales" must be a non-empty array of locale strings',
-      '"catalogs" must be a path pattern with {locale} ending in .po',
-      '"formats" must be the path of a .ts or .js module exporting `formats`',
-    ])
-  );
+  expect(decoded).toEqual(CONFIG_TEXTS.map(([text]) => parseConfig(text, path, project.root)));
+  expect(decoded.map((loaded) => first(loaded))).toEqual(CONFIG_TEXTS.map(([, pinned]) => pinned));
 });

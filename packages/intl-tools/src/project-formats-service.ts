@@ -10,7 +10,7 @@ import * as Layer from "effect/Layer";
 import { readText } from "./catalog-files";
 import type { ProjectConfig } from "./project-config";
 import type { Evaluated, FormatsLoaded, FormatsMemo } from "./project-formats";
-import { evaluateModule, judgeFormats } from "./project-formats";
+import { evaluateRemembered, judgeFormats } from "./project-formats";
 
 /** The app's `formats`, loaded for a host runtime. */
 export class ProjectFormats
@@ -43,22 +43,7 @@ export class ProjectFormats
             return { _tag: "FormatsUnloadable", reason: content.failure.reason() } satisfies Evaluated;
           }
 
-          const hit = memo.get(path);
-
-          if (hit?.content === content.success) {
-            return hit.result;
-          }
-
-          const result = yield* Effect.sync(() => evaluateModule(path));
-          // Kept only while the module still holds the text read before the evaluation: a save during it (an editor's
-          // truncate-then-write) would otherwise pin that evaluation to a text it never evaluated.
-          const after = yield* readText(files, path).pipe(Effect.result);
-
-          if (after._tag === "Success" && after.success === content.success) {
-            memo.set(path, { content: content.success, result });
-          }
-
-          return result;
+          return yield* Effect.sync(() => evaluateRemembered(memo, path, content.success));
         });
 
         return {

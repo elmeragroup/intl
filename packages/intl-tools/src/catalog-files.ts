@@ -144,8 +144,9 @@ export const readText = (files: FileSystem.FileSystem, path: string): Effect.Eff
   );
 
 /**
- * A file's text, or undefined when Node's `existsSync` says it does not exist: any failure to reach it (a self-looping
- * link, a file where a directory goes) reads as absent, so it surfaces where the file is next used, as before.
+ * A file's text, or undefined when the file system says it does not exist. On Node that is `existsSync`
+ * (project-services.ts): any failure to reach the file (a self-looping link, a file where a directory goes) reads as
+ * absent, so it surfaces where the file is next used, while a denied read fails here, as it always did.
  *
  * @param files - The file system.
  * @param path - The file.
@@ -155,7 +156,9 @@ export const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
   files: FileSystem.FileSystem,
   path: string
 ) {
-  const exists = yield* files.exists(path).pipe(Effect.orElseSucceed(() => false));
+  const exists = yield* files
+    .exists(path)
+    .pipe(Effect.mapError((error) => new ReadFailed({ cause: nodeSyncError(error) })));
 
   return exists ? yield* readText(files, path) : undefined;
 });

@@ -4,10 +4,11 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 import { createHash } from "node:crypto";
 import { globSync } from "node:fs";
-import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
+import { isAbsolute, matchesGlob, relative, sep } from "node:path";
 
 import type { ProjectIoFailed } from "./catalog-files";
 import { ioEdge, platformFailed, readFailed, readText } from "./catalog-files";
@@ -132,7 +133,12 @@ export type ProjectMessage = {
  * @returns `true` when the file is a project source.
  */
 export function isProjectSource(config: ProjectConfig, file: string): boolean {
-  const path = relative(config.root, file).split(sep).join("/");
+  return isProjectPath(config, relative(config.root, file).split(sep).join("/"));
+}
+
+// `isProjectSource` on a root-relative, `/`-separated path: what the scan decides membership on, whatever the host's
+// path rules.
+function isProjectPath(config: ProjectConfig, path: string): boolean {
   const segments = path.split("/");
   // Directories as `dir/`: the form that matches `src/skip`, `src/skip/` and `src/skip/**` alike, like globSync's
   // exclude, which prunes a matching directory during the walk.
@@ -207,6 +213,7 @@ function isErrno(cause: unknown, code: string): boolean {
 export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(function* (config: ProjectConfig) {
   const files = yield* FileSystem.FileSystem;
   const discovery = yield* SourceDiscovery;
+  const paths = yield* Path.Path;
   const cache = (yield* SourceCaches).of(config.root);
   // Per pattern, so a pattern that stopped matching (a renamed directory) is reported instead of its messages
   // silently leaving the catalogs. glob's `exclude` only prunes the walk (it skips what isProjectSource rejects);
@@ -216,12 +223,14 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
   for (const pattern of config.include) {
     const globbed = yield* discovery.find(config.root, pattern, ["**/node_modules/**", ...config.exclude]);
     const sources: Array<string> = [];
-    for (const file of globbed) {
-      const path = join(config.root, file);
+    for (const found of globbed) {
+      // Root-relative and `/`-separated, whichever separator the discovery used; the file system's own path is
+      // built with the host's `Path`.
+      const file = found.split("\\").join("/");
 
       if (
-        isProjectSource(config, path) &&
-        (yield* isFile(files, path).pipe(Effect.mapError(platformFailed("scan"))))
+        isProjectPath(config, file) &&
+        (yield* isFile(files, paths.join(config.root, file)).pipe(Effect.mapError(platformFailed("scan"))))
       ) {
         sources.push(file);
       }
@@ -243,10 +252,11 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
     { source: string; context: string | undefined; references: Set<string>; comments: Set<string> }
   >();
   const scannedPaths = new Set<string>();
-  for (const file of sources) {
-    const path = relative(config.root, join(config.root, file)).split("\\").join("/");
+  for (const path of sources) {
     scannedPaths.add(path);
-    const text = yield* readText(files, join(config.root, file)).pipe(Effect.mapError(readFailed("scan")));
+    const text = yield* readText(files, paths.join(config.root, path)).pipe(
+      Effect.mapError(readFailed("scan"))
+    );
     const result = cachedExtract(cache, path, text);
 
     if (result._tag === "Failed") {

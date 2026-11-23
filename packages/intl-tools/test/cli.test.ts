@@ -12,13 +12,16 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   utimesSync,
+  writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
@@ -1112,6 +1115,72 @@ describe("bin", BIN_TEST, () => {
       "elmera-intl failed: Error: EISDIR: illegal operation on a directory, read",
     ]);
   });
+
+  // Under Node's permission model, a path the model denies is the crash it was in the layer 5 CLI (963d3e4): its
+  // existence check throws ERR_ACCESS_DENIED where it ran, never reading as a missing file, and before any catalog is
+  // written. Oracle: 963d3e4's exit 2, stdout and the files written, and its stderr's first line, Node's own message
+  // (its sentence after "restricted." varies by Node version).
+  const DENIED = "elmera-intl failed: Error: Access to this API has been restricted.";
+  const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
+  const permitted = (
+    project: Project,
+    grants: { readonly read: ReadonlyArray<string>; readonly write: ReadonlyArray<string> },
+    ...args: Array<string>
+  ): CliRun => {
+    const run = spawnSync(
+      execPath,
+      [
+        "--permission",
+        "--no-warnings",
+        // The extractor's parser is a native addon.
+        "--allow-addons",
+        ...[REPOSITORY, ...grants.read].map((path) => `--allow-fs-read=${path}`),
+        ...grants.write.map((path) => `--allow-fs-write=${path}`),
+        BIN,
+        ...args,
+      ],
+      { cwd: realpathSync(project.root), encoding: "utf8", ...project.spawnGuard() }
+    );
+
+    return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
+  };
+
+  it.for(["extract", "check"])(
+    "crashes on a config the permission model denies (%s)",
+    (command, { project }) => {
+      const root = realpathSync(project.root);
+      const run = permitted(project, { read: [join(root, "src")], write: [root] }, command);
+
+      expect([run.code, run.stdout, run.stderr.split("\n")[0]?.startsWith(DENIED)]).toEqual([2, "", true]);
+    }
+  );
+
+  it.for(["extract", "check"])(
+    "crashes on a second catalog the permission model denies, writing none (%s)",
+    (command, { project }) => {
+      const catalogs = realpathSync(mkdtempSync(join(tmpdir(), "elmera-intl-catalogs-")));
+      project.defer(() => {
+        rmSync(catalogs, { recursive: true, force: true });
+      });
+      writeFileSync(join(catalogs, "sv.po"), 'msgid ""\nmsgstr ""\n');
+      project.write(
+        "elmera-intl.json",
+        JSON.stringify({ ...CONFIG, catalogs: join(catalogs, "{locale}.po"), locales: ["nb", "sv"] })
+      );
+      const run = permitted(
+        project,
+        { read: [realpathSync(project.root), join(catalogs, "nb.po")], write: [catalogs] },
+        command
+      );
+
+      expect([
+        run.code,
+        run.stdout,
+        run.stderr.split("\n")[0]?.startsWith(DENIED),
+        existsSync(join(catalogs, "nb.po")),
+      ]).toEqual([2, "", true, false]);
+    }
+  );
 
   it("exits 2 and names the failure when the CLI throws", ({ project }) => {
     // A file where the catalog directory goes: extract's mkdir throws, an I/O failure the CLI does not classify.

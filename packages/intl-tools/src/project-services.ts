@@ -6,9 +6,11 @@
 // runtime is built. Importing `./vite` or `./vitest` pays for none of them. (A formats module is evaluated with
 // `spawnSync`, not Node's `ChildProcessSpawner`: see `evaluateModule`.)
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import { existsSync } from "node:fs";
 
 import { CatalogFiles } from "./catalog-files";
 import { SourceCaches, SourceDiscovery } from "./project";
@@ -17,15 +19,38 @@ import { ProjectFormats } from "./project-formats-service";
 /** Node's platform services: its file system and paths. */
 export type NodePlatformServices = FileSystem.FileSystem | Path.Path;
 
-/** Node's file system and paths, from @effect/platform-node-shared, imported as the layer is built. */
+// Whether a path exists, as Node's `existsSync` says, which the CLI has always asked: any failure to reach the path (a
+// self-looping link, a file where a directory goes) is absent, while a read the permission model denies
+// (`ERR_ACCESS_DENIED`) is thrown, so it fails where it did. `FileSystem.exists` swallows only "not found".
+const nodeExists = (path: string): Effect.Effect<boolean, PlatformError.PlatformError> =>
+  Effect.try({
+    try: () => existsSync(path),
+    catch: (cause) =>
+      PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "exists",
+        pathOrDescriptor: path,
+        cause,
+      }),
+  });
+
+/**
+ * Node's file system and paths, from @effect/platform-node-shared, imported as the layer is built; its `exists` is
+ * Node's `existsSync`.
+ */
 export const NodePlatform: Layer.Layer<NodePlatformServices> = /* @__PURE__ */ Layer.unwrap(
   /* @__PURE__ */ Effect.promise(async () => {
     const [files, paths] = await Promise.all([
       import("@effect/platform-node-shared/NodeFileSystem"),
       import("@effect/platform-node-shared/NodePath"),
     ]);
+    const nodeFiles = Layer.effect(
+      FileSystem.FileSystem,
+      FileSystem.FileSystem.useSync((live) => ({ ...live, exists: nodeExists }))
+    ).pipe(Layer.provide(files.layer));
 
-    return Layer.merge(files.layer, paths.layer);
+    return Layer.merge(nodeFiles, paths.layer);
   })
 );
 

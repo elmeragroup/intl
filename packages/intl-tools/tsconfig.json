@@ -24,9 +24,9 @@
         "name": "@effect/language-service",
         // Globs resolve against this file, and an override's list replaces the preset's. The tests' unstable APIs:
         // effect/Arbitrary for the PO codec's round-trip property, effect/cli for a host's own CLI settings,
-        // @effect/vitest (it.effect and its TestClock) for the watch's timing, and effect/FileSystem,
-        // effect/PlatformError and effect/ByteSize for the synchronous file system the watch's clocked tests read
-        // through.
+        // @effect/vitest (it.effect and its TestClock) for the watch's timing, effect/FileSystem,
+        // effect/PlatformError and effect/ByteSize for the synchronous and in-memory file systems the tests read
+        // through, and effect/Path with @effect/platform-node-shared for the paths (POSIX and Win32) they pair with.
         "overrides": [
           {
             "include": ["test/**/*"],
@@ -37,7 +37,9 @@
                 "@effect/vitest",
                 "effect/FileSystem",
                 "effect/PlatformError",
-                "effect/ByteSize"
+                "effect/ByteSize",
+                "effect/Path",
+                "@effect/platform-node-shared"
               ]
             }
           }

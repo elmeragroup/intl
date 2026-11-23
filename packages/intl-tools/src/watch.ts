@@ -10,9 +10,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import type * as FileSystem from "effect/FileSystem";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -21,13 +22,11 @@ import * as Semaphore from "effect/Semaphore";
 import { readFileSync } from "node:fs";
 import { sep } from "node:path";
 
-import type { CatalogFiles } from "./catalog-files";
-import { ioFailureReason } from "./catalog-files";
+import { CatalogFiles, ioFailureReason } from "./catalog-files";
 import type { ExtractOptions, ExtractResult } from "./commands";
 import { extractCatalogs } from "./commands";
 import type { Problem } from "./problem";
-import type { SourceCaches, SourceDiscovery } from "./project";
-import { isExcludedDirectory, isProjectSource } from "./project";
+import { isExcludedDirectory, isProjectSource, SourceCaches, SourceDiscovery } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import type { Change, FileEvents, Intake } from "./watch-trees";
@@ -121,10 +120,10 @@ export class SyncFailed
   }) {}
 
 /**
- * What a sync's extract runs on: the catalogs' storage, the sources' file system and discovery, and the runtime's parse
- * cache.
+ * What a sync's extract runs on: the catalogs' storage, the sources' file system, paths and discovery, and the
+ * runtime's parse cache.
  */
-export type SyncServices = CatalogFiles | FileSystem.FileSystem | SourceDiscovery | SourceCaches;
+export type SyncServices = CatalogFiles | FileSystem.FileSystem | Path.Path | SourceDiscovery | SourceCaches;
 
 /**
  * One sync's extract: what the watch runs per burst of changes. A service so a test can act between a sync's read and
@@ -153,7 +152,15 @@ export class CatalogSync
     return Layer.effect(
       CatalogSync,
       Effect.gen(function* () {
-        const services = yield* Effect.context<SyncServices>();
+        // Only these services, never the rest of the builder's context: its current span (the layer's build) would
+        // otherwise parent every sync's spans, which belong under `CatalogSync.extract`.
+        const services = Context.pick(
+          CatalogFiles,
+          FileSystem.FileSystem,
+          Path.Path,
+          SourceDiscovery,
+          SourceCaches
+        )(yield* Effect.context<SyncServices>());
 
         return {
           extract: Effect.fn("CatalogSync.extract")(function* (

@@ -1,3 +1,4 @@
+import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { makeMethods, test } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -6,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import type * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { mkdirSync } from "node:fs";
@@ -123,18 +125,25 @@ export function catalogServices(
 }
 
 /**
- * `catalogServices` built synchronously, on the synchronous file system (`SYNC_FILE_SYSTEM`): a program forked on it runs up to its first suspension of its own, as when every read
- * was synchronous. Node's services import the platform as they are built, a suspension before the program starts.
+ * `catalogServices` built synchronously, on the synchronous file system (`SYNC_FILE_SYSTEM`) and Node's paths: a
+ * program forked on it runs up to its first suspension of its own, as when every read was synchronous. Node's services
+ * import the platform as they are built, a suspension before the program starts.
  *
- * @returns A layer providing the sync's extract and the commands' services, the paths left to the host's platform.
+ * @returns A layer providing the sync's extract and the commands' services.
  */
 export function syncCatalogServices(): Layer.Layer<
-  CatalogSync | CatalogFiles | SourceDiscovery | SourceCaches | ProjectFormats | FileSystem.FileSystem
+  | CatalogSync
+  | CatalogFiles
+  | SourceDiscovery
+  | SourceCaches
+  | ProjectFormats
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   return Layer.provideMerge(
     CatalogSync.layer(),
     Layer.mergeAll(CatalogFiles.layer(), SourceCaches.layer, SourceDiscovery.node, ProjectFormats.layer).pipe(
-      Layer.provideMerge(SYNC_FILE_SYSTEM)
+      Layer.provideMerge(Layer.merge(SYNC_FILE_SYSTEM, NodePath.layer))
     )
   );
 }
@@ -258,7 +267,7 @@ export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
       Layer.provide(
         options.layer ?? CatalogSync.layer(),
         Layer.mergeAll(options.files ?? CatalogFiles.layer(), SourceDiscovery.node, SourceCaches.layer).pipe(
-          Layer.provideMerge(SYNC_FILE_SYSTEM)
+          Layer.provideMerge(Layer.merge(SYNC_FILE_SYSTEM, NodePath.layer))
         )
       ),
       options.events ?? FileEvents.layer()

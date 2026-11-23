@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import { posix } from "node:path";
 
-import { readText } from "./catalog-files";
+import { nodeSyncError, readText } from "./catalog-files";
 import type { ConfigLoaded } from "./project-config";
 import { configInvalid, escapingGlob, FIELD_PROBLEMS, firstEscaping, FORMATS_MODULE } from "./project-config";
 
@@ -123,8 +123,9 @@ export function decodeConfig(
 export const readConfig = /* @__PURE__ */ Effect.fn("elmera-intl.readConfig")(function* (path: string) {
   const files = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  // Any failure to reach the file reads as "not found", as Node's existsSync reads it.
-  const exists = yield* files.exists(path).pipe(Effect.orElseSucceed(() => false));
+  // Absent as the file system says (Node's existsSync, project-services.ts): "not found". A check that fails (a read
+  // the permission model denies) is the crash it was when loadConfig threw it.
+  const exists = yield* files.exists(path).pipe(Effect.mapError(nodeSyncError), Effect.orDie);
 
   if (!exists) {
     return configInvalid(path, `${path} not found`);

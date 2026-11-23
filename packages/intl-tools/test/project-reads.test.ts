@@ -1,3 +1,4 @@
+import * as NodePath from "@effect/platform-node-shared/NodePath";
 import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -121,6 +122,71 @@ it("keeps no evaluation of a module saved between its read and its import", asyn
   ]);
 });
 
+// Unit under test: `ProjectFormats`' memo, through Node's file system, when an edit is undone before the parent reads
+// again (ABA): the parent reads A, the child imports B, and A is back before the next read. Oracle: the contract by
+// hand: an evaluation is served only for the source it evaluated, so the next load of A evaluates A and returns its
+// formats, never B's evaluation.
+it("serves no evaluation for a text it did not evaluate, when an edit is undone mid-evaluation", async ({
+  project,
+}) => {
+  const valid = `export const formats = { number: { money: { style: "currency", currency: "NOK" } } };\n`;
+  project.write("intl-formats.ts", valid);
+  const module = project.path("intl-formats.ts");
+  let reads = 0;
+  const editing = Layer.effect(
+    FileSystem.FileSystem,
+    FileSystem.FileSystem.useSync((live) => ({
+      ...live,
+      readFile: (path: string) => {
+        if (path !== module) {
+          return live.readFile(path);
+        }
+
+        reads += 1;
+
+        // The second read of the module finds the edit undone.
+        return Effect.sync(() => {
+          if (reads === 2) {
+            writeFileSync(module, valid);
+          }
+        }).pipe(
+          Effect.andThen(live.readFile(path)),
+          // The first read is followed by the edit the child then imports.
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (reads === 1) {
+                writeFileSync(module, "export const formats = 5;\n");
+              }
+            })
+          )
+        );
+      },
+    }))
+  ).pipe(Layer.provide(NodePlatform));
+  const config = {
+    root: project.root,
+    include: ["src/**"],
+    exclude: [],
+    catalogs: "messages/{locale}.po",
+    locales: ["nb"],
+    formats: module,
+  };
+
+  const [first, second] = await Effect.runPromise(
+    Effect.gen(function* () {
+      const formats = yield* ProjectFormats;
+
+      return [yield* formats.load(config), yield* formats.load(config)] as const;
+    }).pipe(Effect.provide(ProjectFormats.layer.pipe(Layer.provide(editing))))
+  );
+
+  expect([reads >= 2, first._tag, second]).toEqual([
+    true,
+    "ConfigInvalid",
+    { _tag: "Formats", formats: { number: { money: { style: "currency", currency: "NOK" } } } },
+  ]);
+});
+
 // An in-memory file system holding one source, `/memory/src/example.ts`.
 const SOURCE = `import { msg } from "@elmeragroup/intl/react";\nexport const M = msg("Hello");\n`;
 const directoryInfo = (type: FileSystem.File.Type): FileSystem.File.Info => ({
@@ -187,7 +253,63 @@ test("scans the sources of a file system that is not the host's disk", async () 
       formats: undefined,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(SourceDiscovery.fileSystem, SourceCaches.layer).pipe(Layer.provideMerge(IN_MEMORY))
+        Layer.mergeAll(SourceDiscovery.fileSystem, SourceCaches.layer).pipe(
+          Layer.provideMerge(Layer.merge(IN_MEMORY, NodePath.layerPosix))
+        )
+      )
+    )
+  );
+
+  expect(scanned).toEqual({
+    _tag: "Scanned",
+    messages: [
+      { key: "Hello", source: "Hello", context: undefined, references: ["src/example.ts"], comments: [] },
+    ],
+    unmatched: [],
+  });
+});
+
+// A Win32 file system holding one source, `C:\memory\src\example.ts`, as Windows paths alone: its walk answers in
+// `FileSystem.glob`'s terms (root-relative, `/`-separated), and every other operation knows only the backslashed path.
+const WIN32_SOURCE = "C:\\memory\\src\\example.ts";
+const win32Stat = Effect.fn("Win32.stat")(function* (path: string) {
+  return path === WIN32_SOURCE ? directoryInfo("File") : yield* missing("stat", path);
+});
+const WIN32: Layer.Layer<FileSystem.FileSystem> = Layer.succeed(FileSystem.FileSystem, {
+  ...FileSystem.makeNoop({}),
+  // Its walk of `C:\memory` for `src/**/*.ts`: the source, which it finds by its own path.
+  glob: Effect.fn("Win32.glob")(function* (
+    pattern: string,
+    options?: { readonly root?: string | undefined }
+  ) {
+    const walked = options?.root === "C:\\memory" && pattern === "src/**/*.ts";
+    const found = walked && (yield* win32Stat(WIN32_SOURCE)).type === "File";
+
+    return found ? ["src/example.ts"] : [];
+  }),
+  stat: win32Stat,
+  readFile: Effect.fn("Win32.readFile")(function* (path: string) {
+    return path === WIN32_SOURCE ? new TextEncoder().encode(SOURCE) : yield* missing("readFile", path);
+  }),
+});
+
+// Unit under test: `scanProject` on a Win32 file system, with Win32 paths, whatever the host. Oracle: the contract by
+// hand: the scan builds each source's path with the supplied `Path`, so the one source the file system holds is found
+// and scanned, and its include pattern matches.
+test("scans a Win32 file system with Win32 paths on any host", async () => {
+  const scanned = await Effect.runPromise(
+    scanProject({
+      root: "C:\\memory",
+      include: ["src/**/*.ts"],
+      exclude: [],
+      catalogs: "messages/{locale}.po",
+      locales: ["nb"],
+      formats: undefined,
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(SourceDiscovery.fileSystem, SourceCaches.layer).pipe(
+          Layer.provideMerge(Layer.merge(WIN32, NodePath.layerWin32))
+        )
       )
     )
   );
