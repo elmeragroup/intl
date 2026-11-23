@@ -25,9 +25,10 @@ import * as Terminal from "effect/Terminal";
 import { relative, resolve } from "node:path";
 import process from "node:process";
 
-import { CatalogFiles } from "./catalog-files";
 import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
-import { CONFIG_FILE, loadConfig } from "./project-config";
+import { CONFIG_FILE } from "./project-config";
+import { readConfig } from "./project-config-read";
+import { projectServices } from "./project-services";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
@@ -264,9 +265,6 @@ export const cliProgram = /* @__PURE__ */ Effect.fn("elmera-intl")(
   )
 );
 
-// The watch lifts its still-synchronous config read into the program, until the commands layer makes it an effect; an
-// exception is a defect, as before.
-const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
 // The signals that stop the watch. On just before the watch starts (a one-shot command, or a config still being read,
 // keeps Node's default and ends at once), so they are on before the first sync, and off again when the watch's scope
 // closes, a failed start included. The first signal takes both off, so a second gets Node's default.
@@ -294,7 +292,7 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   mode: WatchMode
 ) {
   const reporter = yield* Reporter;
-  const loaded = yield* watchConfig(configPath);
+  const loaded = yield* readConfig(configPath);
 
   if (loaded._tag === "ConfigInvalid") {
     yield* printProblems([loaded.problem]);
@@ -330,8 +328,8 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
 });
 
 /**
- * The executable's program: the arguments from `Stdio`, the command's output on `io`, Node's catalog files, the extract and
- * Node's file events for a watch, provided once for the whole program, and a crash printed.
+ * The executable's program: the arguments from `Stdio`, the command's output on `io`, the project's services on Node,
+ * the extract and Node's file events for a watch, provided once for the whole program, and a crash printed.
  *
  * @param io - The process's working directory and output streams.
  * @returns The program to run as the process's main fiber; `exitCodeOf` reads its exit.
@@ -345,7 +343,7 @@ export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
     Effect.provide([
       CliPlatform,
       Reporter.layer(io),
-      Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()),
+      Layer.provideMerge(CatalogSync.layer(), projectServices()),
       FileEvents.layer(),
     ])
   );
@@ -374,13 +372,15 @@ export function exitCodeOf(exit: Exit.Exit<unknown, unknown>): number {
   return Predicate.hasProperty(failure, Runtime.errorExitCode) ? Runtime.getErrorExitCode(failure) : 2;
 }
 
-// A service the CLI does not use: its flags read no file, it prompts for nothing and spawns nothing. The layer that
-// first uses one provides its Node implementation instead (@effect/platform-node-shared).
+// A service effect/cli requires that its parsing never uses: its flags read no file, it prompts for nothing and spawns
+// nothing.
 const unused = (service: string) => Effect.die(`elmera-intl uses no ${service}`);
 
 /**
  * The services effect/cli requires of every program (`Command.Environment`): Node's `Stdio` (the process's arguments)
- * and `Path`, and the services the CLI does not use, each a defect if reached.
+ * and `Path`, and stand-ins for the services its parsing never uses (a file system that reads nothing, a terminal and a
+ * child-process spawner that are defects if reached). The commands' own file system comes with `projectServices`,
+ * provided after this, which imports Node's as the program starts, never with the executable's modules.
  */
 export const CliPlatform: Layer.Layer<Command.Environment> = /* @__PURE__ */ Layer.mergeAll(
   NodeStdio.layer,

@@ -82,6 +82,7 @@ process.stdout.write(JSON.stringify({ loaded, result: { hello, invalid: (invalid
 const VITEST_PROBE = `${RECORDER}
 const [root] = process.argv.slice(1);
 const { default: checkIntlCatalogs } = await import("@elmeragroup/intl-tools/vitest");
+const imported = loaded.filter((url) => url.includes("platform-node-shared"));
 process.stderr.write = () => true;
 let outcome = "passed";
 try {
@@ -90,7 +91,7 @@ try {
   outcome = error.message;
 }
 stop();
-process.stdout.write(JSON.stringify({ loaded, result: { outcome } }));
+process.stdout.write(JSON.stringify({ loaded, result: { outcome, imported } }));
 `;
 
 /**
@@ -278,20 +279,35 @@ it(
 
 // Unit under test: the public `./vitest` entry, as a Vitest global setup imports and runs it. Oracle: the setup runs
 // `check` once per test run, so it pays for no argument parser: it loads neither effect/cli, nor the Node platform
-// services only the executable uses (@effect/platform-node-shared), nor the CLI's parsing and watch modules. The
-// fixture's catalog holds "Hello", which no source declares, so check finds it stale.
-it("keeps effect/cli, the Node platform and the watcher out of the Vitest setup", PROBES, ({ project }) => {
-  const vitest = probe<{ readonly outcome: string }>(project, VITEST_PROBE, [project.root]);
+// services only the executable uses (@effect/platform-node-shared's Stdio and Terminal), nor the CLI's parsing and
+// watch modules. Importing it loads no platform module at all: check imports Node's file system and paths as it runs,
+// and its child processes (with the formats evaluation) only for a formats module, which the fixture's config names
+// none of. The fixture's catalog holds "Hello", which no source declares, so check finds it stale.
+it(
+  "keeps effect/cli, the platform until check runs, and the watcher out of the Vitest setup",
+  PROBES,
+  ({ project }) => {
+    const vitest = probe<{ readonly outcome: string; readonly imported: ReadonlyArray<string> }>(
+      project,
+      VITEST_PROBE,
+      [project.root]
+    );
 
-  expect(vitest.result.outcome).toMatch(/^elmera-intl check found problems in /u);
-  expect(vitest.inspected).toBeGreaterThan(0);
-  expect(
-    vitest.modules.filter(
-      (module) =>
-        /(?:^|\/)src\/(?:cli-run|watch)\.ts$/u.test(module) ||
-        /\/effect\/dist\/cli\/|\/@effect\/platform-node-shared\/|\/@effect\+platform-node-shared@/u.test(
-          module
-        )
-    )
-  ).toEqual([]);
-});
+    expect(vitest.result.outcome).toMatch(/^elmera-intl check found problems in /u);
+    expect(vitest.inspected).toBeGreaterThan(0);
+    expect(vitest.result.imported).toEqual([]);
+    expect(
+      vitest.modules.filter(
+        (module) =>
+          /(?:^|\/)src\/(?:cli-run|watch|formats-evaluation)\.ts$/u.test(module) ||
+          /\/effect\/dist\/cli\/|\/@effect\/platform-node-shared\/dist\/Node(?:Stdio|Terminal|ChildProcessSpawner)\.js$/u.test(
+            module
+          )
+      )
+    ).toEqual([]);
+    // Check did run on the platform, imported as it ran.
+    expect(
+      vitest.modules.some((module) => module.endsWith("/platform-node-shared/dist/NodeFileSystem.js"))
+    ).toBe(true);
+  }
+);

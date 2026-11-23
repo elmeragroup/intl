@@ -15,8 +15,8 @@ import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
-import { CatalogFiles } from "../src/catalog-files";
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
+import { projectServices } from "../src/project-services";
 import { Reporter } from "../src/reporter";
 import { CatalogSync } from "../src/watch";
 import { FileEvents } from "../src/watch-trees";
@@ -101,7 +101,7 @@ async function inProcess<ROut>(
           CliPlatform,
           settings,
           io,
-          Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()),
+          Layer.provideMerge(CatalogSync.layer(), projectServices()),
           FileEvents.layer(),
         ])
       )

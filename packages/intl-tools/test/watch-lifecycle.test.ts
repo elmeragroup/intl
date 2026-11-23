@@ -10,13 +10,12 @@ import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import { existsSync, rmSync } from "node:fs";
 
-import { CatalogFiles } from "../src/catalog-files";
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
 import type { ExtractOptions } from "../src/commands";
 import { extractCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { Reporter } from "../src/reporter";
-import type { SyncResult } from "../src/watch";
+import type { SyncResult, SyncServices } from "../src/watch";
 import { CatalogSync, watchCatalogs, watchProject } from "../src/watch";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
@@ -30,6 +29,7 @@ import {
   it,
   lockedRoot,
   POLL_MS,
+  syncCatalogServices,
   POLLING,
   projectConfig,
   syncing,
@@ -507,28 +507,30 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     let calls = 0;
     const recording = Layer.effect(
       CatalogSync,
-      CatalogFiles.use((files) =>
-        Effect.acquireRelease(
-          Effect.succeed({
-            extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-              calls += 1;
+      Effect.context<SyncServices>().pipe(
+        Effect.flatMap((services) =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+                calls += 1;
 
-              if (calls === 2) {
-                held.resolve();
-                yield* Effect.promise(() => gate.promise);
-                log.push("sync resumed");
-              }
+                if (calls === 2) {
+                  held.resolve();
+                  yield* Effect.promise(() => gate.promise);
+                  log.push("sync resumed");
+                }
 
-              return yield* extractCatalogs(config, options).pipe(
-                Effect.provideService(CatalogFiles, files),
-                Effect.mapError(asSyncFailed)
-              );
+                return yield* extractCatalogs(config, options).pipe(
+                  Effect.provideContext(services),
+                  Effect.mapError(asSyncFailed)
+                );
+              }),
             }),
-          }),
-          () =>
-            Effect.sync(() => {
-              log.push("layer released");
-            })
+            () =>
+              Effect.sync(() => {
+                log.push("layer released");
+              })
+          )
         )
       )
     );
@@ -670,11 +672,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     project,
   }) => {
     const runtime = ManagedRuntime.make(
-      Layer.mergeAll(
-        Layer.provide(CatalogSync.layer(), CatalogFiles.layer()),
-        FileEvents.layer(),
-        Layer.succeed(References.MaxOpsBeforeYield, 1)
-      )
+      Layer.mergeAll(catalogServices(), FileEvents.layer(), Layer.succeed(References.MaxOpsBeforeYield, 1))
     );
     const watcher = watchProject(runtime, projectConfig(project), () => undefined);
     project.defer(() => watcher.close());
@@ -782,7 +780,9 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
 
   // Unit under test: the executable's watch run in this process, signalled as soon as its signal listeners are on, before
   // its start opens any tree. Oracle: the contract by hand: the stop came first, so the watch opens no tree (here one
-  // whose watch would fail with EACCES), runs no sync, writes nothing, and the program exits 0.
+  // whose watch would fail with EACCES), runs no sync, writes nothing, and the program exits 0. Its services are built
+  // synchronously and read through the synchronous file system, so the program reaches its listeners within the fork,
+  // where the signal lands.
   it("exits 0 on a signal right after its listeners are on, opening no tree", async ({ project }) => {
     const events = deliveredEvents({
       refuses: { dir: project.root, error: new Error("EACCES: permission denied, watch") },
@@ -798,7 +798,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const running = inProcess(
       project,
       cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, reporter, catalogServices(), events.layer])
+        Effect.provide([CliPlatform, reporter, syncCatalogServices(), events.layer])
       )
     );
     sigtermCli(before);

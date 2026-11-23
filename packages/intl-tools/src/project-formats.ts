@@ -1,5 +1,6 @@
 // The app's `formats` module, loaded as the runtime gets it. A leaf, so the loaders (Next's po-loader, Vite's `load`)
-// compile a catalog with the app's formats without loading the extractor.
+// compile a catalog with the app's formats without loading the extractor or Effect. Its evaluation and judgment are
+// shared with `ProjectFormats` (project-formats-service.ts), which loads them for the hosts' Effect runtimes.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
@@ -10,25 +11,36 @@ import type { Formats } from "@elmeragroup/intl/internal/icu";
 import type { Problem } from "./problem";
 import type { ProjectConfig } from "./project-config";
 
+/** The app's formats, or why its module does not provide them. */
+export type FormatsLoaded =
+  | { readonly _tag: "Formats"; readonly formats: Formats | undefined }
+  | { readonly _tag: "ConfigInvalid"; readonly problem: Problem };
+
 /**
  * Load the app's `formats` from the module the config names. Node loads it (type stripping for TypeScript), so the
  * module must import nothing at runtime: a `satisfies Formats` object, with type-only imports, whose options are
  * JSON values. Reloaded whenever the module's content changes, so a long-lived dev server or watch build validates
- * what the app now imports.
+ * what the app now imports. Synchronous, with a memo for the process: the loaders' path, which has no runtime.
  *
  * @param config - The project config.
  * @returns The formats (undefined when the config names none), or why the module does not provide them.
  */
-export function loadFormats(
-  config: ProjectConfig
-):
-  | { readonly _tag: "Formats"; readonly formats: Formats | undefined }
-  | { readonly _tag: "ConfigInvalid"; readonly problem: Problem } {
-  if (config.formats === undefined) {
-    return { _tag: "Formats", formats: undefined };
-  }
+export function loadFormats(config: ProjectConfig): FormatsLoaded {
+  return config.formats === undefined
+    ? { _tag: "Formats", formats: undefined }
+    : judgeFormats(config.root, config.formats, evaluateFormats(config.formats));
+}
 
-  const file = relative(config.root, config.formats);
+/**
+ * Judge an evaluation of the config's formats module: the formats, or the problem with them.
+ *
+ * @param root - The project root, which the problem names the module from.
+ * @param module - The module's absolute path.
+ * @param loaded - What evaluating it gave.
+ * @returns The formats, or the `FormatsInvalid` problem.
+ */
+export function judgeFormats(root: string, module: string, loaded: Evaluated): FormatsLoaded {
+  const file = relative(root, module);
   const invalid = (message: string) => ({
     _tag: "ConfigInvalid" as const,
     problem: {
@@ -38,8 +50,6 @@ export function loadFormats(
       file,
     },
   });
-  const loaded = evaluateFormats(config.formats);
-
   if (loaded._tag === "FormatsUnloadable") {
     return invalid(`cannot load: ${loaded.reason}`);
   }
@@ -103,16 +113,30 @@ const found = formats === undefined ? undefined : nonJson(formats, "formats");
 process.stdout.write(JSON.stringify(found === undefined ? { formats } : { nonJson: found }));
 `;
 
-// The last evaluation per module path, keyed by the content it evaluated: a per-process memo of a pure function of
-// that content, so an edit evaluates again and an unchanged module costs one read.
-const EVALUATED = new Map<string, { readonly content: string; readonly result: Evaluated }>();
+/**
+ * The Node arguments that evaluate a formats module and print its `formats` export as JSON.
+ *
+ * @param path - The module's absolute path.
+ * @returns The arguments after Node's executable.
+ */
+export function evaluationArgs(path: string): Array<string> {
+  return ["--input-type=module", "--eval", PRINT_FORMATS, pathToFileURL(path).href];
+}
 
-type Evaluated =
+/** The last evaluation of each module path, keyed by the content it evaluated. */
+export type FormatsMemo = Map<string, { readonly content: string; readonly result: Evaluated }>;
+
+// The loaders' memo: per process, of a pure function of the content, so an edit evaluates again and an unchanged
+// module costs one read.
+const EVALUATED: FormatsMemo = new Map();
+
+/** What evaluating a formats module gave: its export and the first value JSON would not carry, or why it failed. */
+export type Evaluated =
   | { readonly _tag: "Evaluated"; readonly exported: unknown; readonly nonJson: string | undefined }
   | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
 
 // A fresh Node evaluates the module: Node's module cache, which require and import share, never evicts an ES module, so
-// an in-process load would keep the first content for the life of a dev server. Synchronous, so check stays so.
+// an in-process load would keep the first content for the life of a dev server. Synchronous: the loaders' path.
 function evaluateFormats(path: string): Evaluated {
   let content: string;
   try {
@@ -129,7 +153,7 @@ function evaluateFormats(path: string): Evaluated {
 
   const child = spawnSync(
     process.execPath,
-    ["--input-type=module", "--eval", PRINT_FORMATS, pathToFileURL(path).href],
+    evaluationArgs(path),
     // The host's NODE_OPTIONS (an inspector port, a loader) belong to the host, not to this evaluation.
     { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } }
   );
@@ -142,7 +166,15 @@ function evaluateFormats(path: string): Evaluated {
   return result;
 }
 
-function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
+/**
+ * Read what the evaluating Node printed.
+ *
+ * @param status - Its exit code; null when a signal ended it.
+ * @param stdout - What it printed on stdout.
+ * @param stderr - What it printed on stderr.
+ * @returns The evaluation.
+ */
+export function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
   if (status !== 0) {
     // The error line, not Node's stack and source excerpt around it.
     const reason = stderr.split("\n").find((line) => /^\w*Error\b/u.test(line)) ?? stderr.trim();

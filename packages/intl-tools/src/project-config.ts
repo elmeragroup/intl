@@ -36,9 +36,46 @@ export type ConfigLoaded =
 const CONFIG_EXAMPLE =
   '{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }';
 
-const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/u;
+/** What a `formats` path must end in: a module Node loads. */
+export const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/u;
 
-function configInvalid(path: string, message: string): ConfigLoaded {
+/** What each config field must be, as its problem says it. */
+export const FIELD_PROBLEMS = {
+  include: '"include" must be a non-empty array of glob strings',
+  exclude: '"exclude" must be an array of glob strings',
+  locales: '"locales" must be a non-empty array of locale strings',
+  catalogs: '"catalogs" must be a path pattern with {locale} ending in .po',
+  formats: '"formats" must be the path of a .ts or .js module exporting `formats`',
+} as const;
+
+/**
+ * The problem with a glob that reaches outside the project root.
+ *
+ * @param pattern - The glob, normalized.
+ * @returns What the problem says.
+ */
+export function escapingGlob(pattern: string): string {
+  return `glob ${JSON.stringify(pattern)} reaches outside the project root`;
+}
+
+/**
+ * The first glob that reaches outside the project root: absolute, or climbing out with `../`.
+ *
+ * @param patterns - The globs, normalized.
+ * @returns The first escaping glob, or undefined when none escapes.
+ */
+export function firstEscaping(patterns: ReadonlyArray<string>): string | undefined {
+  return patterns.find((pattern) => isAbsolute(pattern) || pattern.startsWith("../"));
+}
+
+/**
+ * The `ConfigInvalid` problem with a config.
+ *
+ * @param path - The config's path, as the problem names it.
+ * @param message - What is wrong.
+ * @returns The problem, with the fix every config problem names.
+ */
+export function configInvalid(path: string, message: string): ConfigLoaded {
   return {
     _tag: "ConfigInvalid",
     problem: { code: "ConfigInvalid", message, fix: `write ${CONFIG_FILE} as ${CONFIG_EXAMPLE}`, file: path },
@@ -101,31 +138,29 @@ export function parseConfig(text: string, path: string, root: string): ConfigLoa
   const formats = fields.get("formats");
 
   if (include === undefined || include.length === 0) {
-    return configInvalid(path, '"include" must be a non-empty array of glob strings');
+    return configInvalid(path, FIELD_PROBLEMS.include);
   }
 
   if (exclude === undefined) {
-    return configInvalid(path, '"exclude" must be an array of glob strings');
+    return configInvalid(path, FIELD_PROBLEMS.exclude);
   }
 
-  const escaping = [...include, ...exclude].find(
-    (pattern) => isAbsolute(pattern) || pattern.startsWith("../")
-  );
+  const escaping = firstEscaping([...include, ...exclude]);
 
   if (escaping !== undefined) {
-    return configInvalid(path, `glob ${JSON.stringify(escaping)} reaches outside the project root`);
+    return configInvalid(path, escapingGlob(escaping));
   }
 
   if (locales === undefined || locales.length === 0) {
-    return configInvalid(path, '"locales" must be a non-empty array of locale strings');
+    return configInvalid(path, FIELD_PROBLEMS.locales);
   }
 
   if (typeof catalogs !== "string" || !catalogs.includes("{locale}") || !catalogs.endsWith(".po")) {
-    return configInvalid(path, '"catalogs" must be a path pattern with {locale} ending in .po');
+    return configInvalid(path, FIELD_PROBLEMS.catalogs);
   }
 
   if (formats !== undefined && (typeof formats !== "string" || !FORMATS_MODULE.test(formats))) {
-    return configInvalid(path, '"formats" must be the path of a .ts or .js module exporting `formats`');
+    return configInvalid(path, FIELD_PROBLEMS.formats);
   }
 
   return {

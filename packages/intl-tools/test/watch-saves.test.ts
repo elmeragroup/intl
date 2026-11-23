@@ -1,5 +1,6 @@
 import { describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
@@ -26,7 +27,7 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   // Node's catalog files, each operation wrapped by `wrap`: a test's hook after one of a sync's storage operations.
   const wrapped = (
     wrap: (live: CatalogFiles["Service"]) => CatalogFiles["Service"]
-  ): Layer.Layer<CatalogFiles> =>
+  ): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> =>
     Layer.effect(
       CatalogFiles,
       CatalogFiles.use((live) => Effect.succeed(wrap(live)))

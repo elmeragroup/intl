@@ -1,9 +1,15 @@
 // A project the CLI works on: its sources and the messages they declare (project-config.ts reads its config,
 // project-catalogs.ts places its catalogs, project-formats.ts loads its formats).
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import type * as PlatformError from "effect/PlatformError";
 import { createHash } from "node:crypto";
-import { globSync, readFileSync, statSync } from "node:fs";
+import { globSync } from "node:fs";
 import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
 
+import { ioEdge, platformFailed, readText } from "./catalog-files";
 import { extractMessages } from "./extract";
 import type { Problem } from "./problem";
 import type { ProjectConfig } from "./project-config";
@@ -17,6 +23,39 @@ export type ParseCache = Map<
   string,
   { readonly hash: string; readonly result: ReturnType<typeof extractMessages> }
 >;
+
+/**
+ * The parse caches of a runtime's scans, one per project root, so they live as long as the host's runtime (a dev
+ * server's watch, a build's checks, one CLI run) and a scan of one project never evicts another's.
+ */
+export class SourceCaches
+  extends /* @__PURE__ */ Context.Service<
+    SourceCaches,
+    {
+      /**
+       * The cache of the project at `root`, made on first use.
+       *
+       * @param root - The project root.
+       * @returns Its cache, which each scan updates in place.
+       */
+      readonly of: (root: string) => ParseCache;
+    }
+  >()("elmera-intl-tools/SourceCaches")
+{
+  /** Empty caches, for one runtime. */
+  static readonly layer: Layer.Layer<SourceCaches> = /* @__PURE__ */ Layer.sync(SourceCaches, () => {
+    const caches = new Map<string, ParseCache>();
+
+    return {
+      of: (root) => {
+        const cache = caches.get(root) ?? new Map();
+        caches.set(root, cache);
+
+        return cache;
+      },
+    };
+  });
+}
 
 /** A message and every file that uses it. */
 export type ProjectMessage = {
@@ -74,56 +113,90 @@ export function isExcludedDirectory(config: ProjectConfig, directory: string): b
   );
 }
 
-/**
- * Extract every message of the project's sources.
- *
- * @param config - The project config.
- * @param cache - Parse results from earlier scans; updated in place.
- * @returns The messages by key (in first-seen order) and the include patterns that match no file, or every
- * extraction problem.
- */
-export function scanProject(
-  config: ProjectConfig,
-  cache: ParseCache = new Map()
-):
+/** What a scan found: the messages, or every extraction problem. */
+export type ScanResult =
   | {
       readonly _tag: "Scanned";
       readonly messages: ReadonlyArray<ProjectMessage>;
       /** `IncludeUnmatched` problems: `check` reports them, `extract` refuses to write. */
       readonly unmatched: ReadonlyArray<Problem>;
     }
-  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> } {
+  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> };
+
+// Whether a path names a file, following links. Absent (as `statSync` with `throwIfNoEntry: false` reads ENOENT and
+// ENOTDIR) is no file, like a dangling symlink; any other failure (a self-looping link) is the scan's.
+const isFile = (
+  files: FileSystem.FileSystem,
+  path: string
+): Effect.Effect<boolean, PlatformError.PlatformError> =>
+  files.stat(path).pipe(
+    Effect.map((info) => info.type === "File"),
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound" || isErrno(error.reason.cause, "ENOTDIR"),
+      () => Effect.succeed(false)
+    )
+  );
+
+function isErrno(cause: unknown, code: string): boolean {
+  return cause instanceof Error && "code" in cause && cause.code === code;
+}
+
+/**
+ * Extract every message of the project's sources, reusing the runtime's parse cache for the project.
+ *
+ * @param config - The project config.
+ * @returns The messages by key (in first-seen order) and the include patterns that match no file, or every
+ *   extraction problem; fails with `ProjectIoFailed` on I/O the scan does not classify.
+ */
+export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(function* (config: ProjectConfig) {
+  const files = yield* FileSystem.FileSystem;
+  const cache = (yield* SourceCaches).of(config.root);
   // Per pattern, so a pattern that stopped matching (a renamed directory) is reported instead of its messages
   // silently leaving the catalogs. glob's `exclude` only prunes the walk (it skips what isProjectSource rejects);
-  // isProjectSource decides. globSync also returns directories (a folder named `x.tsx`).
-  const matches = config.include.map((pattern) => ({
-    pattern,
-    files: globSync(pattern, { cwd: config.root, exclude: ["**/node_modules/**", ...config.exclude] }).filter(
-      (file) =>
-        isProjectSource(config, join(config.root, file)) &&
-        // A dangling symlink has no stat: skip it like a directory.
-        statSync(join(config.root, file), { throwIfNoEntry: false })?.isFile() === true
-    ),
-  }));
+  // isProjectSource decides. globSync also returns directories (a folder named `x.tsx`). The walk stays Node's glob:
+  // `FileSystem.glob` documents its own rules (dot files, `dir/**` matching `dir`, links to directories, unreadable
+  // directories skipped), and nothing shows the two pick the same files, so swapping it could change what a project
+  // scans; each match's stat and read go through `FileSystem`.
+  const matches: Array<{ readonly pattern: string; readonly files: ReadonlyArray<string> }> = [];
+  for (const pattern of config.include) {
+    const globbed = yield* ioEdge("scan", () =>
+      globSync(pattern, { cwd: config.root, exclude: ["**/node_modules/**", ...config.exclude] })
+    );
+    const sources: Array<string> = [];
+    for (const file of globbed) {
+      const path = join(config.root, file);
+
+      if (
+        isProjectSource(config, path) &&
+        (yield* isFile(files, path).pipe(Effect.mapError(platformFailed("scan"))))
+      ) {
+        sources.push(file);
+      }
+    }
+    matches.push({ pattern, files: sources });
+  }
   const unmatched = matches
-    .filter(({ files }) => files.length === 0)
+    .filter((match) => match.files.length === 0)
     .map(({ pattern }) => ({
       code: "IncludeUnmatched",
       message: `include pattern ${JSON.stringify(pattern)} matches no file`,
       fix: `fix or remove the pattern in ${CONFIG_FILE}`,
       file: CONFIG_FILE,
     }));
-  const files = [...new Set(matches.flatMap((match) => match.files))].toSorted();
+  const sources = [...new Set(matches.flatMap((match) => match.files))].toSorted();
   const problems: Array<Problem> = [];
   const byKey = new Map<
     string,
     { source: string; context: string | undefined; references: Set<string>; comments: Set<string> }
   >();
   const scannedPaths = new Set<string>();
-  for (const file of files) {
+  for (const file of sources) {
     const path = relative(config.root, join(config.root, file)).split("\\").join("/");
     scannedPaths.add(path);
-    const result = cachedExtract(cache, path, readFileSync(join(config.root, file), "utf8"));
+    const text = yield* readText(files, join(config.root, file)).pipe(
+      Effect.mapError(platformFailed("scan"))
+    );
+    const result = cachedExtract(cache, path, text);
 
     if (result._tag === "Failed") {
       problems.push(
@@ -169,7 +242,7 @@ export function scanProject(
   }
 
   if (problems.length > 0) {
-    return { _tag: "Failed", problems: [...unmatched, ...problems] };
+    return { _tag: "Failed", problems: [...unmatched, ...problems] } satisfies ScanResult;
   }
 
   const messages = [...byKey].map(([key, entry]) => ({
@@ -180,8 +253,8 @@ export function scanProject(
     comments: [...entry.comments].toSorted(),
   }));
 
-  return { _tag: "Scanned", messages, unmatched };
-}
+  return { _tag: "Scanned", messages, unmatched } satisfies ScanResult;
+});
 
 function cachedExtract(cache: ParseCache, path: string, text: string): ReturnType<typeof extractMessages> {
   const hash = createHash("sha1").update(text).digest("base64");

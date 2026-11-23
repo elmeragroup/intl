@@ -46,7 +46,7 @@ export function hostSessions<K extends object, R>(layer: Layer.Layer<R>): HostSe
   type Session = {
     readonly runtime: ManagedRuntime.ManagedRuntime<R, never>;
     // The runs on it: its release waits for them before disposing the runtime, so a release landing mid-run (a check
-    // yields while it reports) never cuts one short.
+    // suspends on its file reads and its formats evaluation, and yields while it reports) never cuts one short.
     readonly running: Set<Promise<unknown>>;
   };
   const sessions = new WeakMap<K, Session>();
