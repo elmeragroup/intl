@@ -586,15 +586,19 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
   // Unit under test: `watchProject`'s stop handle, as a dev server that closes during the watch's start uses it: the
   // close lands while one tree is open and another is still opening (a host watcher that opens asynchronously, held).
   // Oracle: layer 3's lifecycle contract, by hand: a stop during the start opens nothing more and returns only after
-  // every opened watcher is closed, with no first sync; so the close settles while the other tree is still held, and
-  // the start, stopped by the host, settles cleanly.
-  it("stops at once when closed during its start, closing the tree it opened", async ({ project }) => {
+  // every opened watcher is closed, with no first sync; so the close settles while the other tree is still held. The
+  // opened tree's watcher fails to close: that close stopped the watch, so it rejects with the failure, and the start,
+  // stopped by the host, settles cleanly.
+  it("stops at once when closed during its start, closing the tree it opened, and owns its failure", async ({
+    project,
+  }) => {
     // The catalogs' directory exists, so it is a tree of its own beside the sources'. The trees open in path order: the
     // catalogs' opens, the sources' is held.
     project.write("messages/.keep", "");
     const held = Promise.withResolvers<void>();
     const events = deliveredEvents({
       opening: (dir) => (dir === project.path("src") ? held.promise : undefined),
+      closeFails: new Error("watcher close failed"),
     });
     const watcher = watchProject(hostRuntime(project, events.layer), projectConfig(project), () => undefined);
     project.defer(() => watcher.close());
@@ -606,7 +610,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       .poll(() => [events.open(), events.opening()], project.guard())
       .toEqual([[project.path("messages")], 1]);
 
-    await project.within(watcher.close(), "the close");
+    await expect(project.within(watcher.close(), "the close")).rejects.toThrow("watcher close failed");
 
     expect([events.open(), existsSync(project.path("messages/nb.po"))]).toEqual([[], false]);
     await expect(project.within(watcher.started, "the start")).resolves.toBeUndefined();

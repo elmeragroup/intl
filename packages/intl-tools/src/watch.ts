@@ -61,16 +61,18 @@ export function syncFailed(message: string): SyncResult {
 /** A watch a host has started: its start, and its stop, which the host may ask for at any time, the start included. */
 export type ProjectWatcher = {
   /**
-   * Settles once the first sync's result is reported, or once a stop the host asked for during the start has run.
-   * Rejects with the watch's start failure, the first result's report failure, or an Error saying the runtime was
-   * disposed during the start, after the watch has stopped and closed every watcher it started.
+   * Settles once the first sync's result is reported, or, cleanly, once a stop the host asked for during the start
+   * has run (how that stop ended is the close's to report). Otherwise rejects with the watch's start failure, the first
+   * result's report failure, or an Error saying the runtime was disposed during the start, after the watch has stopped
+   * and closed every watcher it started.
    */
   readonly started: Promise<void>;
   /**
    * Stop watching, at once: no change is accepted, the watchers close (a tree still opening opens nothing more), a
    * pending sync is dropped, a running one finishes, and every result made is reported. Settles when the watch has
    * ended, every watcher it opened closed; the same shutdown for every call. Rejects, on the first call only, with a
-   * report's failure that ended the started watch, or a failed close; a failed start is the start's to report.
+   * report's failure or a failed close that ended the watch, the start's included when this close stopped it; a start
+   * that failed before any close is the start's to report.
    */
   readonly close: () => Promise<void>;
 };
@@ -637,7 +639,13 @@ export function watchProject(
       return;
     }
 
-    // The start's own failure is the start's to report, never a close's.
+    // A stop the host asked for during the start ends the start cleanly, and the end (a watcher's failure to close,
+    // say) is the first close's to report.
+    if (stopRequested) {
+      return;
+    }
+
+    // Otherwise the start's own failure is the start's to report, never a close's.
     endReported = true;
     const failure = endFailure(start);
 
@@ -645,15 +653,12 @@ export function watchProject(
       throw Cause.squash(failure);
     }
 
-    // A stop the host asked for during the start ends it cleanly. An end by interruption alone, unasked, is the host's
-    // own disposal; Effect's squash of it names no cause.
-    if (!stopRequested) {
-      throw new Error(
-        Exit.isFailure(start)
-          ? "the watch's runtime was disposed during its start"
-          : "the watch ended before its first result was reported"
-      );
-    }
+    // An end by interruption alone, unasked, is the host's own disposal; Effect's squash of it names no cause.
+    throw new Error(
+      Exit.isFailure(start)
+        ? "the watch's runtime was disposed during its start"
+        : "the watch ended before its first result was reported"
+    );
   });
   // The one shutdown: the stop signalled, then the watch's end once the start has settled.
   let shutdown: Promise<void> | undefined;

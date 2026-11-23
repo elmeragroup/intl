@@ -63,8 +63,12 @@ function handlerOf<F extends (...args: never) => HookResult>(
   return hook === undefined || !("handler" in hook) ? hook : hook.handler;
 }
 
-// SAFETY: the dev plugin's hooks never read `this`; Vite's context for them is not needed to call them as Vite does.
-const HOOK_CONTEXT = {} as Rolldown.PluginContext;
+// The context Vite gives the dev plugin's closeBundle, which reads only the dev server its environment belongs to.
+function devContext(server: ViteDevServer): Rolldown.PluginContext {
+  // SAFETY: the dev plugin's hooks read only `this.environment.getTopLevelConfig()`, which this answers as the server's
+  // environments do; configureServer reads no `this`.
+  return { environment: { getTopLevelConfig: () => server.config } } as never;
+}
 // SAFETY: the check's buildStart reads no build options; Rolldown's normalized options are not constructible here.
 const BUILD_OPTIONS = {} as Rolldown.NormalizedInputOptions;
 
@@ -419,10 +423,11 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   // Unit under test: the dev plugin's own hooks, called in the order Vite calls them when a dev server closes while the
   // watch is still starting: `configureServer`, not yet settled, then `closeBundle`, once per environment and in
-  // parallel. Oracle: layer 3's lifecycle contract, by hand: a stop during the start opens nothing more and returns
-  // only after every watcher opened is closed, so the dev server's start settles cleanly and no watcher stays open once
-  // every hook settles. Each close is safe, the second included: it waits for the same shutdown and finds the runtime
-  // already going.
+  // parallel. Oracle: layer 3's lifecycle contract, by hand: a stop during the start opens nothing more, runs no first
+  // sync unless it had begun, and returns only after every watcher opened is closed, so a message saved just before the
+  // start never reaches the PO, the dev server's start settles cleanly, and no watcher stays open once every hook
+  // settles. Each close is safe, the second included: it waits for the same shutdown and finds the runtime already
+  // going.
   it.for([1, 2])(
     "closes a watch whose start is still pending when %i environment(s) close the bundle",
     async (closes, { project }) => {
@@ -434,13 +439,18 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       const { configureServer, closeBundle } = hooksOf("elmera-intl:watch");
       expect([configureServer, closeBundle].map((hook) => hook === undefined)).toEqual([false, false]);
 
-      const starting = configureServer?.call(HOOK_CONTEXT, server);
+      // Unsynced: only a first sync would add it.
+      project.write("src/late.tsx", component("Late"));
+      const context = devContext(server);
+
+      const starting = configureServer?.call(context, server);
       await project.within(
-        Promise.all(Array.from({ length: closes }, () => Promise.resolve(closeBundle?.call(HOOK_CONTEXT)))),
+        Promise.all(Array.from({ length: closes }, () => Promise.resolve(closeBundle?.call(context)))),
         "the closes"
       );
       await expect(project.within(Promise.resolve(starting), "the start")).resolves.toBeUndefined();
 
+      expect(project.read("messages/nb.po")).not.toContain(`msgid "Late"`);
       await expect.poll(watches, project.guard()).toBe(before);
     }
   );
@@ -472,16 +482,18 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       )
     ).toBe("problems");
     const { buildStart, closeBundle } = hooksOf("elmera-intl:check");
+    // The build's top-level config, which every environment of one build shares.
+    const topLevel = {};
     const context = {
       meta: { watchMode: false },
-      environment: { config: { root: project.root } },
+      environment: { config: { root: project.root }, getTopLevelConfig: () => topLevel },
       addWatchFile: () => undefined,
       error: (message: string) => {
         throw new Error(message);
       },
     };
-    // SAFETY: the check plugin's hooks read only the build's watch mode, the environment's root, addWatchFile and
-    // error, which this has.
+    // SAFETY: the check plugin's hooks read only the build's watch mode, the environment's root and top-level config,
+    // addWatchFile and error, which this has.
     const call = <A extends ReadonlyArray<unknown>, R>(hook: ((...args: A) => R) | undefined, ...args: A) =>
       Promise.resolve(hook?.call(context as never, ...args));
     // The build's whole error text, nothing before or after it.
@@ -506,6 +518,61 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect(build({ ...viteConfig(project), plugins })).resolves.toBeDefined();
 
     // Rewritten until a sync shows it, so the save lands on a live watch whatever its timing.
+    await expect
+      .poll(
+        () => {
+          project.write("src/new.tsx", component("New"));
+
+          return project.read("messages/nb.po");
+        },
+        { ...project.guard(), interval: PROBE_INTERVAL_MS }
+      )
+      .toContain(`msgid "New"`);
+  });
+
+  // Unit under test: the dev plugin across `server.restart()`, which starts the replacement server (the same plugin
+  // instance, from the same inline config) before it closes the old one. Oracle: layer 3's plugin, by hand (73cd948):
+  // the old server's close ends only its own watch, so a message saved after the restart still reaches the PO.
+  it("keeps syncing after its dev server restarts", async ({ project }) => {
+    const server = await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
+    await project.within(server.restart(), "the restart");
+
+    await expect
+      .poll(
+        () => {
+          project.write("src/new.tsx", component("New"));
+
+          return project.read("messages/nb.po");
+        },
+        { ...project.guard(), interval: PROBE_INTERVAL_MS }
+      )
+      .toContain(`msgid "New"`);
+  });
+
+  // Unit under test: one intl() instance on two dev servers, the second of which fails to start (its logger throws on
+  // the first sync's result and on its SyncFailed). Oracle: layer 3's plugin, by hand (73cd948): the failed start ends
+  // only its own watch, so the first server's watch keeps syncing.
+  it("keeps one dev server's watch syncing when another server of the same instance fails to start", async ({
+    project,
+  }) => {
+    const plugins = intl();
+    await devServer(project, { server: SERVER_WATCH, plugins });
+    // A second app under the first's root, outside its include, with a message its first sync writes.
+    project.write("other/elmera-intl.json", JSON.stringify(CONFIG));
+    project.write("other/src/page.tsx", component("Other"));
+    const gone = () => {
+      throw new Error("logger gone");
+    };
+    await expect(
+      createServer({
+        root: project.path("other"),
+        configFile: false,
+        server: { watch: null },
+        customLogger: { ...createLogger("silent"), info: gone, error: gone },
+        plugins,
+      })
+    ).rejects.toThrow("logger gone");
+
     await expect
       .poll(
         () => {
