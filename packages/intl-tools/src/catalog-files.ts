@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -50,8 +51,47 @@ export function ioEdge<A>(
 }
 
 /**
- * A `PlatformError` as the commands' failure: its cause is the error Node raised, as a synchronous read threw it, so
- * every message and crash line built from it reads as before.
+ * The error Node's synchronous call throws for the failure a `FileSystem` operation reports, so every message and
+ * crash line built from it reads as the synchronous reads' did: the one place a `PlatformError` becomes text.
+ *
+ * - A system error is Node's own, except that Node's asynchronous read may name the path where the synchronous one
+ *   does not (`EISDIR: illegal operation on a directory, read`): the `read` syscall's message drops the path again.
+ * - A rejected argument (a NUL in the path) is the TypeError Node throws, without `FileSystem.readFile: ` before it.
+ *
+ * @param error - What the operation failed with.
+ * @returns The error as Node's synchronous call throws it.
+ */
+export function nodeSyncError(error: PlatformError.PlatformError): Error {
+  const { reason } = error;
+
+  if (reason._tag === "BadArgument") {
+    return new TypeError(reason.description ?? reason.message);
+  }
+
+  const { cause } = reason;
+
+  if (!(cause instanceof Error)) {
+    return error;
+  }
+
+  const syscall = Predicate.hasProperty(cause, "syscall") ? cause.syscall : undefined;
+  const path = Predicate.hasProperty(cause, "path") ? cause.path : undefined;
+  const suffix = Predicate.isString(path) ? ` '${path}'` : undefined;
+
+  if (syscall !== "read" || suffix === undefined || !cause.message.endsWith(suffix)) {
+    return cause;
+  }
+
+  // Node's errno error, as the synchronous read builds it: no path, the rest as raised.
+  return Object.assign(new Error(cause.message.slice(0, -suffix.length)), {
+    errno: Predicate.hasProperty(cause, "errno") ? cause.errno : undefined,
+    code: Predicate.hasProperty(cause, "code") ? cause.code : undefined,
+    syscall,
+  });
+}
+
+/**
+ * A `PlatformError` as the commands' failure, its cause the error Node's synchronous call throws (`nodeSyncError`).
  *
  * @param operation - What the commands were doing.
  * @returns The failure for one `PlatformError`.
@@ -59,7 +99,34 @@ export function ioEdge<A>(
 export function platformFailed(
   operation: ProjectIoFailed["operation"]
 ): (error: PlatformError.PlatformError) => ProjectIoFailed {
-  return (error) => new ProjectIoFailed({ operation, cause: error.reason.cause ?? error });
+  return (error) => new ProjectIoFailed({ operation, cause: nodeSyncError(error) });
+}
+
+/**
+ * A read failure as the commands' failure.
+ *
+ * @param operation - What the commands were doing.
+ * @returns The failure for one `ReadFailed`.
+ */
+export function readFailed(operation: ProjectIoFailed["operation"]): (error: ReadFailed) => ProjectIoFailed {
+  return (error) => new ProjectIoFailed({ operation, cause: error.cause });
+}
+
+/** A file could not be read: the error Node's synchronous read throws for it (`nodeSyncError`). */
+export class ReadFailed
+  extends /* @__PURE__ */ Schema.TaggedError<ReadFailed>()("ReadFailed", {
+    /** The error, as `readFileSync` throws it. */
+    cause: /* @__PURE__ */ Schema.Defect(),
+  })
+{
+  /**
+   * What the read failure says, as `readFileSync`'s error says it.
+   *
+   * @returns The error's message.
+   */
+  reason(): string {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause);
+  }
 }
 
 /**
@@ -68,17 +135,13 @@ export function platformFailed(
  *
  * @param files - The file system.
  * @param path - The file.
- * @returns Its text.
+ * @returns Its text; fails with the error Node's synchronous read throws.
  */
-export const readText = (
-  files: FileSystem.FileSystem,
-  path: string
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  files
-    .readFile(path)
-    .pipe(
-      Effect.map((bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8"))
-    );
+export const readText = (files: FileSystem.FileSystem, path: string): Effect.Effect<string, ReadFailed> =>
+  files.readFile(path).pipe(
+    Effect.map((bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8")),
+    Effect.mapError((error) => new ReadFailed({ cause: nodeSyncError(error) }))
+  );
 
 /**
  * A file's text, or undefined when Node's `existsSync` says it does not exist: any failure to reach it (a self-looping
@@ -177,10 +240,10 @@ export class CatalogFiles
       CatalogFiles,
       FileSystem.FileSystem.useSync((files) => ({
         read: Effect.fn("CatalogFiles.read")(function* (path: string) {
-          return yield* readTextIfExists(files, path).pipe(Effect.mapError(platformFailed("read")));
+          return yield* readTextIfExists(files, path).pipe(Effect.mapError(readFailed("read")));
         }),
         readExisting: Effect.fn("CatalogFiles.readExisting")(function* (path: string) {
-          return yield* readText(files, path).pipe(Effect.mapError(platformFailed("read")));
+          return yield* readText(files, path).pipe(Effect.mapError(readFailed("read")));
         }),
         // The read, the comparison and the write are one synchronous call: nothing can run between them.
         write: Effect.fn("CatalogFiles.write")(function* (path: string, text: string, guard: WriteGuard) {

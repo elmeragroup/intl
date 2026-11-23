@@ -9,7 +9,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import { posix, resolve } from "node:path";
+import { posix } from "node:path";
 
 import { readText } from "./catalog-files";
 import type { ConfigLoaded } from "./project-config";
@@ -63,9 +63,15 @@ function failureText(error: Schema.SchemaError): string {
  * @param text - The content of `elmera-intl.json`.
  * @param path - Its path as the user supplied it: the problems name it verbatim.
  * @param root - The absolute directory holding it, which the config's paths are relative to.
+ * @param paths - The host's paths, which resolve `formats` against the root.
  * @returns The config, or the problem with it.
  */
-export function decodeConfig(text: string, path: string, root: string): ConfigLoaded {
+export function decodeConfig(
+  text: string,
+  path: string,
+  root: string,
+  paths: Pick<Path.Path, "resolve">
+): ConfigLoaded {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -102,7 +108,7 @@ export function decodeConfig(text: string, path: string, root: string): ConfigLo
       catalogs: catalogs.success.catalogs,
       locales: catalogs.success.locales,
       // As parseConfig resolves it: resolve, not join, so an absolute formats path stays as written.
-      formats: formats === undefined ? undefined : resolve(root, formats),
+      formats: formats === undefined ? undefined : paths.resolve(root, formats),
     },
   };
 }
@@ -129,10 +135,8 @@ export const readConfig = /* @__PURE__ */ Effect.fn("elmera-intl.readConfig")(fu
   // A read failure (a directory, no permission) reads as "not JSON", as it did when the read and the parse shared one
   // try: the CLI's output stays as it was.
   if (text._tag === "Failure") {
-    const cause = text.failure.reason.cause;
-
-    return configInvalid(path, `not JSON: ${cause instanceof Error ? cause.message : text.failure.message}`);
+    return configInvalid(path, `not JSON: ${text.failure.reason()}`);
   }
 
-  return decodeConfig(text.success, path, paths.dirname(paths.resolve(path)));
+  return decodeConfig(text.success, path, paths.dirname(paths.resolve(path)), paths);
 });

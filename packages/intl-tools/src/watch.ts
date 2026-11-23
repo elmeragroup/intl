@@ -26,7 +26,7 @@ import { ioFailureReason } from "./catalog-files";
 import type { ExtractOptions, ExtractResult } from "./commands";
 import { extractCatalogs } from "./commands";
 import type { Problem } from "./problem";
-import type { SourceCaches } from "./project";
+import type { SourceCaches, SourceDiscovery } from "./project";
 import { isExcludedDirectory, isProjectSource } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
@@ -120,8 +120,11 @@ export class SyncFailed
     message: Schema.String,
   }) {}
 
-/** What a sync's extract runs on: the catalogs' storage, the sources' file system and the runtime's parse cache. */
-export type SyncServices = CatalogFiles | FileSystem.FileSystem | SourceCaches;
+/**
+ * What a sync's extract runs on: the catalogs' storage, the sources' file system and discovery, and the runtime's parse
+ * cache.
+ */
+export type SyncServices = CatalogFiles | FileSystem.FileSystem | SourceDiscovery | SourceCaches;
 
 /**
  * One sync's extract: what the watch runs per burst of changes. A service so a test can act between a sync's read and

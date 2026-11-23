@@ -14,14 +14,19 @@ import { mergeCatalogs } from "./catalog-plan";
 import type { UnreachableArm } from "./compile";
 import type { UnusedEntries } from "./po";
 import type { Problem } from "./problem";
-import type { SourceCaches } from "./project";
+import type { SourceCaches, SourceDiscovery } from "./project";
 import { scanProject } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import { ProjectFormats } from "./project-formats-service";
 
-/** What the commands run on: the catalogs' storage, the sources' file system, and the runtime's memos. */
-export type CommandServices = CatalogFiles | FileSystem.FileSystem | SourceCaches | ProjectFormats;
+/** What the commands run on: the catalogs' storage, the sources' file system and discovery, and the runtime's memos. */
+export type CommandServices =
+  | CatalogFiles
+  | FileSystem.FileSystem
+  | SourceDiscovery
+  | SourceCaches
+  | ProjectFormats;
 
 /** What one command run found. Success has no problems. */
 export type CommandReport = {

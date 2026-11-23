@@ -1,7 +1,8 @@
 import * as Effect from "effect/Effect";
+import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
-import { FIELD_PROBLEMS, loadConfig, parseConfig } from "../src/project-config";
+import { loadConfig, parseConfig } from "../src/project-config";
 import { decodeConfig, readConfig } from "../src/project-config-read";
 import { NodePlatform } from "../src/project-services";
 import { openProject } from "./project-fixture";
@@ -75,6 +76,7 @@ const CONFIG_TEXTS: ReadonlyArray<string> = [
   '{ "include": "src/**" }',
   '{ "include": ["src/**", 1] }',
   '{ "include": ["../a"], "exclude": 5 }',
+  '{ "include": [], "exclude": 5 }',
   '{ "include": ["src/**"], "exclude": null }',
   '{ "include": ["src/**"], "exclude": ["/abs/**"] }',
   '{ "include": ["./../x"] }',
@@ -96,10 +98,20 @@ it("decodes every config as the hand parser withIntl runs parses it", ({ project
   const outcome = (loaded: ReturnType<typeof parseConfig>) =>
     loaded._tag === "Config" ? "valid" : loaded.problem.message.replace(/^(not JSON|glob)[: ].*/u, "$1");
 
-  const decoded = CONFIG_TEXTS.map((text) => decodeConfig(text, path, project.root));
+  const decoded = CONFIG_TEXTS.map((text) => decodeConfig(text, path, project.root, { resolve }));
 
   expect(decoded).toEqual(CONFIG_TEXTS.map((text) => parseConfig(text, path, project.root)));
   expect(new Set(decoded.map((loaded) => outcome(loaded)))).toEqual(
-    new Set(["valid", "not JSON", "not a JSON object", "glob", ...Object.values(FIELD_PROBLEMS)])
+    new Set([
+      "valid",
+      "not JSON",
+      "not a JSON object",
+      "glob",
+      '"include" must be a non-empty array of glob strings',
+      '"exclude" must be an array of glob strings',
+      '"locales" must be a non-empty array of locale strings',
+      '"catalogs" must be a path pattern with {locale} ending in .po',
+      '"formats" must be the path of a .ts or .js module exporting `formats`',
+    ])
   );
 });

@@ -135,35 +135,67 @@ export type Evaluated =
   | { readonly _tag: "Evaluated"; readonly exported: unknown; readonly nonJson: string | undefined }
   | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
 
-// A fresh Node evaluates the module: Node's module cache, which require and import share, never evicts an ES module, so
-// an in-process load would keep the first content for the life of a dev server. Synchronous: the loaders' path.
+// The loaders' evaluation: synchronous, its memo the process's. An evaluation is kept only when the module still
+// holds the text read before it, so a save during it never pins the wrong evaluation to that text.
 function evaluateFormats(path: string): Evaluated {
-  let content: string;
-  try {
-    content = readFileSync(path, "utf8");
-  } catch (error) {
-    return { _tag: "FormatsUnloadable", reason: error instanceof Error ? error.message : String(error) };
+  const content = readContent(path);
+
+  if (content._tag === "FormatsUnloadable") {
+    return content;
   }
 
   const hit = EVALUATED.get(path);
 
-  if (hit?.content === content) {
+  if (hit?.content === content.text) {
     return hit.result;
   }
 
+  const result = evaluateModule(path);
+  const after = readContent(path);
+
+  if (after._tag === "Content" && after.text === content.text) {
+    EVALUATED.set(path, { content: content.text, result });
+  }
+
+  return result;
+}
+
+function readContent(
+  path: string
+):
+  | { readonly _tag: "Content"; readonly text: string }
+  | { readonly _tag: "FormatsUnloadable"; readonly reason: string } {
+  try {
+    return { _tag: "Content", text: readFileSync(path, "utf8") };
+  } catch (error) {
+    return { _tag: "FormatsUnloadable", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Evaluate a formats module in a fresh Node, with `spawnSync`, for the loaders and `ProjectFormats` alike. A fresh Node
+ * because Node's module cache, which require and import share, never evicts an ES module, so an in-process load would
+ * keep the first content for the life of a dev server.
+ *
+ * `spawnSync`, not effect/process's `ChildProcessSpawner`, on purpose: its semantics are the CLI's contract, and the
+ * Effect spawner does not reproduce them. It caps the combined output at 1 MiB with its `ENOBUFS` reason, keeps the
+ * child in the CLI's process group (Ctrl-C reaches it), gives it stdin at EOF, keeps stderr when a signal ends the
+ * child, and decodes stdout keeping a byte order mark (so a module that prints one is "writes to stdout").
+ *
+ * @param path - The module's absolute path.
+ * @returns What evaluating it gave.
+ */
+export function evaluateModule(path: string): Evaluated {
   const child = spawnSync(
     process.execPath,
     evaluationArgs(path),
     // The host's NODE_OPTIONS (an inspector port, a loader) belong to the host, not to this evaluation.
     { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } }
   );
-  const result: Evaluated =
-    child.error === undefined
-      ? parseEvaluation(child.status, child.stdout, child.stderr)
-      : { _tag: "FormatsUnloadable", reason: child.error.message };
-  EVALUATED.set(path, { content, result });
 
-  return result;
+  return child.error === undefined
+    ? parseEvaluation(child.status, child.stdout, child.stderr)
+    : { _tag: "FormatsUnloadable", reason: child.error.message };
 }
 
 /**

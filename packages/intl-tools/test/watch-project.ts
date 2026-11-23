@@ -13,7 +13,7 @@ import { mkdirSync } from "node:fs";
 import type { ProjectIoFailed } from "../src/catalog-files";
 import { CatalogFiles, ioFailureReason } from "../src/catalog-files";
 import type { ExtractOptions, ExtractResult } from "../src/commands";
-import { SourceCaches } from "../src/project";
+import { SourceCaches, SourceDiscovery } from "../src/project";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
 import { ProjectFormats } from "../src/project-formats-service";
@@ -123,22 +123,19 @@ export function catalogServices(
 }
 
 /**
- * `catalogServices` built synchronously, on the synchronous file system (`SYNC_FILE_SYSTEM`) with no formats evaluator
- * (a watch never evaluates one): a program forked on it runs up to its first suspension of its own, as when every read
+ * `catalogServices` built synchronously, on the synchronous file system (`SYNC_FILE_SYSTEM`): a program forked on it runs up to its first suspension of its own, as when every read
  * was synchronous. Node's services import the platform as they are built, a suspension before the program starts.
  *
  * @returns A layer providing the sync's extract and the commands' services, the paths left to the host's platform.
  */
 export function syncCatalogServices(): Layer.Layer<
-  CatalogSync | CatalogFiles | SourceCaches | ProjectFormats | FileSystem.FileSystem
+  CatalogSync | CatalogFiles | SourceDiscovery | SourceCaches | ProjectFormats | FileSystem.FileSystem
 > {
   return Layer.provideMerge(
     CatalogSync.layer(),
-    Layer.mergeAll(
-      CatalogFiles.layer(),
-      SourceCaches.layer,
-      ProjectFormats.layer(Effect.die("a watch evaluates no formats module"))
-    ).pipe(Layer.provideMerge(SYNC_FILE_SYSTEM))
+    Layer.mergeAll(CatalogFiles.layer(), SourceCaches.layer, SourceDiscovery.node, ProjectFormats.layer).pipe(
+      Layer.provideMerge(SYNC_FILE_SYSTEM)
+    )
   );
 }
 
@@ -260,7 +257,7 @@ export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
     Layer.merge(
       Layer.provide(
         options.layer ?? CatalogSync.layer(),
-        Layer.mergeAll(options.files ?? CatalogFiles.layer(), SourceCaches.layer).pipe(
+        Layer.mergeAll(options.files ?? CatalogFiles.layer(), SourceDiscovery.node, SourceCaches.layer).pipe(
           Layer.provideMerge(SYNC_FILE_SYSTEM)
         )
       ),

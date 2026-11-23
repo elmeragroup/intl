@@ -9,7 +9,16 @@ import * as Layer from "effect/Layer";
 import type * as LogLevel from "effect/LogLevel";
 import * as Option from "effect/Option";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+} from "node:fs";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
@@ -387,6 +396,78 @@ describe("check", () => {
     project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "missing.ts" }));
     expect(await codes(project)).toEqual(["FormatsInvalid"]);
   });
+
+  // A read that fails reads as Node's synchronous read words it, as the layer 5 CLI's reads were (963d3e4): a directory
+  // where the config or the formats module goes, and a NUL in the formats path. Oracle: 963d3e4's JSON reasons, as
+  // literals (Node's asynchronous read names the directory's path on Linux; the synchronous one never does).
+  it("words a config or formats module it cannot read as Node's synchronous read does", async ({
+    project,
+  }) => {
+    mkdirSync(project.path("dir.ts"));
+    const reasons = async (formats: string) => {
+      project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats }));
+      const { code, report } = await check(project);
+
+      return [code, report.problems.map(({ code: problem, message }) => [problem, message])];
+    };
+
+    expect(await reasons("dir.ts")).toEqual([
+      1,
+      [["FormatsInvalid", "cannot load: EISDIR: illegal operation on a directory, read"]],
+    ]);
+    expect(await reasons("f\u0000.ts")).toEqual([
+      1,
+      [
+        [
+          "FormatsInvalid",
+          `cannot load: The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '${project.root}/f\\x00.ts'`,
+        ],
+      ],
+    ]);
+
+    rmSync(project.path("elmera-intl.json"));
+    mkdirSync(project.path("elmera-intl.json"));
+    const { code, report } = await check(project);
+    expect([code, report.problems.map(({ message }) => message)]).toEqual([
+      1,
+      ["not JSON: EISDIR: illegal operation on a directory, read"],
+    ]);
+  });
+
+  // The formats module is evaluated by `spawnSync`, whose semantics the CLI's output carries (963d3e4): its 1 MiB
+  // output cap and ENOBUFS, stdout decoded with a byte order mark kept, and stderr kept when a signal ends the child.
+  // Oracle: 963d3e4's reasons, as literals.
+  it.for([
+    [
+      "more than 1 MiB of output",
+      `process.stdout.write("x".repeat(1_100_000));\nexport const formats = {};\n`,
+      `cannot load: spawnSync ${execPath} ENOBUFS`,
+    ],
+    [
+      "a byte order mark before the export",
+      `process.stdout.write("\\uFEFF");\nexport const formats = {};\n`,
+      "cannot load: the module writes to stdout when loaded",
+    ],
+    [
+      "stderr, then a SIGTERM",
+      `import { writeSync } from "node:fs";\nwriteSync(2, "formats init stopped\\n");\nprocess.kill(process.pid, "SIGTERM");\nexport const formats = {};\n`,
+      "cannot load: formats init stopped",
+    ],
+  ] as const)(
+    "reports a formats module that loads with %s",
+    async ([_label, module, reason], { project }) => {
+      await cli(project, "extract");
+      await translateAll(project);
+      project.write("intl-formats.ts", module);
+      project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
+      const { code, report } = await check(project);
+
+      expect([code, report.problems.map(({ code: problem, message }) => [problem, message])]).toEqual([
+        1,
+        [["FormatsInvalid", reason]],
+      ]);
+    }
+  );
 
   // Oracle: CLDR's nb and en `one`, which is 1 alone among integers: the exact arms take it, and the search cannot
   // prove that, so check lists the arm as information and passes.
@@ -1017,6 +1098,19 @@ describe("bin", BIN_TEST, () => {
       written: true,
     });
     expect(run.stderr).toMatch(/^elmera-intl failed: Error: E[A-Z]+: .*mkdir/u);
+  });
+
+  // A catalog where a directory stands: check's read of it fails, a crash whose first line is Node's synchronous read's
+  // error, as the layer 5 CLI printed it (963d3e4), never with the directory's path after it.
+  it("crashes on a catalog that is a directory with Node's synchronous read error", ({ project }) => {
+    mkdirSync(project.path("messages/nb.po"), { recursive: true });
+    const run = bin(project, "check");
+
+    expect([run.code, run.stdout, run.stderr.split("\n")[0]]).toEqual([
+      2,
+      "",
+      "elmera-intl failed: Error: EISDIR: illegal operation on a directory, read",
+    ]);
   });
 
   it("exits 2 and names the failure when the CLI throws", ({ project }) => {

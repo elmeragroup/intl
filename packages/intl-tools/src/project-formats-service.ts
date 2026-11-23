@@ -1,7 +1,7 @@
 // The app's `formats` as the hosts' Effect programs load them (`check`): the module read through `FileSystem`,
-// evaluated by the host's evaluator (a Node child process, formats-evaluation.ts), and judged as the loaders judge it
-// (project-formats.ts). The memo of evaluations lives in the service, so each host runtime (a CLI run, a Vite session)
-// owns its own.
+// evaluated in a Node child process by `evaluateModule` (project-formats.ts, `spawnSync`: see there why not
+// effect/process), and judged as the loaders judge it. The memo of evaluations lives in the service, so each host
+// runtime (a CLI run, a Vite session) owns its own.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -10,20 +10,7 @@ import * as Layer from "effect/Layer";
 import { readText } from "./catalog-files";
 import type { ProjectConfig } from "./project-config";
 import type { Evaluated, FormatsLoaded, FormatsMemo } from "./project-formats";
-import { judgeFormats } from "./project-formats";
-
-/** Evaluates a formats module at an absolute path. */
-export type FormatsEvaluator = (path: string) => Effect.Effect<Evaluated>;
-
-// What a read failure says: the error Node raised, as the synchronous load reported it.
-const reasonOf = (error: {
-  readonly message: string;
-  readonly reason: { readonly cause?: unknown };
-}): string => {
-  const cause = error.reason.cause;
-
-  return cause instanceof Error ? cause.message : error.message;
-};
+import { evaluateModule, judgeFormats } from "./project-formats";
 
 /** The app's `formats`, loaded for a host runtime. */
 export class ProjectFormats
@@ -41,28 +28,19 @@ export class ProjectFormats
     }
   >()("elmera-intl-tools/ProjectFormats")
 {
-  /**
-   * Formats read through the host's file system and evaluated by `evaluator`, with a memo for the runtime.
-   *
-   * @param evaluator - Makes the evaluator; run once, when a check first evaluates a module, so a run with no formats
-   *   module never loads what evaluating takes.
-   * @returns The layer.
-   */
-  static layer(
-    evaluator: Effect.Effect<FormatsEvaluator>
-  ): Layer.Layer<ProjectFormats, never, FileSystem.FileSystem> {
-    return Layer.effect(
+  /** Formats read through the host's file system and evaluated by `spawnSync`, with a memo for the runtime. */
+  static readonly layer: Layer.Layer<ProjectFormats, never, FileSystem.FileSystem> =
+    /* @__PURE__ */ Layer.effect(
       ProjectFormats,
-      Effect.gen(function* () {
+      /* @__PURE__ */ Effect.gen(function* () {
         const files = yield* FileSystem.FileSystem;
-        const evaluate = yield* Effect.cached(evaluator);
         const memo: FormatsMemo = new Map();
 
         const evaluated = Effect.fnUntraced(function* (path: string) {
           const content = yield* readText(files, path).pipe(Effect.result);
 
           if (content._tag === "Failure") {
-            return { _tag: "FormatsUnloadable", reason: reasonOf(content.failure) } satisfies Evaluated;
+            return { _tag: "FormatsUnloadable", reason: content.failure.reason() } satisfies Evaluated;
           }
 
           const hit = memo.get(path);
@@ -71,8 +49,14 @@ export class ProjectFormats
             return hit.result;
           }
 
-          const result = yield* (yield* evaluate)(path);
-          memo.set(path, { content: content.success, result });
+          const result = yield* Effect.sync(() => evaluateModule(path));
+          // Kept only while the module still holds the text read before the evaluation: a save during it (an editor's
+          // truncate-then-write) would otherwise pin that evaluation to a text it never evaluated.
+          const after = yield* readText(files, path).pipe(Effect.result);
+
+          if (after._tag === "Success" && after.success === content.success) {
+            memo.set(path, { content: content.success, result });
+          }
 
           return result;
         });
@@ -86,5 +70,4 @@ export class ProjectFormats
         };
       })
     );
-  }
 }

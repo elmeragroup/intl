@@ -9,7 +9,8 @@ import { createHash } from "node:crypto";
 import { globSync } from "node:fs";
 import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
 
-import { ioEdge, platformFailed, readText } from "./catalog-files";
+import type { ProjectIoFailed } from "./catalog-files";
+import { ioEdge, platformFailed, readFailed, readText } from "./catalog-files";
 import { extractMessages } from "./extract";
 import type { Problem } from "./problem";
 import type { ProjectConfig } from "./project-config";
@@ -55,6 +56,61 @@ export class SourceCaches
       },
     };
   });
+}
+
+/**
+ * How the scan finds the files an include pattern names: on Node, Node's glob, as the CLI always has; on any other
+ * file system, that file system's own `glob`. `scanProject` then decides membership with `isProjectSource`.
+ */
+export class SourceDiscovery
+  extends /* @__PURE__ */ Context.Service<
+    SourceDiscovery,
+    {
+      /**
+       * The paths under `root` that `pattern` matches, outside every `exclude` pattern (which only prunes the walk).
+       *
+       * @param root - The project root.
+       * @param pattern - An include pattern, root-relative.
+       * @param exclude - Patterns whose matches the walk skips.
+       * @returns Root-relative paths, directories included.
+       */
+      readonly find: (
+        root: string,
+        pattern: string,
+        exclude: ReadonlyArray<string>
+      ) => Effect.Effect<ReadonlyArray<string>, ProjectIoFailed>;
+    }
+  >()("elmera-intl-tools/SourceDiscovery")
+{
+  /**
+   * Node's `globSync` on the host's disk: the walk the CLI has always taken. `FileSystem.glob` documents its own
+   * rules (dot files, `dir/**` matching `dir`, links to directories, unreadable directories skipped), and nothing shows
+   * the two pick the same files, so Node's hosts keep this one.
+   */
+  static readonly node: Layer.Layer<SourceDiscovery> = /* @__PURE__ */ Layer.succeed(SourceDiscovery, {
+    find: /* @__PURE__ */ Effect.fn("SourceDiscovery.find")(function* (
+      root: string,
+      pattern: string,
+      exclude: ReadonlyArray<string>
+    ) {
+      return yield* ioEdge("scan", () => globSync(pattern, { cwd: root, exclude: [...exclude] }));
+    }),
+  });
+
+  /** The supplied file system's own `glob`, for a host that is not Node's disk. */
+  static readonly fileSystem: Layer.Layer<SourceDiscovery, never, FileSystem.FileSystem> =
+    /* @__PURE__ */ Layer.effect(
+      SourceDiscovery,
+      /* @__PURE__ */ FileSystem.FileSystem.useSync((files) => ({
+        find: Effect.fn("SourceDiscovery.find")(function* (
+          root: string,
+          pattern: string,
+          exclude: ReadonlyArray<string>
+        ) {
+          return yield* files.glob(pattern, { root, exclude }).pipe(Effect.mapError(platformFailed("scan")));
+        }),
+      }))
+    );
 }
 
 /** A message and every file that uses it. */
@@ -150,18 +206,15 @@ function isErrno(cause: unknown, code: string): boolean {
  */
 export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(function* (config: ProjectConfig) {
   const files = yield* FileSystem.FileSystem;
+  const discovery = yield* SourceDiscovery;
   const cache = (yield* SourceCaches).of(config.root);
   // Per pattern, so a pattern that stopped matching (a renamed directory) is reported instead of its messages
   // silently leaving the catalogs. glob's `exclude` only prunes the walk (it skips what isProjectSource rejects);
-  // isProjectSource decides. globSync also returns directories (a folder named `x.tsx`). The walk stays Node's glob:
-  // `FileSystem.glob` documents its own rules (dot files, `dir/**` matching `dir`, links to directories, unreadable
-  // directories skipped), and nothing shows the two pick the same files, so swapping it could change what a project
-  // scans; each match's stat and read go through `FileSystem`.
+  // isProjectSource decides. The walk also returns directories (a folder named `x.tsx`). It is the host's
+  // `SourceDiscovery`; each match's stat and read go through `FileSystem`.
   const matches: Array<{ readonly pattern: string; readonly files: ReadonlyArray<string> }> = [];
   for (const pattern of config.include) {
-    const globbed = yield* ioEdge("scan", () =>
-      globSync(pattern, { cwd: config.root, exclude: ["**/node_modules/**", ...config.exclude] })
-    );
+    const globbed = yield* discovery.find(config.root, pattern, ["**/node_modules/**", ...config.exclude]);
     const sources: Array<string> = [];
     for (const file of globbed) {
       const path = join(config.root, file);
@@ -193,9 +246,7 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
   for (const file of sources) {
     const path = relative(config.root, join(config.root, file)).split("\\").join("/");
     scannedPaths.add(path);
-    const text = yield* readText(files, join(config.root, file)).pipe(
-      Effect.mapError(platformFailed("scan"))
-    );
+    const text = yield* readText(files, join(config.root, file)).pipe(Effect.mapError(readFailed("scan")));
     const result = cachedExtract(cache, path, text);
 
     if (result._tag === "Failed") {
