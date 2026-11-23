@@ -616,6 +616,42 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     await expect(project.within(watcher.started, "the start")).resolves.toBeUndefined();
   });
 
+  // Unit under test: `watchProject`'s stop handle, asked for after the watch's start has already failed on its own: the
+  // sources' tree fails to open while the catalogs' tree, already open, is still closing (a host watcher that closes
+  // asynchronously, held). Oracle: the `ProjectWatcher` contract, by hand: the watch's own failure stopped it, so the
+  // start rejects with that failure, whatever the close does later, and the close, which stopped nothing, settles.
+  it("keeps a start that failed on its own failed when closed during its cleanup", async ({ project }) => {
+    // The catalogs' directory exists, so it is a tree of its own; the trees open in path order: the catalogs' opens,
+    // then the sources' fails.
+    project.write("messages/.keep", "");
+    const cleanup = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const events = deliveredEvents({
+      refuses: { dir: project.path("src"), error: new Error("EACCES: permission denied, watch") },
+      releasing: () => {
+        cleanup.resolve();
+
+        return held.promise;
+      },
+    });
+    const watcher = watchProject(hostRuntime(project, events.layer), projectConfig(project), () => undefined);
+    project.defer(() => watcher.close());
+    // First at teardown, so a failed assertion never leaves the cleanup, and so the watch, held.
+    project.defer(() => {
+      held.resolve();
+    });
+    await project.within(cleanup.promise, "the cleanup");
+
+    const closing = watcher.close();
+    held.resolve();
+
+    await expect(project.within(watcher.started, "the start")).rejects.toThrow(
+      "EACCES: permission denied, watch"
+    );
+    await expect(project.within(closing, "the close")).resolves.toBeUndefined();
+    expect(events.open()).toEqual([]);
+  });
+
   // Unit under test: `watchProject`'s stop handle, closing a started watch whose watcher fails to close. Oracle: the
   // `ProjectWatcher` contract, by hand: the first close rejects with the failed close (the Vite plugin's closeBundle
   // awaits it, so the dev server's close reports it); a later close settles on the same shutdown without reporting it

@@ -217,6 +217,9 @@ type Pipeline = {
   // Done once the watch must stop: a write that fails for good, a defect, its scope closing, or the stop itself. With
   // the caller's stop signal, the stop gate.
   readonly halt: Deferred.Deferred<void>;
+  // The caller's stop signal, which the watch claims itself (completes first) the moment it halts on its own: whoever
+  // completed it first started the stop.
+  readonly stop: Deferred.Deferred<void>;
   // Done once every tree is watched (a poll's first walks taken): the first sync starts then.
   readonly sourcesOpened: Deferred.Deferred<void>;
   // Done once the first sync has run and its result and the ready line are queued: classification starts then.
@@ -225,9 +228,13 @@ type Pipeline = {
   readonly readyWritten: Deferred.Deferred<void>;
 };
 
-const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig) {
+const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (
+  config: ProjectConfig,
+  stop: Deferred.Deferred<void>
+) {
   return {
     config,
+    stop,
     catalogs: new Set(config.locales.map((locale) => catalogPath(config, locale))),
     includeRoots: includePrefixes(config),
     cache: new Map(),
@@ -260,7 +267,7 @@ function writer<R>(pipeline: Pipeline, output: WatchOutput<R>) {
   return Effect.gen(function* () {
     for (;;) {
       const next = yield* Queue.take(pipeline.results);
-      yield* write(next).pipe(Effect.onError(() => Deferred.succeed(pipeline.halt, undefined)));
+      yield* write(next).pipe(Effect.onError(() => haltOnOwn(pipeline)));
 
       if (next._tag === "Ready") {
         yield* Deferred.succeed(pipeline.readyWritten, undefined);
@@ -362,6 +369,11 @@ function debouncer(pipeline: Pipeline, sync: Effect.Effect<void>) {
 }
 
 // The watch's own scope, and the two children its stop closes.
+// The watch halts on its own (a write that fails for good, a defect, its scope closing): it claims the stop signal
+// first, synchronously, so a stop asked for from then on never counts as the one that stopped it.
+const haltOnOwn = (pipeline: Pipeline) =>
+  Deferred.succeed(pipeline.stop, undefined).pipe(Effect.andThen(Deferred.succeed(pipeline.halt, undefined)));
+
 type Scopes = {
   readonly own: Scope.Scope;
   readonly sources: Scope.Closeable;
@@ -419,7 +431,7 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
       return { writing, stopping };
     }),
     ({ stopping }) =>
-      Deferred.succeed(halt, undefined).pipe(
+      haltOnOwn(pipeline).pipe(
         Effect.andThen(Fiber.await(stopping)),
         Effect.andThen(Effect.exit(Deferred.await(finished))),
         Effect.flatMap((exit) => (delivered ? Effect.void : exit))
@@ -448,7 +460,7 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
             : Effect.suspend(() => {
                 defect ??= cause;
 
-                return Deferred.succeed(halt, undefined);
+                return haltOnOwn(pipeline);
               })
         )
       ),
@@ -479,7 +491,9 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
  *
  * @param config - The project config.
  * @param mode - Where change events come from.
- * @param stop - Done when the watch should stop; from then on no change is accepted.
+ * @param stop - Done when the watch should stop; from then on no change is accepted. The watch completes it itself the
+ *   moment it halts on its own, before any cleanup, so a caller that completes it (`Deferred.doneUnsafe` returning
+ *   true) knows its stop is the one that stopped the watch.
  * @param output - Where the results and the ready line are written.
  * @returns An effect that starts the watch in its scope.
  */
@@ -490,7 +504,7 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
   output: WatchOutput<R>
 ) {
   const catalogSync = yield* CatalogSync;
-  const pipeline = yield* makePipeline(config);
+  const pipeline = yield* makePipeline(config, stop);
   const { halt, results } = pipeline;
   // The watch's own scope: closed in order whatever the caller's strategy, its stop first.
   const own = yield* Scope.fork(yield* Effect.scope, "sequential");
@@ -616,8 +630,10 @@ export function watchProject(
       })
     )
   );
-  // Whether the host has asked the watch to stop.
-  let stopRequested = false;
+  // Whether the host has asked the watch to stop, and whether that request is what stopped it: decided as the request
+  // claims the stop signal, which the watch claims itself the moment it halts on its own, before any cleanup.
+  let closing = false;
+  let stoppedByHost = false;
   // Whether the watch's end is someone else's to report: the host's first close, or the event loop's, once a failure
   // that ended the watch was thrown there.
   let endReported = false;
@@ -628,7 +644,7 @@ export function watchProject(
 
         // Unless the host is stopping it, nothing is left to report a failure that ends the watch: it ends the host, as
         // a throwing report always did.
-        if (!stopRequested && !endReported && cause !== undefined) {
+        if (!closing && !endReported && cause !== undefined) {
           endReported = true;
           queueMicrotask(() => {
             throw Cause.squash(cause);
@@ -639,13 +655,13 @@ export function watchProject(
       return;
     }
 
-    // A stop the host asked for during the start ends the start cleanly, and the end (a watcher's failure to close,
-    // say) is the first close's to report.
-    if (stopRequested) {
+    // A stop the host asked for during the start, before the watch halted on its own, ends the start cleanly, and the
+    // end (a watcher's failure to close, say) is the first close's to report.
+    if (stoppedByHost) {
       return;
     }
 
-    // Otherwise the start's own failure is the start's to report, never a close's.
+    // Otherwise the start's own failure is the start's to report, never a close's, whenever a close comes.
     endReported = true;
     const failure = endFailure(start);
 
@@ -670,8 +686,8 @@ export function watchProject(
         return shutdown.catch(() => undefined);
       }
 
-      stopRequested = true;
-      Deferred.doneUnsafe(stop, Effect.void);
+      closing = true;
+      stoppedByHost = Deferred.doneUnsafe(stop, Effect.void);
       shutdown = started
         .then(
           () => ended,

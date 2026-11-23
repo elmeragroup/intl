@@ -1,6 +1,10 @@
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync } from "node:fs";
 import { relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { execPath } from "node:process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BuildEnvironmentOptions, InlineConfig, Rolldown, ViteDevServer } from "vite";
 import { build, createBuilder, createLogger, createServer } from "vite";
 import { describe, expect, test } from "vitest";
@@ -11,9 +15,14 @@ import { createIntl } from "@elmeragroup/intl/core";
 import type { OneShotOutcome } from "../src/command-run";
 import { runOnceInProcess } from "../src/command-run";
 import { intl, intlCatalogs } from "../src/vite";
+import { intlPlugins } from "../src/vite-plugins";
+import { CatalogSync } from "../src/watch";
+import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 
+// The built executable, as an app runs it.
+const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 // Every watcher here polls (Rolldown's build watcher and the dev server's, which the plugin's extract watch follows),
 // so a wait ends on the edit, not on the host's file-event daemon (fseventsd on macOS delays or drops events under
@@ -457,9 +466,10 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   // Unit under test: the build plugin's own hooks, called as a build of two environments calls them in parallel: both
   // environments' `closeBundle` while a `buildStart` check is still reporting (thousands of problems, so the check
-  // yields mid-report). Oracle: the CLI's own check output, as `elmera-intl check` prints it in-process: the plugin's
-  // contract is a build that fails with `elmera-intl check failed:` and exactly that output, every problem and the
-  // summary; and a build after both ends checks again, with the same output.
+  // yields mid-report). Oracle: the built executable, `elmera-intl check` spawned on the same project: the plugin's
+  // contract is a build that fails with `elmera-intl check failed:` and exactly what that prints (its problems on
+  // stderr, then its summary on stdout), every problem and the summary; and a build after both ends checks again, with
+  // the same output.
   it("reports a check in full when its environments' closes land during it, then checks again", async ({
     project,
   }) => {
@@ -470,34 +480,28 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
         (_, index) => `export const M${index} = msg("Message ${index}");\n`
       ).join("")}`
     );
-    let printed = "";
-    const print = (text: string) => {
-      printed += text;
-    };
-    expect(
-      await runOnceInProcess(
-        "check",
-        { configPath: project.path("elmera-intl.json"), crash: "reject" },
-        { stdout: print, stderr: print }
-      )
-    ).toBe("problems");
+    const cli = spawnSync(execPath, [BIN, "check"], {
+      cwd: project.root,
+      encoding: "utf8",
+      ...project.spawnGuard(),
+    });
+    expect(cli.status).toBe(1);
     const { buildStart, closeBundle } = hooksOf("elmera-intl:check");
-    // The build's top-level config, which every environment of one build shares.
-    const topLevel = {};
+    // One environment, whose build every hook below belongs to.
     const context = {
       meta: { watchMode: false },
-      environment: { config: { root: project.root }, getTopLevelConfig: () => topLevel },
+      environment: { config: { root: project.root } },
       addWatchFile: () => undefined,
       error: (message: string) => {
         throw new Error(message);
       },
     };
-    // SAFETY: the check plugin's hooks read only the build's watch mode, the environment's root and top-level config,
-    // addWatchFile and error, which this has.
+    // SAFETY: the check plugin's hooks read only the build's watch mode, the environment (its root, and itself as the
+    // build's session), addWatchFile and error, which this has.
     const call = <A extends ReadonlyArray<unknown>, R>(hook: ((...args: A) => R) | undefined, ...args: A) =>
       Promise.resolve(hook?.call(context as never, ...args));
     // The build's whole error text, nothing before or after it.
-    const report = { message: `elmera-intl check failed:\n${printed}` };
+    const report = { message: `elmera-intl check failed:\n${cli.stderr}${cli.stdout}` };
 
     const checking = call(buildStart, BUILD_OPTIONS);
     const closing = Promise.all([call(closeBundle), call(closeBundle)]);
@@ -507,6 +511,75 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect(project.within(call(buildStart, BUILD_OPTIONS), "the next check")).rejects.toMatchObject(
       report
     );
+  });
+
+  // Unit under test: the build plugin's sessions, through one Vite builder whose environments share one top-level
+  // config and one plugin instance (`sharedConfigBuild`): the client builds in watch mode, the SSR environment once
+  // beside it, then the client rebuilds. Oracle: the session contract, by hand: each environment's build owns its
+  // runtime, built once (the services' layer counts its builds), so the SSR build's end leaves the client's in place
+  // and the client's rebuild builds nothing.
+  it("keeps a watch build's runtime when another environment of the same builder builds once", async ({
+    project,
+  }) => {
+    let built = 0;
+    const counted = Layer.mergeAll(
+      CatalogSync.layer(),
+      FileEvents.layer(),
+      Layer.effectDiscard(
+        Effect.sync(() => {
+          built += 1;
+        })
+      )
+    );
+    const builder = await createBuilder({
+      ...viteConfig(project, {}, { write: true }),
+      plugins: intlPlugins({}, counted),
+      builder: { sharedConfigBuild: true },
+      environments: {
+        client: { build: { outDir: "dist/client", watch: BUILD_WATCH } },
+        ssr: { build: { outDir: "dist/server" } },
+      },
+    });
+    const { client, ssr } = builder.environments;
+    expect([client?.name, ssr?.name]).toEqual(["client", "ssr"]);
+    if (client === undefined || ssr === undefined) {
+      return;
+    }
+
+    // SAFETY: with build.watch set, an environment's build returns its watcher (the type is the union of every mode).
+    const watcher = (await builder.build(client)) as Rolldown.RolldownWatcher;
+    project.defer(() => watcher.close());
+    const ends: Array<string> = [];
+    watcher.on("event", (event) => {
+      if (event.code === "BUNDLE_END" || event.code === "ERROR") {
+        ends.push(event.code);
+      }
+
+      if ("result" in event) {
+        void event.result.close();
+      }
+    });
+    await expect.poll(() => ends, project.guard()).toEqual(["BUNDLE_END"]);
+    const counts = [built];
+
+    await builder.build(ssr);
+    counts.push(built);
+
+    // The entry rewritten until the client's watcher rebuilds it.
+    await expect
+      .poll(
+        () => {
+          project.write("src/main.ts", project.read("src/main.ts"));
+
+          return ends.length > 1;
+        },
+        { ...project.guard(), interval: PROBE_INTERVAL_MS }
+      )
+      .toBe(true);
+    expect(ends.every((end) => end === "BUNDLE_END")).toBe(true);
+    counts.push(built);
+
+    expect(counts).toEqual([1, 2, 2]);
   });
 
   // Unit under test: one intl() instance hosting both a dev server and a build, as a config shared by `vite` and

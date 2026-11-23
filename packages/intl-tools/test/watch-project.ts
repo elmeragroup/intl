@@ -147,6 +147,8 @@ export type DeliveredEventsOptions = {
   readonly refuses?: { readonly dir: string; readonly error: Error };
   /** Each tree's close dies with this, as a watcher that fails to close. */
   readonly closeFails?: Error;
+  /** What each tree's close waits for before it closes, as a host watcher that closes asynchronously; called as it begins. */
+  readonly releasing?: (dir: string) => Promise<void>;
 };
 
 /**
@@ -184,11 +186,15 @@ export function deliveredEvents(options: DeliveredEventsOptions = {}): Delivered
             )
           ),
           () =>
-            Effect.suspend(() => {
-              listeners.delete(dir);
+            Effect.promise(() => options.releasing?.(dir) ?? Promise.resolve()).pipe(
+              Effect.andThen(
+                Effect.suspend(() => {
+                  listeners.delete(dir);
 
-              return options.closeFails === undefined ? Effect.void : Effect.die(options.closeFails);
-            })
+                  return options.closeFails === undefined ? Effect.void : Effect.die(options.closeFails);
+                })
+              )
+            )
         );
       }),
     }),
