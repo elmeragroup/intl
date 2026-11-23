@@ -19,12 +19,12 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
 
 import { CatalogFiles, ioFailureReason } from "./catalog-files";
 import type { ExtractOptions, ExtractResult } from "./commands";
-import { extractCatalogs } from "./commands";
+import { extractCatalogs, isOwnWrite } from "./commands";
 import type { Problem } from "./problem";
 import { isExcludedDirectory, isProjectSource, SourceCaches, SourceDiscovery } from "./project";
 import { catalogPath } from "./project-catalogs";
@@ -233,7 +233,9 @@ type Pipeline = {
   readonly config: ProjectConfig;
   readonly catalogs: ReadonlySet<string>;
   readonly includeRoots: ReadonlyArray<string>;
-  // The text this watch last wrote to each catalog: a change that finds it unchanged is our own write.
+  // Each catalog path's own text after the last sync (`ownTexts`), every configured path, written or left as it was.
+  // A change is our own write only when its path reads exactly its own record: links that name one file read back
+  // the last of their writes on each path (#15), and a catalog copied onto another later reads as none of the other's.
   readonly written: Ref.Ref<ReadonlyMap<string, string>>;
   // Each admitted change, for classification.
   readonly intake: Queue.Queue<Change>;
@@ -312,9 +314,11 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
       unused: "keep",
       concurrentSave: "yield",
     });
-    yield* Ref.update(
+    // A sync with problems leaves no record: whatever its catalogs hold now, the next change to any of them syncs
+    // (and a catalog it could not read is not read again here).
+    yield* Ref.set(
       pipeline.written,
-      (before) => new Map([...before, ...result.written.map(({ path, text }) => [path, text] as const)])
+      result.problems.length === 0 ? ownTexts(pipeline.catalogs, result) : new Map()
     );
 
     // Not left to the save's own change: a save back to text this watch wrote reads as our own write, and the change
@@ -325,15 +329,52 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
 
     return syncResult(result);
   }).pipe(
-    Effect.catchTag("SyncFailed", (failure) => Effect.succeed(syncFailed(failure.message))),
+    // A sync that failed leaves no record either.
+    Effect.catchTag("SyncFailed", (failure) =>
+      Ref.set(pipeline.written, new Map()).pipe(Effect.as(syncFailed(failure.message)))
+    ),
     Semaphore.withPermit(pipeline.syncing),
     Effect.flatMap((result) => Queue.offer(pipeline.results, { _tag: "Result", result })),
     Effect.uninterruptible
   );
 }
 
-// Whether a change can alter a catalog, against `written` as it stood when its batch was taken: a catalog whose text
-// is not what this watch last wrote, a project source, or a rename that moved a tree under an include root.
+// The record a clean sync leaves: each catalog path's own text, seeded from the plan's snapshots (`result.read`) with
+// its writes over them, then, when it wrote anything, what each path reads back right after the writes (no file event
+// is classified in between), where that is a text of the sync's own for the path (`isOwnWrite`, the write guard's own
+// definition, over the sync's own index): links name one file, so an earlier locale's path reads the last locale's
+// write. A read-back that is anything else (a save, a copy that landed since the writes) leaves the path's record as it
+// was, so it is a change. A superseded sync records only the paths it wrote: the others' snapshots may be stale, and
+// the retry it queued reads them again.
+function ownTexts(catalogs: ReadonlySet<string>, result: ExtractResult): ReadonlyMap<string, string> {
+  const record = new Map<string, string>();
+  if (!result.superseded) {
+    for (const [path, text] of result.read) {
+      if (text !== undefined) {
+        record.set(path, text);
+      }
+    }
+  }
+  for (const { path, text } of result.written) {
+    record.set(path, text);
+  }
+
+  if (result.written.length > 0) {
+    for (const path of result.superseded ? result.written.map((output) => output.path) : catalogs) {
+      const back = readText(path);
+
+      if (back !== undefined && isOwnWrite(result.own, result.read.get(path), back)) {
+        record.set(path, back);
+      }
+    }
+  }
+
+  return record;
+}
+
+// Whether a change can alter a catalog, against the record as it stood when its batch was taken: a catalog whose text
+// is not what its own path read back after the last sync, a project source, or a rename that moved a tree under an
+// include root.
 function alters(pipeline: Pipeline, written: ReadonlyMap<string, string>, change: Change): boolean {
   if (change.path === null) {
     return true;
@@ -353,7 +394,7 @@ function alters(pipeline: Pipeline, written: ReadonlyMap<string, string>, change
 }
 
 // Classification, from the first sync on: every change admitted since the last one, under one permit (so never while a
-// sync runs, and a catalog's change is compared with what the last sync wrote), queues one trigger when any can alter a
+// sync runs, and a catalog's change is compared with what its path read back after the last sync), queues one trigger when any can alter a
 // catalog. A burst is one classification and one trigger.
 const classifier = /* @__PURE__ */ Effect.fnUntraced(function* (pipeline: Pipeline) {
   yield* Deferred.await(pipeline.firstSynced);
@@ -740,9 +781,21 @@ function endFailure(exit: Exit.Exit<void>): Cause.Cause<never> | undefined {
 
 // A catalog deleted or replaced by a directory reads as changed.
 function readText(path: string): string | undefined {
+  let fd: number;
   try {
-    return readFileSync(path, "utf8");
+    // Opened without blocking and read only when a regular file: a FIFO put where a catalog goes is the sync's to read
+    // (it blocks until a writer opens), never the classifier's or the record's. Windows has no O_NONBLOCK, which `|`
+    // reads as 0 there.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch {
     return undefined;
+  }
+
+  try {
+    return fstatSync(fd).isFile() ? readFileSync(fd, "utf8") : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
   }
 }

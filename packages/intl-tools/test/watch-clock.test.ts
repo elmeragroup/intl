@@ -8,13 +8,14 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 
 import type { ExtractOptions } from "../src/commands";
 import { extractCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import type { WatchMode } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
+import type { Project } from "./project-fixture";
 import type { DeliveredEvents } from "./watch-project";
 import {
   component,
@@ -209,7 +210,14 @@ describe("extract --watch on the test clock", () => {
           calls += 1;
 
           return calls === 1
-            ? Effect.succeed({ problems: [], messages: 0, written: [], superseded: true })
+            ? Effect.succeed({
+                problems: [],
+                messages: 0,
+                written: [],
+                superseded: true,
+                read: new Map(),
+                own: new Map(),
+              })
             : extractCatalogs(config, options);
         }),
       });
@@ -380,6 +388,56 @@ describe("extract --watch on the test clock", () => {
         reports: ["Written", "Written", "Written"],
       });
       expect(project.read("messages/nb.po")).toContain(`msgid "C"`);
+    })
+  );
+
+  // A sync that ends with a problem, or fails, leaves no record. The watch under test writes nb.po itself, so its
+  // record holds that text; then nb.po is broken while a source is added (a malformed PO, a problem: CatalogUnreadable;
+  // a directory where it goes, a failure: an I/O error the sync does not classify), and the sync reports it. Restoring
+  // the text the watch wrote must then sync, though it is the text the watch knew. Native events the test delivers, so
+  // nothing but the classifier decides. Oracle: the contract by hand: after a sync with a problem or a failure, any
+  // catalog change starts a sync, which adds "Ready". The watch listens at the root, as messages/ was not there.
+  it.effect.each([
+    {
+      broken: "a malformed PO",
+      breakIt: (project: Project) => {
+        project.write("messages/nb.po", 'msgid "unterminated\n');
+      },
+      fix: () => undefined,
+    },
+    {
+      broken: "a directory where the PO goes",
+      breakIt: (project: Project) => {
+        rmSync(project.path("messages/nb.po"));
+        mkdirSync(project.path("messages/nb.po"));
+      },
+      fix: (project: Project) => {
+        rmSync(project.path("messages/nb.po"), { recursive: true });
+      },
+    },
+  ])("syncs a catalog restored after a sync that failed on $broken", ({ breakIt, fix }, { project }) =>
+    Effect.gen(function* () {
+      const events = deliveredEvents();
+      const { reports } = yield* startWatch(project, { events: events.layer, mode: { _tag: "native" } });
+      const original = project.read("messages/nb.po");
+      expect(reports).toEqual(["Written"]);
+
+      breakIt(project);
+      project.write("src/ready.tsx", component("Ready"));
+      events.listener(project.root).change("change", "messages/nb.po");
+      events.listener(project.root).change("rename", "src/ready.tsx");
+      yield* TestClock.adjust("1 second");
+      expect(reports).toEqual(["Written", "Failed"]);
+
+      fix(project);
+      project.write("messages/nb.po", original);
+      events.listener(project.root).change("rename", "messages/nb.po");
+      yield* TestClock.adjust("1 second");
+
+      expect({ reports, ready: project.read("messages/nb.po").includes('msgid "Ready"') }).toEqual({
+        reports: ["Written", "Failed", "Written"],
+        ready: true,
+      });
     })
   );
 

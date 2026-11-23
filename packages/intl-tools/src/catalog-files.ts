@@ -143,10 +143,11 @@ export type WriteGuard =
   /** Write over whatever the catalog holds (`extract`). */
   | { readonly _tag: "Overwrite" }
   /**
-   * Write only while the catalog holds one of `texts` (undefined: absent): its own snapshot, or a text this sync wrote
-   * (to it or to another path naming the same file), so a save since is never written over.
+   * Write only while what the catalog holds (undefined: absent) `holds`: its own snapshot, or a text this sync wrote
+   * (to it or to another path naming the same file), so a save since is never written over. Asked synchronously, in
+   * the same call as the read and the write.
    */
-  | { readonly _tag: "IfHoldsOneOf"; readonly texts: ReadonlySet<string | undefined> };
+  | { readonly _tag: "IfHolds"; readonly holds: (current: string | undefined) => boolean };
 
 /** What a guarded catalog write did. */
 export type WriteOutcome =
@@ -228,7 +229,7 @@ export class CatalogFiles
           return yield* ioEdge("write", (): WriteOutcome => {
             const current = fs.read(path);
 
-            if (guard._tag === "IfHoldsOneOf" && !guard.texts.has(current)) {
+            if (guard._tag === "IfHolds" && !guard.holds(current)) {
               return "changed";
             }
 
