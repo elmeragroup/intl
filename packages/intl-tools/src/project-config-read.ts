@@ -13,13 +13,21 @@ import { posix } from "node:path";
 
 import { nodeSyncError, readText } from "./catalog-files";
 import type { ConfigLoaded } from "./project-config";
-import { configInvalid, escapingGlob, FIELD_PROBLEMS, firstEscaping, FORMATS_MODULE } from "./project-config";
+import {
+  configInvalid,
+  escapingGlob,
+  FIELD_PROBLEMS,
+  firstEscaping,
+  FORMATS_MODULE,
+  sharedCatalogPath,
+} from "./project-config";
 
 // Glob patterns, normalized as `parseConfig` normalizes them (`./src/**` is `src/**`).
 const normalized = (patterns: ReadonlyArray<string>) => patterns.map((pattern) => posix.normalize(pattern));
 
 // The config in two stages, each reporting its first failure, so the order is `parseConfig`'s: the globs and whether
-// any reaches outside the root (which needs both lists), then the locales, the catalogs and the formats.
+// any reaches outside the root (which needs both lists), then the locales, the catalogs and the formats. Last, as
+// there, whether two locales' catalog paths could name one file (`sharedCatalogPath`), which needs both fields.
 const Globs = /* @__PURE__ */ Schema.Struct({
   include: /* @__PURE__ */ Schema.Array(Schema.String).check(/* @__PURE__ */ Schema.isMinLength(1)),
   exclude: /* @__PURE__ */ Schema.optionalKey(/* @__PURE__ */ Schema.Array(Schema.String)),
@@ -98,6 +106,11 @@ export function decodeConfig(
   }
 
   const { formats } = catalogs.success;
+  const shared = sharedCatalogPath(catalogs.success.catalogs, catalogs.success.locales);
+
+  if (shared !== undefined) {
+    return configInvalid(path, shared);
+  }
 
   return {
     _tag: "Config",

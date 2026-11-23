@@ -48,6 +48,67 @@ export const FIELD_PROBLEMS = {
   formats: '"formats" must be the path of a .ts or .js module exporting `formats`',
 } as const;
 
+// A path's separators, both: a config is read on POSIX and Windows hosts alike, and a POSIX file name holding a
+// backslash before `..` is no catalog anyone writes.
+const SEPARATOR = /[\\/]/u;
+const ALIASING = "a directory the sync creates could make two locales' paths name one catalog";
+
+// The problem with a `catalogs` pattern that climbs out of a directory named after the locale.
+const CLIMBING_CATALOGS = `"catalogs" must not hold a ".." segment anywhere after the first segment holding {locale} (${ALIASING})`;
+
+/**
+ * The problem with catalog paths that two locales could share: a locale that is no locale identifier
+ * `Intl.getCanonicalLocales` accepts (a subset of BCP 47: `en-GB-oed`, a grandfathered tag, is refused), two locales
+ * that are one identifier (compared canonically: `nb` and `NB`, `iw` and `he`), or any `..` segment after the first
+ * segment that holds `{locale}`, however far after. A locale names its catalog file, the PO's `Language` header and how
+ * its messages format, so it must be an identifier; a path-like value (`/nb`, `../messages/nb`) would name another locale's catalog through another
+ * string. Only a `..` after the locale can cancel the one part of a path that differs between locales, so only there
+ * can a directory the sync creates for one locale make its path reach a catalog another locale's path names, after the
+ * write guard read it as absent (#18); a `..` before the locale is the same for every locale and stays valid. With
+ * these, each locale's catalog path is a string of its own: identifiers hold no separator and no `.` segment, and two whose
+ * canonical forms differ also differ once case-folded, so no case-insensitive file system folds them into one name.
+ * The spelling is kept as written (`en-us` stays valid): it is the catalog's file name.
+ *
+ * @param catalogs - The `catalogs` pattern, holding `{locale}`.
+ * @param locales - The configured locales.
+ * @returns What the problem says, or undefined when every locale's path is its own.
+ */
+export function sharedCatalogPath(catalogs: string, locales: ReadonlyArray<string>): string | undefined {
+  const tags = new Map<string, string>();
+  for (const locale of locales) {
+    const tag = canonicalTag(locale);
+
+    if (tag === undefined) {
+      return `locale ${JSON.stringify(locale)} is not a locale identifier Intl.getCanonicalLocales accepts (such as "nb" or "pt-BR"): it names the locale's catalog and how its messages format`;
+    }
+
+    const earlier = tags.get(tag.toLowerCase());
+
+    if (earlier !== undefined) {
+      return earlier === locale
+        ? `locale ${JSON.stringify(locale)} is listed twice: each locale needs a catalog of its own`
+        : `locales ${JSON.stringify(earlier)} and ${JSON.stringify(locale)} are one locale identifier, ${tag}: each locale needs a catalog of its own`;
+    }
+
+    tags.set(tag.toLowerCase(), locale);
+  }
+
+  const segments = catalogs.split(SEPARATOR);
+  // The pattern holds `{locale}`, which holds no separator, so one segment holds it.
+  const first = segments.findIndex((segment) => segment.includes("{locale}"));
+
+  return segments.slice(first + 1).includes("..") ? CLIMBING_CATALOGS : undefined;
+}
+
+// A locale's canonical identifier, or undefined when Intl.getCanonicalLocales refuses it (a RangeError).
+function canonicalTag(locale: string): string | undefined {
+  try {
+    return Intl.getCanonicalLocales(locale)[0];
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The problem with a glob that reaches outside the project root.
  *
@@ -161,6 +222,12 @@ export function parseConfig(text: string, path: string, root: string): ConfigLoa
 
   if (formats !== undefined && (typeof formats !== "string" || !FORMATS_MODULE.test(formats))) {
     return configInvalid(path, FIELD_PROBLEMS.formats);
+  }
+
+  const shared = sharedCatalogPath(catalogs, locales);
+
+  if (shared !== undefined) {
+    return configInvalid(path, shared);
   }
 
   return {

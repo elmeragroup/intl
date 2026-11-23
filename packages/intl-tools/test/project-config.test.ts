@@ -61,14 +61,23 @@ it("reads a config that starts with a byte order mark as withIntl reads it", asy
 // parser `withIntl` runs inside next.config (for each text, the same config or the same first problem, word for word),
 // and, for each text, its first diagnostic as a literal, so each message is checked against the field it names. The
 // texts reach every problem, each field's ways to be wrong, and the precedence between them: include before exclude,
-// both before an escaping glob, which comes before the locales, then the catalogs, then the formats. "not JSON" is
-// pinned by its prefix: the JSON parser's own message after it varies by Node version.
+// both before an escaping glob, which comes before the locales, then the catalogs, then the formats, and last whether
+// two locales' catalog paths could name one file. "not JSON" is pinned by its prefix: the JSON parser's own message
+// after it varies by Node version.
 const INCLUDE = '"include" must be a non-empty array of glob strings';
 const EXCLUDE = '"exclude" must be an array of glob strings';
 const LOCALES = '"locales" must be a non-empty array of locale strings';
 const CATALOGS = '"catalogs" must be a path pattern with {locale} ending in .po';
 const FORMATS = '"formats" must be the path of a .ts or .js module exporting `formats`';
 const NOT_OBJECT = "not a JSON object";
+const CLIMBING =
+  '"catalogs" must not hold a ".." segment anywhere after the first segment holding {locale} (a directory the sync creates could make two locales\' paths name one catalog)';
+const notTag = (locale: string) =>
+  `locale ${JSON.stringify(locale)} is not a locale identifier Intl.getCanonicalLocales accepts (such as "nb" or "pt-BR"): it names the locale's catalog and how its messages format`;
+const oneTag = (first: string, second: string, tag: string) =>
+  `locales ${JSON.stringify(first)} and ${JSON.stringify(second)} are one locale identifier, ${tag}: each locale needs a catalog of its own`;
+const shared = (pattern: string, locales: ReadonlyArray<string>) =>
+  JSON.stringify({ include: ["src/**"], catalogs: pattern, locales });
 const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, first: string]> = [
   [
     '{ "include": ["./src/**/*.tsx"], "exclude": ["./src/skip/**"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv"], "formats": "./src/formats.ts", "extra": 1 }',
@@ -110,6 +119,41 @@ const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, first: string]> = [
     FORMATS,
   ],
   ['{ "include": ["src/**"], "locales": [], "catalogs": 5, "formats": 1 }', LOCALES],
+  // Catalog paths two locales could share (#18). These configs once reached the watch and extract, whose tests showed
+  // the sync coping with them: a relative `{locale}/..` pattern and a duplicate locale read one file once per sync and
+  // kept a save made after that read; locales that one pattern or a case-insensitive file system folds into one file
+  // wrote it in turn, ending with the last locale's catalog; and an absolute `{locale}/..` pattern through a locale
+  // directory the sync creates kept the translation with locales ["nb", "sv"], and lost it with ["sv", "nb"]. No host
+  // takes them now. A `..` before `{locale}` is the same for every locale and stays valid (watch-saves.test.ts writes
+  // through `messages/jump/../{locale}.po` with `jump` a linked directory).
+  [shared("messages/{locale}/../catalog.po", ["nb", "sv"]), CLIMBING],
+  [shared("/abs/messages/{locale}/../catalog.po", ["sv", "nb"]), CLIMBING],
+  [shared("messages\\{locale}\\..\\catalog.po", ["nb", "sv"]), CLIMBING],
+  [shared("{locale}/sub/../catalog.po", ["nb"]), CLIMBING],
+  [shared("/abs/messages/jump/../{locale}.po", ["nb", "sv"]), "valid"],
+  [shared("messages/{locale}/x..po", ["nb", "pt-BR", "zh-Hant-TW", "en-us"]), "valid"],
+  // A locale is an identifier Intl.getCanonicalLocales accepts, never a path (nor every BCP 47 tag: en-GB-oed): "/nb", "../messages/nb" and, under the
+  // root, an absolute "<root>/nb" each name nb's catalog through another string, and a save between the two reads of
+  // that one file was lost for a moment. Two spellings of one tag ("NB", "iw" for "he") are one locale.
+  [shared("{locale}.po", ["nb", "/nb"]), notTag("/nb")],
+  [shared("messages/{locale}.po", ["nb", "../messages/nb"]), notTag("../messages/nb")],
+  [shared("{locale}.po", ["nb", "/app/nb"]), notTag("/app/nb")],
+  [shared("messages/{locale}.po", ["nb", "x/../sv"]), notTag("x/../sv")],
+  [shared("messages/{locale}.po", ["nb_NO"]), notTag("nb_NO")],
+  [shared("messages/{locale}.po", ["en-GB-oed"]), notTag("en-GB-oed")],
+  [shared("messages/{locale}.po", [""]), notTag("")],
+  [
+    shared("messages/{locale}.po", ["nb", "sv", "nb"]),
+    'locale "nb" is listed twice: each locale needs a catalog of its own',
+  ],
+  [shared("messages/{locale}.po", ["nb", "NB"]), oneTag("nb", "NB", "nb")],
+  [shared("messages/{locale}.po", ["he", "iw"]), oneTag("he", "iw", "he")],
+  [shared("messages/{locale}.po", ["en-US", "en-us"]), oneTag("en-US", "en-us", "en-US")],
+  ['{ "include": ["src/**"], "locales": ["nb", "nb"], "catalogs": 5 }', CATALOGS],
+  [
+    '{ "include": ["src/**"], "locales": ["nb", "nb"], "catalogs": "{locale}/../x.po", "formats": 1 }',
+    FORMATS,
+  ],
 ];
 
 it("decodes every config as the hand parser withIntl runs parses it, each first diagnostic as pinned", ({
