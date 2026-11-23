@@ -48,6 +48,10 @@ export type ExtractResult = Omit<CommandReport, "written" | "unreachable"> & {
    * wrote before, nothing when the change was there before the first write.
    */
   readonly superseded: boolean;
+  /** Each catalog path's text as the plan read it (undefined: absent), by the exact path read and written. */
+  readonly read: ReadonlyMap<string, string | undefined>;
+  /** The texts this sync wrote, by the snapshot of the path each went to (`isOwnWrite`). */
+  readonly own: OwnWrites;
 };
 
 // A locale's PO as it is now.
@@ -160,9 +164,18 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
   options: ExtractOptions
 ) {
   const { problems, messages } = plan;
+  // Filled as writes succeed: the one index the guard below and the watch's record judge a text by.
+  const own = new Map<string | undefined, Set<string>>();
 
   if (problems.length > 0) {
-    return { problems, messages, written: [], superseded: false } satisfies ExtractResult;
+    return {
+      problems,
+      messages,
+      written: [],
+      superseded: false,
+      read: plan.read,
+      own,
+    } satisfies ExtractResult;
   }
 
   const files = yield* CatalogFiles;
@@ -172,45 +185,69 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
   if (options.concurrentSave === "yield") {
     for (const [path, text] of plan.read) {
       if ((yield* files.read(path)) !== text) {
-        return { problems, messages, written: [], superseded: true } satisfies ExtractResult;
+        return {
+          problems,
+          messages,
+          written: [],
+          superseded: true,
+          read: plan.read,
+          own,
+        } satisfies ExtractResult;
       }
     }
   }
 
-  // A path may hold its own snapshot, a text this sync wrote to a path with the same snapshot, or a text this sync wrote
-  // to a path that was absent at the read. Through another path that names the same file (a link, a hard link), a text
-  // written over the same snapshot is the sync's own write, since paths that name one file read one snapshot once the
-  // check above passed. A write to an absent path may create a directory (one a `..` before the locale climbs out of)
-  // that makes it, or a later path, reach a file another path already names through a link, and the sync cannot know
-  // which, so its text is the sync's own to every later write. Anything else, a text this sync wrote over another present snapshot included,
-  // is a save since, which this sync never writes over: a catalog a translator copies onto another mid-sync is kept
-  // when the copied catalog existed at the read. One the sync just created there is overwritten, since a content guard
-  // cannot tell that copy from a created directory's reach.
-  const ownTexts = new Map<string | undefined, Set<string>>();
+  // A path may hold its own snapshot, or a text of this sync's own (`isOwnWrite`); anything else is a save since,
+  // which this sync never writes over.
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
     const snapshot = plan.read.get(output.path);
-    const own = ownTexts.get(snapshot) ?? new Set<string>();
     const outcome = yield* files.write(
       output.path,
       output.text,
       options.concurrentSave === "yield"
-        ? { _tag: "IfHoldsOneOf", texts: new Set([snapshot, ...own, ...(ownTexts.get(undefined) ?? [])]) }
+        ? { _tag: "IfHolds", holds: (current) => current === snapshot || isOwnWrite(own, snapshot, current) }
         : { _tag: "Overwrite" }
     );
 
     if (outcome === "changed") {
-      return { problems, messages, written, superseded: true } satisfies ExtractResult;
+      return { problems, messages, written, superseded: true, read: plan.read, own } satisfies ExtractResult;
     }
 
     if (outcome === "written") {
       written.push(output);
-      ownTexts.set(snapshot, own.add(output.text));
+      own.set(snapshot, (own.get(snapshot) ?? new Set<string>()).add(output.text));
     }
   }
 
-  return { problems, messages, written, superseded: false } satisfies ExtractResult;
+  return { problems, messages, written, superseded: false, read: plan.read, own } satisfies ExtractResult;
 });
+
+/** The texts one sync wrote, by the snapshot the path each went to held at the read (undefined: absent). */
+export type OwnWrites = ReadonlyMap<string | undefined, ReadonlySet<string>>;
+
+/**
+ * Whether a catalog path whose snapshot is `snapshot` holding `text` holds one of the sync's own writes: the one
+ * definition the write guard and the watch's record of its own writes share. A text this sync wrote to a path with the
+ * same snapshot is its own: paths that name one file (a link, a hard link) read one snapshot once the sync's check
+ * before its first write passed. So is a text it wrote to a path that was absent at the read: that write may create a
+ * directory (one a `..` before the locale climbs out of) that makes it, or a later path, reach a file another path
+ * names through a link, and the sync cannot know which. Anything else, a text this sync wrote over another present
+ * snapshot included, is a save since: a catalog a translator copies onto another mid-sync is kept when the copied
+ * catalog existed at the read. Left: when two paths' snapshots are one text, or a copied catalog was just created, a
+ * copy between them cannot be told from the sync's own write through a link, since content is all this knows.
+ *
+ * @param own - What the sync wrote, by snapshot.
+ * @param snapshot - The path's text as the sync read it (undefined: absent).
+ * @param text - What the path holds now (undefined: absent).
+ * @returns Whether that is a text of the sync's own for the path.
+ */
+export function isOwnWrite(own: OwnWrites, snapshot: string | undefined, text: string | undefined): boolean {
+  return (
+    text !== undefined &&
+    ((own.get(snapshot)?.has(text) ?? false) || (own.get(undefined)?.has(text) ?? false))
+  );
+}
 
 /**
  * Check that every catalog is in sync with the sources and compiles: each source message is present and translated,

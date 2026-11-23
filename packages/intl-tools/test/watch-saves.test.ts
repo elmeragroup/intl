@@ -1,5 +1,7 @@
 import { describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
@@ -311,35 +313,147 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   );
 
   // Locales whose catalogs are links to one file write it in turn, as the layer 4 watch did (62bfdb1): every write
-  // reported, and the file left with the last locale's catalog.
-  it.effect("writes a catalog a symbolic link names, after the file it links to", ({ project }) =>
-    Effect.gen(function* () {
-      project.write("elmera-intl.json", TWO_LOCALES);
-      mkdirSync(project.path("messages"));
-      symlinkSync("nb.po", project.path("messages/sv.po"));
-      const reports = recorded(project);
-      yield* startWatch(project, { report: reports.report });
+  // reported, and the file left with the last locale's catalog. That text differs from what the watch wrote to the
+  // earlier locales' paths (each catalog's header names its locale), and those paths' change events must still read as
+  // the watch's own (#15). Oracle: the contract by hand: the first sync's report and the last locale's header at once;
+  // five debounces later, with no save and no source change, still that one sync; a new source then makes exactly one
+  // more, and the file holds the last locale's catalog with it.
+  it.effect.each([
+    {
+      link: "symbolic links",
+      setup: (project: Project) => {
+        mkdirSync(project.path("messages"));
+        symlinkSync("nb.po", project.path("messages/sv.po"));
+        symlinkSync("nb.po", project.path("messages/da.po"));
+      },
+    },
+    {
+      link: "hard links",
+      setup: (project: Project) => {
+        project.write("messages/nb.po", "");
+        linkSync(project.path("messages/nb.po"), project.path("messages/sv.po"));
+        linkSync(project.path("messages/nb.po"), project.path("messages/da.po"));
+      },
+    },
+  ])(
+    "takes its own writes through $link to one catalog for its own, and syncs no more",
+    ({ setup }, { project }) =>
+      Effect.gen(function* () {
+        project.write(
+          "elmera-intl.json",
+          `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv", "da"] }`
+        );
+        setup(project);
+        const reports = recorded(project);
+        yield* startWatch(project, { report: reports.report });
 
-      expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po"]);
-      expect(project.read("messages/nb.po")).toContain(String.raw`"Language: sv\n"`);
-    })
+        expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po, messages/da.po"]);
+        expect(project.read("messages/sv.po")).toContain(String.raw`"Language: da\n"`);
+        for (let debounce = 0; debounce < 5; debounce += 1) {
+          yield* TestClock.adjust("1 second");
+        }
+
+        const settled = [...reports.lines];
+        project.write("src/ready.tsx", component("Ready"));
+        for (let debounce = 0; debounce < 5; debounce += 1) {
+          yield* TestClock.adjust("1 second");
+        }
+
+        expect({ settled, after: reports.lines.slice(settled.length) }).toEqual({
+          settled: ["wrote messages/nb.po, messages/sv.po, messages/da.po"],
+          after: ["wrote messages/nb.po, messages/sv.po, messages/da.po"],
+        });
+        expect(project.read("messages/nb.po")).toMatch(/"Language: da\\n"[\s\S]*msgid "Ready"/u);
+      })
   );
 
-  it.effect("writes catalogs that are hard links to one file, each in turn", ({ project }) =>
+  // A linked group whose first path already holds its locale's catalog: the sync leaves nb.po, the file, as it is and
+  // writes sv's catalog through the link. The watch records what each path reads back after the writes, the paths it
+  // left included, so nb's change event finds its own record. Oracle: the contract by hand: five debounces after the
+  // watch starts, its first sync, which wrote sv alone, is the only one.
+  it.effect("takes a linked catalog it left unwritten for its own, and syncs no more", ({ project }) =>
     Effect.gen(function* () {
       project.write(
         "elmera-intl.json",
-        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv", "da"] }`
+        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"] }`
       );
-      project.write("messages/nb.po", "");
-      linkSync(project.path("messages/nb.po"), project.path("messages/sv.po"));
-      linkSync(project.path("messages/nb.po"), project.path("messages/da.po"));
+      const alone = yield* startWatch(project);
+      yield* Scope.close(alone.scope, Exit.void);
+      project.write("elmera-intl.json", TWO_LOCALES);
+      symlinkSync("nb.po", project.path("messages/sv.po"));
       const reports = recorded(project);
       yield* startWatch(project, { report: reports.report });
+      for (let debounce = 0; debounce < 5; debounce += 1) {
+        yield* TestClock.adjust("1 second");
+      }
 
-      expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po, messages/da.po"]);
-      expect(project.read("messages/sv.po")).toContain(String.raw`"Language: da\n"`);
+      expect(reports.lines).toEqual(["wrote messages/sv.po"]);
     })
+  );
+
+  // A translator copies a catalog the watch wrote onto another: nb.po, saved with "Ready" before its source, is left
+  // as it is when the source arrives, and only sv.po is written; then nb's first text is copied over sv.po. The copy is
+  // no text sv's path read back after the watch's writes, so it syncs. Oracle: the contract by hand: sv.po ends with
+  // "Ready" again, written by the sync after the copy.
+  it.effect("syncs a catalog another catalog's earlier text is copied onto", ({ project }) =>
+    Effect.gen(function* () {
+      project.write("elmera-intl.json", TWO_LOCALES);
+      const reports = recorded(project);
+      yield* startWatch(project, { report: reports.report });
+      const first = project.read("messages/nb.po");
+      project.write("messages/nb.po", `${first}\n#: src/ready.tsx\nmsgid "Ready"\nmsgstr ""\n`);
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+      const beforeCopy = [...reports.lines];
+      project.write("messages/sv.po", first);
+      for (let debounce = 0; debounce < 3; debounce += 1) {
+        yield* TestClock.adjust("1 second");
+      }
+
+      expect({ beforeCopy, afterCopy: reports.lines.slice(beforeCopy.length) }).toEqual({
+        beforeCopy: ["wrote messages/nb.po, messages/sv.po", "wrote messages/sv.po"],
+        afterCopy: ["wrote messages/sv.po"],
+      });
+      expect(project.read("messages/sv.po")).toMatch(/"Language: sv\\n"[\s\S]*msgid "Ready"/u);
+    })
+  );
+
+  // A translator copies one catalog onto another in the moment after the sync wrote both and before the watch read
+  // them back: sv.po then holds nb's new text, which this sync wrote to another path whose snapshot was another file's.
+  // Oracle: the contract by hand: only a path's own snapshot, or a text this sync wrote over that snapshot, is the
+  // watch's own, so the copy syncs and sv.po ends with its own catalog again.
+  it.effect(
+    "syncs a catalog copied onto another between the sync's writes and its read-back",
+    ({ project }) =>
+      Effect.gen(function* () {
+        project.write("elmera-intl.json", TWO_LOCALES);
+        const sv = project.path("messages/sv.po");
+        let copied = false;
+        const { reports } = yield* startWatch(project, {
+          layer: syncing((config, options) =>
+            extractCatalogs(config, options).pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  if (
+                    !copied &&
+                    result.written.some(({ path, text }) => path === sv && text.includes('msgid "Ready"'))
+                  ) {
+                    copied = true;
+                    project.write("messages/sv.po", project.read("messages/nb.po"));
+                  }
+                })
+              )
+            )
+          ),
+        });
+        project.write("src/ready.tsx", component("Ready"));
+        for (let debounce = 0; debounce < 5; debounce += 1) {
+          yield* TestClock.adjust("1 second");
+        }
+
+        expect({ copied, reports }).toEqual({ copied: true, reports: ["Written", "Written", "Written"] });
+        expect(project.read("messages/sv.po")).toMatch(/"Language: sv\\n"[\s\S]*msgid "Ready"/u);
+      })
   );
 
   // A link through a linked directory: `sv.po -> jump/../nb.po` with `jump -> ../other/sub` names `other/nb.po`, not
