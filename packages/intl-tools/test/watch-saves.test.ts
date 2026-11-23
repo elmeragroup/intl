@@ -11,7 +11,7 @@ import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import type { SyncResult, WatchMode } from "../src/watch";
 import type { Project } from "./project-fixture";
-import { component, deliveredEvents, it, startWatch, syncing } from "./watch-project";
+import { CONFIG, component, deliveredEvents, it, startWatch, syncing } from "./watch-project";
 
 // The saves the watch keeps: a translator's editor saves a catalog while a sync runs, and the sync never writes over it;
 // the next sync merges it. Unit under test: `watchCatalogs` with the real `CatalogSync`, on the test clock, its catalogs
@@ -45,6 +45,11 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
       });
 
     return { lines, report };
+  };
+
+  // The project's config: the base one with `fields` over it, serialized so any character in a path stays a string.
+  const configure = (project: Project, fields: Partial<typeof CONFIG>) => {
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, ...fields }));
   };
 
   // A translator's save of "Hello" in `po`, as its editor writes it.
@@ -442,10 +447,7 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   // path as configured, so a new message reaches the file the path names, as at e5f111b.
   it.effect("adds a message to a catalog an absolute path names through a linked directory", ({ project }) =>
     Effect.gen(function* () {
-      project.write(
-        "elmera-intl.json",
-        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "${project.root}/messages/jump/../{locale}.po", "locales": ["nb"] }`
-      );
+      configure(project, { catalogs: `${project.root}/messages/jump/../{locale}.po` });
       mkdirSync(project.path("messages"));
       mkdirSync(project.path("other/sub"), { recursive: true });
       symlinkSync("../other/sub", project.path("messages/jump"));
@@ -459,6 +461,28 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
       });
       expect(project.read("other/nb.po")).toContain(`msgid "Ready"`);
     })
+  );
+
+  // A catalog path through a directory the sync creates: `messages/{locale}/../catalog.po` with `messages/sv/` present
+  // and `messages/nb/` absent reads nb as absent and sv as the shared catalog. Writing nb creates `messages/nb/`, so its
+  // path now reaches the catalog sv names, and sv's write finds the sync's own text there. Sv's write is accepted and
+  // merges over it, so the translation the file held before the watch survives, as at e5f111b.
+  it.effect(
+    "keeps a translation when creating a directory makes a second path reach its catalog",
+    ({ project }) =>
+      Effect.gen(function* () {
+        configure(project, {
+          catalogs: `${project.root}/messages/{locale}/../catalog.po`,
+          locales: ["nb", "sv"],
+        });
+        project.write("messages/sv/.keep", "");
+        project.write("messages/catalog.po", 'msgid "Hello"\nmsgstr "Hej"\n');
+
+        yield* startWatch(project);
+        yield* TestClock.adjust("1 second");
+
+        expect(project.read("messages/catalog.po")).toContain('msgid "Hello"\nmsgstr "Hej"');
+      })
   );
 
   // Two locales whose names a case-insensitive file system folds into one file: the second write finds the first's

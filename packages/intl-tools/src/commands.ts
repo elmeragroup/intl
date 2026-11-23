@@ -188,11 +188,15 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
     }
   }
 
-  // A path may hold its own snapshot, or a text this sync wrote to a path with the same snapshot: through another path
-  // that names the same file (a link, a hard link, a name a case-insensitive file system folds), it is the sync's own
-  // write, and paths that name one file read one snapshot once the check above passed. Anything else, a text this sync
-  // wrote to a file with another snapshot included (a catalog copied onto another), is a save since, which this sync
-  // never writes over.
+  // A path may hold its own snapshot, a text this sync wrote to a path with the same snapshot, or a text this sync wrote
+  // to a path that was absent at the read. Through another path that names the same file (a link, a hard link, a name a
+  // case-insensitive file system folds), a text written over the same snapshot is the sync's own write, since paths that
+  // name one file read one snapshot once the check above passed. A write to an absent path may create a directory that
+  // makes it, or a later path, reach a file another path already names, and the sync cannot know which, so its text is
+  // the sync's own to every later write. Anything else, a text this sync wrote over another present snapshot included,
+  // is a save since, which this sync never writes over: a catalog a translator copies onto another mid-sync is kept
+  // when the copied catalog existed at the read. One the sync just created there is overwritten, since a content guard
+  // cannot tell that copy from a created directory's reach.
   const ownTexts = new Map<string | undefined, Set<string>>();
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
@@ -202,7 +206,7 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
       output.path,
       output.text,
       options.concurrentSave === "yield"
-        ? { _tag: "IfHoldsOneOf", texts: new Set([snapshot, ...own]) }
+        ? { _tag: "IfHoldsOneOf", texts: new Set([snapshot, ...own, ...(ownTexts.get(undefined) ?? [])]) }
         : { _tag: "Overwrite" }
     );
 
