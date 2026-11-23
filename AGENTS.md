@@ -9,7 +9,8 @@ behavior.
 
 - `packages/intl` is the runtime: `<T>`, `useT`, `msg()`, `useFormat()` and the parser-free
   formatter that reads compiled catalogs, with one subpath per host (`/core`, `/react`, `/server`,
-  `/next`, `/next/server`, `/start`). Public.
+  `/next`, `/next/server`, `/start`) and `/effect`, the `CurrentIntl` service for Effect programs (its optional
+  peer `effect` reaches no other subpath). Public.
 - `packages/intl-tools` is everything that runs at build time: the deny-by-default extractor, the
   `elmera-intl` CLI, PO catalogs and their compiler and loaders, the Vite and Next build plugins,
   the `elmera-intl/extractable` lint rule and the Vitest catalog check. Public.
@@ -40,9 +41,11 @@ Type-aware Oxlint runs on tsrs too. Lint and type-check read source, never `dist
 workspace export map has an `elmera-source` condition pointing at `src`, which `tooling/typescript`
 enables for TypeScript and the lint script passes to Node (`--conditions=elmera-source`) for the
 plugins Oxlint loads from source. Run Oxlint through `pnpm lint`, which sets that and
-`OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint`; neither needs a build. The e2e fixtures'
+`OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint`; neither needs a build. `pnpm lint` also runs `pnpm lint:effect`,
+the Effect diagnostics over the whole workspace (they fire only on Effect values), through the Effect-patched oxlint (`.oxlintrc.effect.json`;
+tooling/typescript/effect.json holds the same rules for the editor). The e2e fixtures'
 `type-check` drops the condition (`--customConditions null`) to read the built declarations, as
-consumers do. Development needs macOS or Linux.
+consumers do. Development needs macOS or glibc-based Linux: the Effect-patched binaries `lint:effect` runs do not support musl.
 
 Run commands from the repository root unless stated otherwise.
 
@@ -132,7 +135,8 @@ versions through the Version Packages PR ([CONTRIBUTING.md](CONTRIBUTING.md#rele
 its `LICENSE` and a `NOTICE` with the licenses of the third-party code in its `dist`, declarations
 included: the runtime's covers next-intl's relative-time rules and intl-messageformat and its
 `@formatjs` dependencies bundled into the formatter; the tools' covers the `@oxlint/plugins`,
-`type-fest` and `@types/json-schema` declarations inlined into `dist/oxlint.d.ts`. Code copied or
+`type-fest` and `@types/json-schema` declarations inlined into `dist/oxlint.d.ts`, and po-parser, whose
+PO reader and writer its codec ports (`test/po-conformance/LICENSE-po-parser` beside the ported tests). Code copied or
 bundled from another project gets an entry there (check the `//#region` paths in `dist` after a
 dependency or bundling change), or beside the files when only tests carry it
 (`test/conformance/LICENSE-next-intl`). Every runtime export is listed in its package's

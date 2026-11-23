@@ -81,10 +81,10 @@
   "dependencies": {
     "@elmeragroup/intl": "workspace:*",
     "@jridgewell/trace-mapping": "catalog:",
+    "effect": "catalog:",
     "intl-messageformat": "catalog:",
     "oxc-parser": "catalog:",
-    "oxc-transform": "catalog:",
-    "po-parser": "catalog:"
+    "oxc-transform": "catalog:"
   },
   "peerDependencies": {
     "next": ">=16.4.0",

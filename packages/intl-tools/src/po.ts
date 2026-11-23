@@ -1,9 +1,12 @@
 // PO catalog files: the translator-facing source of truth (msgid = English source, msgctxt = context, `#.` = what a
 // positional tag stands for, `#:` = files that use the message, without line numbers so edits do not churn them).
-import type { Entry as PoParserEntry } from "po-parser";
-import POParser from "po-parser";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 
 import { keyOf, SERIALIZER_VERSION } from "@elmeragroup/intl/internal/message";
+
+import type { PoMessage } from "./po-document.ts";
+import { PoText } from "./po-text.ts";
 
 /** One message in a locale's catalog. */
 export type PoEntry = {
@@ -34,6 +37,9 @@ export type PoParseError = { readonly _tag: "PoParseError"; readonly reason: str
 /** The header field naming the serializer version a catalog was keyed with. */
 export const SERIALIZER_HEADER = "X-Elmera-Serializer";
 
+const decodePoText = /* @__PURE__ */ Schema.decodeResult(PoText);
+const encodePoText = /* @__PURE__ */ Schema.encodeSync(PoText);
+
 /**
  * Parse PO text.
  *
@@ -41,77 +47,26 @@ export const SERIALIZER_HEADER = "X-Elmera-Serializer";
  * @returns The catalog, or why it is not a PO file this tool reads.
  */
 export function parsePo(text: string): { readonly _tag: "Parsed"; readonly file: PoFile } | PoParseError {
-  let parsed: ReturnType<typeof POParser.parse>;
-  try {
-    parsed = POParser.parse(toParserDialect(text));
-  } catch (error) {
-    return { _tag: "PoParseError", reason: error instanceof Error ? error.message : String(error) };
+  const decoded = decodePoText(text);
+
+  if (Result.isFailure(decoded)) {
+    return { _tag: "PoParseError", reason: decoded.failure.message };
   }
 
-  const entries = (parsed.messages ?? []).map((entry): PoEntry => ({
-    source: entry.msgid,
-    context: entry.msgctxt === "" ? undefined : entry.msgctxt,
-    translation: entry.msgstr,
-    references: (entry.references ?? []).map((reference) => reference.path),
-    comments: entry.extractedComments ?? [],
-    flags: entry.flags ?? [],
+  const { header = {}, messages } = decoded.success;
+  const entries = messages.map((message): PoEntry => ({
+    source: message.id,
+    context: message.context === "" ? undefined : message.context,
+    translation: message.translation,
+    references: message.references.map((reference) => reference.path),
+    comments: message.extractedComments,
+    flags: message.flags,
   }));
 
-  return { _tag: "Parsed", file: { meta: parsed.meta ?? {}, entries } };
+  return { _tag: "Parsed", file: { meta: header, entries } };
 }
 
-const FLAG_LINE = "#, ";
-const OBSOLETE = "#~";
 const FUZZY = "fuzzy";
-const KEYWORD = /^msg\w*/u;
-
-// po-parser ends an entry only at a blank line, reads a comment-only block as a broken entry, gives an entry only its
-// last `#,` line, and gives an obsolete (`#~`) entry's comments to the next entry. GNU msgcat ends an entry where the
-// next starts (`msgctxt`, or `msgid` not after one), gives every comment to the entry it precedes, across blank lines,
-// reads every `#,` line, and drops comments after the last entry. Rewrite to po-parser's dialect: comments held until
-// their entry starts, one blank line between entries, one `#,` line each, obsolete entries dropped with their comments.
-function toParserDialect(text: string): string {
-  const lines: Array<string> = [];
-  let comments: Array<string> = [];
-  let keyword: string | undefined;
-
-  for (const line of text.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith(OBSOLETE)) {
-      comments = [];
-      continue;
-    }
-
-    if (trimmed.startsWith("#")) {
-      const flagLine = comments.findIndex((comment) => comment.startsWith(FLAG_LINE));
-
-      if (trimmed.startsWith(FLAG_LINE) && flagLine !== -1) {
-        comments[flagLine] = `${comments[flagLine]}, ${trimmed.slice(FLAG_LINE.length)}`;
-      } else {
-        comments.push(trimmed.startsWith(FLAG_LINE) ? trimmed : line);
-      }
-
-      continue;
-    }
-
-    if (trimmed === "") {
-      continue;
-    }
-
-    const next = KEYWORD.exec(trimmed)?.[0];
-
-    if (next === "msgctxt" || (next === "msgid" && keyword !== "msgctxt")) {
-      lines.push(...(lines.length === 0 ? [] : [""]), ...comments);
-      comments = [];
-    }
-
-    keyword = next ?? keyword;
-    lines.push(line);
-  }
-
-  return lines.join("\n");
-}
 
 // GNU msgcat's form: one `#,` line, `fuzzy` first. It drops flags it does not know; code-point order keeps ours stable.
 function canonicalFlags(flags: ReadonlyArray<string>): Array<string> {
@@ -128,29 +83,25 @@ function canonicalFlags(flags: ReadonlyArray<string>): Array<string> {
  * @returns PO text ending in a newline.
  */
 export function formatPo(locale: string, entries: ReadonlyArray<PoEntry>): string {
-  const messages = entries.toSorted(compareEntries).map((entry) => {
-    const message: PoParserEntry = {
-      msgid: entry.source,
-      msgstr: entry.translation,
+  const messages = entries.toSorted(compareEntries).map((entry): typeof PoMessage.Type => {
+    const message: typeof PoMessage.Type = {
+      id: entry.source,
+      translation: entry.translation,
       references: entry.references.map((path) => ({ path })),
-      extractedComments: [...entry.comments],
+      extractedComments: entry.comments,
       flags: canonicalFlags(entry.flags),
     };
 
-    if (entry.context !== undefined) {
-      message.msgctxt = entry.context;
-    }
-
-    return message;
+    return entry.context === undefined ? message : { ...message, context: entry.context };
   });
-  const meta = {
+  const header = {
     "Content-Type": "text/plain; charset=utf-8",
     "Content-Transfer-Encoding": "8bit",
     Language: locale,
     [SERIALIZER_HEADER]: SERIALIZER_VERSION,
   };
 
-  return POParser.serialize({ meta, messages });
+  return encodePoText({ header, messages });
 }
 
 /** A message the sources declare, as a catalog entry needs it. */

@@ -130,7 +130,7 @@ function importsPackageIn(program: Program): boolean {
   );
 }
 
-type Use = { readonly parent: Node | undefined; readonly child: Node | undefined };
+type Use = { readonly parent: Node | undefined; readonly child: Node | undefined; readonly index: number };
 type PendingFailure = { readonly message: string; readonly offset: number };
 
 // One file's walk. Names resolve through the scope tree; the walk itself only tracks where it is (current scope,
@@ -261,17 +261,18 @@ class Extraction {
     return name._tag === "Static" ? name.name : undefined;
   }
 
-  // The nearest ancestor of the visited node that is not one of `transparent`, and its child on the way down.
-  private useOf(transparent: ReadonlySet<string>): Use {
-    for (let i = this.ancestors.length - 2; i >= 0; i -= 1) {
+  // The nearest ancestor of the visited node (or of the ancestor at `from`) that is not one of `transparent`, its child
+  // on the way down, and its index among the ancestors.
+  private useOf(transparent: ReadonlySet<string>, from = this.ancestors.length - 1): Use {
+    for (let i = from - 1; i >= 0; i -= 1) {
       const ancestor = this.ancestors[i];
 
       if (ancestor && !transparent.has(ancestor.type)) {
-        return { parent: ancestor, child: this.ancestors[i + 1] };
+        return { parent: ancestor, child: this.ancestors[i + 1], index: i };
       }
     }
 
-    return { parent: undefined, child: undefined };
+    return { parent: undefined, child: undefined, index: -1 };
   }
 
   private visit(node: Node, parent: Node | undefined): void {
@@ -342,8 +343,35 @@ class Extraction {
     this.ancestors.pop();
   }
 
+  // `CurrentIntl` is read only as `yield* CurrentIntl` and provided only by calling `.layer(…)` or `.provide(…)`: any
+  // other read (`.use`, `Effect.map(CurrentIntl, …)`, an alias) reaches the translator where extraction cannot see it.
+  private checkService(name: string, node: Node): void {
+    const { parent, child, index } = this.useOf(VALUE_TRANSPARENT);
+    const yielded = parent?.type === "YieldExpression" && parent.delegate && parent.argument === child;
+    const member =
+      parent?.type === "MemberExpression" && parent.object === child
+        ? this.staticMemberName(parent)
+        : undefined;
+    const call =
+      member === "layer" || member === "provide" ? this.useOf(VALUE_TRANSPARENT, index) : undefined;
+    const provided = call?.parent?.type === "CallExpression" && call.parent.callee === call.child;
+
+    if (!yielded && !provided) {
+      this.fail(
+        node,
+        `\`${name}\` is only read with \`yield* ${name}\` and provided with \`.layer(…)\` or \`.provide(…)\`, so extraction sees every translator; read the translator with \`const { t } = yield* CurrentIntl\``
+      );
+    }
+  }
+
   // A package binding or a bound t may only be called, aliased or (for t) used as t.from; IntlInstance objects may flow.
   private checkIdentifier(name: string, node: Node, parent: Node): void {
+    if (this.bindings.isService(node, this.scope)) {
+      this.checkService(name, node);
+
+      return;
+    }
+
     const called =
       parent.type === "CallExpression" &&
       (parent.callee === node || (this.isJsxCall(parent) && parent.arguments[0] === node));
@@ -667,7 +695,7 @@ class Extraction {
       const receiver = this.code.slice(callee.object.start, callee.object.end);
       this.fail(
         node,
-        `cannot trace \`${receiver}\` to useIntl(), getIntl() or createIntl() in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``
+        `cannot trace \`${receiver}\` to useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\` in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``
       );
 
       return;

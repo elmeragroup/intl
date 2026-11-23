@@ -1,11 +1,14 @@
 import { isValidElement } from "react";
 
+import * as Effect from "effect/Effect";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, describe, expect, it } from "vitest";
 
+import type { Catalog } from "@elmeragroup/intl/core";
+import { CurrentIntl } from "@elmeragroup/intl/effect";
 import { hashKey } from "@elmeragroup/intl/internal/message";
 import { IntlProvider } from "@elmeragroup/intl/react";
 
@@ -435,20 +438,10 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function runtimeKeys(index: number, code: string): Promise<Array<string>> {
-  const file = pathToFileURL(join(dir, `row-${index}.tsx`));
-  writeFileSync(file, HEADER + code);
-  // A module namespace has a null prototype, so Object() boxes nothing and `in` narrows it.
-  const loaded: unknown = await import(/* @vite-ignore */ file.href);
-  const imported = new Object(loaded);
-  const el = "el" in imported ? imported.el : undefined;
-
-  if (!isValidElement(el)) {
-    throw new Error(`row ${index} exports no element`);
-  }
-
+// A catalog with no entries that records each wire key the runtime looks up: lookups test own properties of the
+// entries (`Object.hasOwn`), which reaches this trap with the wire key.
+function recordingCatalog() {
   const keys: Array<string> = [];
-  // Lookups test own properties of the entries (`Object.hasOwn`), which reaches this trap with the wire key.
   const entries = new Proxy<Record<string, never>>(
     {},
     {
@@ -465,7 +458,30 @@ async function runtimeKeys(index: number, code: string): Promise<Array<string>> 
     throw compiled;
   }
 
-  const catalog = { ...compiled.catalog, m: entries };
+  const catalog: Catalog = { ...compiled.catalog, m: entries };
+
+  return { catalog, keys };
+}
+
+// The row written to disk and imported, so the runtime runs the text the extractor read.
+async function importRow(name: string, code: string): Promise<object> {
+  const file = pathToFileURL(join(dir, `${name}.tsx`));
+  writeFileSync(file, code);
+  // A module namespace has a null prototype, so Object() boxes nothing and `in` narrows it.
+  const loaded: unknown = await import(/* @vite-ignore */ file.href);
+
+  return new Object(loaded);
+}
+
+async function runtimeKeys(index: number, code: string): Promise<ReadonlyArray<string>> {
+  const imported = await importRow(`row-${index}`, HEADER + code);
+  const el = "el" in imported ? imported.el : undefined;
+
+  if (!isValidElement(el)) {
+    throw new Error(`row ${index} exports no element`);
+  }
+
+  const { catalog, keys } = recordingCatalog();
   renderToStaticMarkup(
     <IntlProvider locale="nb" catalog={catalog} timeZone="UTC">
       {el}
@@ -497,5 +513,46 @@ describe("extractor and runtime agree", () => {
     expect(await runtimeKeys(i, row.code)).toEqual(
       ("keys" in row ? row.keys : row.misses).map((key) => hashKey(key))
     );
+  });
+});
+
+// The Effect service's read forms, in one generator: destructured `{ t }`, `(yield* CurrentIntl).t` and a renamed
+// import, extracted and then run with the service provided.
+const EFFECT_ROW = `import * as Effect from "effect/Effect";
+import { CurrentIntl, CurrentIntl as Translator } from "@elmeragroup/intl/effect";
+export const program = Effect.gen(function* () {
+  const { t } = yield* CurrentIntl;
+  const intl = yield* Translator;
+  return [t("Hello, {name}", { name: "Ada" }), (yield* CurrentIntl).t("Inline"), intl.t("Renamed")];
+});
+`;
+
+// Unit under test: the extractor and the runtime lookup on an Effect program's text. Oracle: the hand-written keys both
+// must produce, the runtime's as their wire keys.
+describe("extractor and runtime agree on the Effect service", () => {
+  it("extracts and looks up the same keys", async () => {
+    const expected = ["Hello, {name}", "Inline", "Renamed"];
+    const extracted = extractMessages("effect-row.tsx", EFFECT_ROW);
+    expect(
+      extracted._tag === "Extracted" ? extracted.messages.map((m) => m.key) : extracted.failures
+    ).toEqual(expected);
+
+    const imported = await importRow("effect-row", EFFECT_ROW);
+    const program = "program" in imported ? imported.program : undefined;
+
+    if (!Effect.isEffect(program)) {
+      throw new Error("the Effect row exports no program");
+    }
+
+    const { catalog, keys } = recordingCatalog();
+    // SAFETY: EFFECT_ROW's program reads only CurrentIntl and cannot fail, which the type of its source states; the
+    // dynamic import loses that type.
+    // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off anyUnknownInErrorContext:off - the SAFETY reason above
+    const needsIntl = program as Effect.Effect<unknown, never, CurrentIntl>;
+    Effect.runSync(
+      needsIntl.pipe(Effect.provide(CurrentIntl.layer({ locale: "nb", catalog, timeZone: "UTC" })))
+    );
+
+    expect(keys).toEqual(expected.map((key) => hashKey(key)));
   });
 });

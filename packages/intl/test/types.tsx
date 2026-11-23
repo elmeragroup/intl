@@ -1,6 +1,10 @@
 // Type-check only (never executed; `pnpm type-check` covers test/): tsrs fails if a @ts-expect-error stops firing.
-import type { Descriptor } from "@elmeragroup/intl/core";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+
+import type { CreateIntlOptions, Descriptor } from "@elmeragroup/intl/core";
 import { createIntl, msg } from "@elmeragroup/intl/core";
+import { CurrentIntl } from "@elmeragroup/intl/effect";
 import { Select, Val } from "@elmeragroup/intl/react";
 
 import { english } from "./catalogs";
@@ -76,3 +80,31 @@ intl.t.from(msg("{v}"), { v: null });
 <Select kind={1} _a="A" other="O" />;
 // @ts-expect-error a branch is text
 <Select kind="a" _a={1} other="O" />;
+
+// The Effect service: `yield* CurrentIntl` is the IntlInstance, so `t` is typed from its literal as above.
+const greet = Effect.gen(function* () {
+  const { t } = yield* CurrentIntl;
+  // @ts-expect-error a plain {x} takes text, read through the Effect service too
+  t("Hello, {name}", { name: 1 });
+
+  return t("Hello, {name}", { name: "Ada" });
+});
+// CurrentIntl.provide takes the options effect's E and R, and removes CurrentIntl from what the handler requires.
+class RequestCookie extends Context.Service<RequestCookie, string>()("RequestCookie") {}
+declare const intlOptions: Effect.Effect<CreateIntlOptions, "CatalogUnavailable", RequestCookie>;
+const provided = greet.pipe(CurrentIntl.provide(intlOptions));
+const _inferred: Effect.Effect<string, "CatalogUnavailable", RequestCookie> = provided;
+// @ts-expect-error the options effect's requirement stays until the request provides it
+// @effect-diagnostics-next-line missingEffectContext:off - a type test: the @ts-expect-error above is the assertion
+const _unprovided: Effect.Effect<string, "CatalogUnavailable"> = provided;
+const served = provided.pipe(Effect.provideService(RequestCookie, "nb"));
+const _complete: Effect.Effect<string, "CatalogUnavailable"> = served;
+// @ts-expect-error the options effect's failure stays in E
+// @effect-diagnostics-next-line missingEffectError:off - a type test: the @ts-expect-error above is the assertion
+const _infallible: Effect.Effect<string> = served;
+// @ts-expect-error without CurrentIntl.provide the handler still requires CurrentIntl
+// @effect-diagnostics-next-line missingEffectContext:off - a type test: the @ts-expect-error above is the assertion
+const _unserved: Effect.Effect<string> = greet;
+// CurrentIntl.layer discharges the CurrentIntl requirement and adds neither a failure nor a requirement of its own.
+declare const fixedOptions: CreateIntlOptions;
+const _fixed: Effect.Effect<string> = Effect.provide(greet, CurrentIntl.layer(fixedOptions));

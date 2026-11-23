@@ -6,13 +6,13 @@ parser formats the compiled catalogs per locale.
 
 ## Packages
 
-| Package                                          | Purpose                                                                                                   |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| [`@elmeragroup/intl`](packages/intl)             | The runtime: `<T>`, `useT`, `msg()`, `useFormat()`, and one adapter per host (Next.js, TanStack Start).   |
-| [`@elmeragroup/intl-tools`](packages/intl-tools) | Build time: the extractor, the `elmera-intl` CLI, PO catalogs, the compiler, build plugins and lint.      |
-| [`packages/intl-e2e`](packages/intl-e2e)         | Private. Fixture apps per host and their Playwright gates, on linked and on packed packages.              |
-| `tooling/typescript`                             | Private. Shared TypeScript configuration.                                                                 |
-| `tooling/lint`                                   | Private. The workspace's own contracts as lint: the `elmera-workspace` oxlint plugin and manifest checks. |
+| Package                                          | Purpose                                                                                                                           |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| [`@elmeragroup/intl`](packages/intl)             | The runtime: `<T>`, `useT`, `msg()`, `useFormat()`, one adapter per host (Next.js, TanStack Start), and `CurrentIntl` for Effect. |
+| [`@elmeragroup/intl-tools`](packages/intl-tools) | Build time: the extractor, the `elmera-intl` CLI, PO catalogs, the compiler, build plugins and lint.                              |
+| [`packages/intl-e2e`](packages/intl-e2e)         | Private. Fixture apps per host and their Playwright gates, on linked and on packed packages.                                      |
+| `tooling/typescript`                             | Private. Shared TypeScript configuration.                                                                                         |
+| `tooling/lint`                                   | Private. The workspace's own contracts as lint: the `elmera-workspace` oxlint plugin and manifest checks.                         |
 
 Apps depend on `@elmeragroup/intl` and take `@elmeragroup/intl-tools` as a devDependency. The two
 publish together under one version, with provenance, from `main`: a canary for each merge that leaves
@@ -35,7 +35,7 @@ V=$(npm view @elmeragroup/intl-tools@canary version) &&
 
 ## Development
 
-Requires macOS or Linux. Use the Node version in `.node-version` and the pnpm version in
+Requires macOS or glibc-based Linux (the Effect lint pass does not run on musl). Use the Node version in `.node-version` and the pnpm version in
 `package.json`; pnpm downloads the pinned Node when it is missing.
 
 ```sh

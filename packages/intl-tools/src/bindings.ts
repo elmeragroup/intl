@@ -46,6 +46,8 @@ const FACTORY_KINDS: ReadonlyMap<string, "t" | "intl"> = new Map([
   ["getIntl", "intl"],
   ["createIntl", "intl"],
 ]);
+// The Effect service `yield*` reads an IntlInstance from, and the subpath it is imported from.
+const SERVICE = { imported: "CurrentIntl", source: "@elmeragroup/intl/effect" } as const;
 // A const key resolves through at most this many const aliases.
 const MAX_ALIAS_DEPTH = 16;
 
@@ -128,6 +130,13 @@ export class Bindings {
         : "other";
     }
 
+    // `yield* CurrentIntl` reads the IntlInstance the Effect service holds.
+    if (value?.type === "YieldExpression") {
+      return value.delegate && this.isService(unwrap(value.argument, VALUE_TRANSPARENT), scope)
+        ? "intl"
+        : "other";
+    }
+
     if (value?.type !== "CallExpression") {
       return "other";
     }
@@ -180,6 +189,20 @@ export class Bindings {
     const declaration = resolveName(scope, node.name)?.declarations[0];
 
     return declaration?._tag === "Import" ? declaration : undefined;
+  }
+
+  /**
+   * Whether an identifier is the Effect service `CurrentIntl`: its import from `@elmeragroup/intl/effect`, renamed or
+   * not. A local binding that shadows it is not.
+   *
+   * @param node - The expression.
+   * @param scope - The scope it is evaluated in.
+   * @returns `true` for the service's import.
+   */
+  isService(node: Node | null | undefined, scope: Scope): boolean {
+    const imported = this.importOf(node, scope);
+
+    return imported?.source === SERVICE.source && imported.imported === SERVICE.imported;
   }
 
   /**

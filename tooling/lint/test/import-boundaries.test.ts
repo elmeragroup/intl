@@ -2,8 +2,8 @@ import { importBoundaries } from "../src/rules/import-boundaries.ts";
 import { createTester, fixture } from "./rule-tester.ts";
 
 // Unit under test: elmera-workspace/import-boundaries. Oracle: the dependency direction intl-e2e → intl-tools → intl
-// and the fixture manifests (runtime: intl-messageformat, peer react, dev @types/react; tools: @elmeragroup/intl,
-// oxc-parser, dev @oxlint/plugins), per case.
+// and the fixture manifests (runtime: intl-messageformat, peers react and effect, dev @types/react; tools:
+// @elmeragroup/intl, oxc-parser, dev @oxlint/plugins), per case.
 createTester().run("import-boundaries", importBoundaries, {
   valid: [
     {
@@ -23,6 +23,17 @@ createTester().run("import-boundaries", importBoundaries, {
       code: `import { keyOf } from "@elmeragroup/intl/internal/message";\nimport { parseSync } from "oxc-parser";\nimport type { Rule } from "@oxlint/plugins";\nimport { readFileSync } from "node:fs";`,
       filename: fixture("tools/src/extract.ts"),
     },
+    // The /effect entry imports the optional peer, by its root and its modules; the runtime's tests may too.
+    {
+      code: `import * as Effect from "effect/Effect";\nimport { Layer } from "effect";\nimport { createIntl } from "./intl";`,
+      filename: fixture("runtime/src/effect.ts"),
+    },
+    {
+      code: `import * as ManagedRuntime from "effect/ManagedRuntime";\nimport { CurrentIntl } from "@elmeragroup/intl/effect";`,
+      filename: fixture("runtime/test/effect.test.ts"),
+    },
+    // A module named like the entry elsewhere in src is not it.
+    { code: `import { x } from "./effect";`, filename: fixture("runtime/src/start/index.ts") },
     // Tests may use what their package's test config provides.
     {
       code: `import { compileCatalog } from "#compile";\nimport { describe } from "vitest";\nimport { join } from "node:path";`,
@@ -68,6 +79,34 @@ createTester().run("import-boundaries", importBoundaries, {
       code: `import { corpus } from "#corpus";`,
       filename: fixture("tools/src/a.ts"),
       errors: [{ messageId: "outside" }],
+    },
+    // Nor may another runtime module reach the /effect entry, whose declarations import effect: relatively, by the
+    // package's own specifier, or for its types alone.
+    {
+      code: `export type { CurrentIntl } from "./effect";`,
+      filename: fixture("runtime/src/core.ts"),
+      errors: [{ messageId: "effectEntry", data: { specifier: "./effect" } }],
+    },
+    {
+      code: `import { CurrentIntl } from "../effect.ts";`,
+      filename: fixture("runtime/src/next/server.ts"),
+      errors: [{ messageId: "effectEntry", data: { specifier: "../effect.ts" } }],
+    },
+    {
+      code: `import type { CurrentIntl } from "@elmeragroup/intl/effect";`,
+      filename: fixture("runtime/src/server.ts"),
+      errors: [{ messageId: "effectEntry", data: { specifier: "@elmeragroup/intl/effect" } }],
+    },
+    // Any other runtime module would make the optional peer required: by a module path, the root, or types alone.
+    {
+      code: `import * as Effect from "effect/Effect";`,
+      filename: fixture("runtime/src/server.ts"),
+      errors: [{ messageId: "effect", data: { specifier: "effect/Effect" } }],
+    },
+    {
+      code: `import type { Effect } from "effect";`,
+      filename: fixture("runtime/src/effect/helpers.ts"),
+      errors: [{ messageId: "effect", data: { specifier: "effect" } }],
     },
     {
       code: `import { createRoot } from "react-dom/client";`,

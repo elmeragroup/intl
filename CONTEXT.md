@@ -47,6 +47,12 @@ The framework an app runs on (Next.js, TanStack Start). Each host has one subpat
 runtime and one build plugin in the tools.
 _Avoid_: platform, integration
 
+**CurrentIntl**:
+The Effect service `@elmeragroup/intl/effect` exports: its value is the request's or job's `IntlInstance`, read with
+`const { t } = yield* CurrentIntl` and provided per request by `CurrentIntl.provide(options)` or once by
+`CurrentIntl.layer(options)`.
+_Avoid_: Intl (it shadows the global), translator service
+
 **Fixture app**:
 A minimal app per host in `packages/intl-e2e`, built and driven by Playwright to prove the packages
 work as a consumer gets them.

@@ -29,6 +29,7 @@ export default defineConfig([
       next: "src/next.tsx",
       "next-server": "src/next-server.ts",
       start: "src/start.tsx",
+      effect: "src/effect.ts",
       "internal/catalog": "src/catalog.ts",
       "internal/icu": "src/icu.ts",
       "internal/message": "src/message.ts",

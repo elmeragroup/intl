@@ -1,6 +1,7 @@
 import { instanceNames } from "../src/rules/instance-names.ts";
 import { createTester } from "./rule-tester.ts";
 
+const effect = `import * as Effect from "effect/Effect";\nimport { CurrentIntl } from "@elmeragroup/intl/effect";\n`;
 const pre = `import { createIntl, useFormat, useIntl, useT } from "@elmeragroup/intl/react";\nimport { getFormat, getIntl, getT } from "@elmeragroup/intl/server";\n`;
 
 // Unit under test: elmera-workspace/instance-names. Oracle: the naming contract per case: what holds an IntlInstance
@@ -39,8 +40,43 @@ createTester().run("instance-names", instanceNames, {
       code: `${pre}export function A() { const { t, locale } = useIntl(); const other = useOther(); return [t, locale, other]; }`,
       filename: "d.tsx",
     },
+    // `yield* CurrentIntl` reads an instance: `intl`, or `{ t }` destructured from it. A plain `yield` and another
+    // service of the same name are not it.
+    {
+      code: `${effect}export const f = Effect.gen(function* () { const intl = yield* CurrentIntl; const { t } = yield* CurrentIntl; return [intl, t]; });`,
+      filename: "effect.ts",
+    },
+    {
+      code: `${effect}export const f = Effect.gen(function* () { const translator = yield CurrentIntl; return translator; });`,
+      filename: "plain-yield.ts",
+    },
+    {
+      code: `import * as Effect from "effect/Effect";\nimport { CurrentIntl } from "./services";\nexport const f = Effect.gen(function* () { const translator = yield* CurrentIntl; return translator; });`,
+      filename: "other-service.ts",
+    },
   ],
   invalid: [
+    {
+      code: `${effect}export const f = Effect.gen(function* () { const translator = yield* CurrentIntl; return translator; });`,
+      filename: "translator.ts",
+      errors: [
+        {
+          messageId: "rename",
+          data: { name: "translator", source: "yield* CurrentIntl", role: "intl", suffix: "Intl" },
+        },
+      ],
+    },
+    // A renamed import is the same service, and `.format` read off what it yields is the formatter.
+    {
+      code: `import * as Effect from "effect/Effect";\nimport { CurrentIntl as Translator } from "@elmeragroup/intl/effect";\nexport const f = Effect.gen(function* () { const intl = yield* (Translator); const fmt = intl.format; return fmt; });`,
+      filename: "renamed.ts",
+      errors: [
+        {
+          messageId: "rename",
+          data: { name: "fmt", source: "intl.format", role: "format", suffix: "Format" },
+        },
+      ],
+    },
     // The runtime's factory under an alias is still the runtime's.
     {
       code: `import { createIntl as make } from "@elmeragroup/intl/core";\nexport const nb = make(config);`,

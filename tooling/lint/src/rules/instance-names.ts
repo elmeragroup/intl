@@ -2,10 +2,11 @@
 // `t`: the names the API's own fields and hooks use, so a call site reads the same in every file. A scope holding
 // several (a test comparing locales) names each with the role as its suffix, such as nbIntl or osloFormat. A factory
 // is the runtime's only when its binding resolves to an import from `@elmeragroup/intl/*` (an alias or a namespace
-// member counts; a local or shadowing function of the same name does not), as the extractor traces it.
+// member counts; a local or shadowing function of the same name does not), as the extractor traces it. On Effect,
+// `yield* CurrentIntl` (the service imported from `@elmeragroup/intl/effect`) holds an instance too.
 import type { ESTree, Rule } from "@oxlint/plugins";
 
-import { moduleExportName, resolveVariable, unwrap } from "../ast.ts";
+import { importOf, moduleExportName, resolveVariable, unwrap } from "../ast.ts";
 import { packageOf, pathInPackage, RUNTIME } from "../workspace.ts";
 
 type Role = "intl" | "format" | "t";
@@ -29,19 +30,16 @@ const SUFFIX = {
 
 type Found = { readonly role: Role; readonly source: string };
 
-// Whether an import declaration's source is the runtime: a `@elmeragroup/intl` subpath, or, inside the runtime's own
-// source, a relative module.
-function importsRuntime(declaration: ESTree.Node | null, runtimeSource: boolean): boolean {
-  if (declaration?.type !== "ImportDeclaration") {
-    return false;
-  }
+// The Effect service whose `yield*` reads the instance, and the subpath it comes from.
+const SERVICE = "CurrentIntl";
+const SERVICE_SOURCE = `${RUNTIME}/effect`;
 
-  const source = declaration.source.value;
-
+// Whether an import's source is the runtime: a `@elmeragroup/intl` subpath, or, inside the runtime's own source, a
+// relative module.
+function isRuntimeSource(source: string, runtimeSource: boolean): boolean {
   return source === RUNTIME || source.startsWith(`${RUNTIME}/`) || (runtimeSource && source.startsWith("."));
 }
 
-/** Reports a variable bound to an instance, a formatter or a translate function under another name. */
 /** Reports a variable bound to an instance, a formatter or a translate function under another name. */
 export const instanceNames: Rule = {
   meta: {
@@ -62,39 +60,60 @@ export const instanceNames: Rule = {
 
     // The runtime factory a callee names: an import of it (aliased or not), or a member of a namespace import.
     function factoryOf(callee: ESTree.Expression): string | undefined {
-      if (callee.type === "Identifier") {
-        const definition = resolveVariable(sourceCode.getScope(callee), callee.name)?.defs[0];
-
-        if (definition?.type !== "ImportBinding" || !importsRuntime(definition.parent, runtimeSource)) {
-          return undefined;
-        }
-
-        const specifier = definition.node;
-
-        return specifier.type === "ImportSpecifier" ? moduleExportName(specifier.imported) : undefined;
-      }
-
-      if (
+      const named = callee.type === "Identifier" ? callee : undefined;
+      const member =
         callee.type === "MemberExpression" &&
         !callee.computed &&
         callee.property.type === "Identifier" &&
         callee.object.type === "Identifier"
-      ) {
-        const definition = resolveVariable(sourceCode.getScope(callee), callee.object.name)?.defs[0];
-
-        return definition?.type === "ImportBinding" &&
-          definition.node.type === "ImportNamespaceSpecifier" &&
-          importsRuntime(definition.parent, runtimeSource)
-          ? callee.property.name
+          ? { namespace: callee.object, name: callee.property.name }
           : undefined;
+      const identifier = named ?? member?.namespace;
+      const imported =
+        identifier === undefined ? undefined : importOf(sourceCode.getScope(identifier), identifier.name);
+
+      if (imported === undefined || !isRuntimeSource(imported.source, runtimeSource)) {
+        return undefined;
       }
 
-      return undefined;
+      if (member !== undefined) {
+        return imported.specifier.type === "ImportNamespaceSpecifier" ? member.name : undefined;
+      }
+
+      return imported.specifier.type === "ImportSpecifier"
+        ? moduleExportName(imported.specifier.imported)
+        : undefined;
     }
 
-    // The role a runtime factory's call (awaited or not) gives the value it returns.
+    // Whether an expression is the runtime's Effect service: its import (aliased or not), or, inside the runtime's own
+    // source, the import of a relative module. A namespace member (`yield* intlNs.CurrentIntl`) is not: the extractor
+    // rejects a namespace import of the runtime and does not trace it, and elmera-intl/extractable reports it.
+    function isService(expression: ESTree.Expression): boolean {
+      const value = unwrap(expression);
+
+      if (value.type !== "Identifier") {
+        return false;
+      }
+
+      const imported = importOf(sourceCode.getScope(value), value.name);
+
+      return (
+        imported !== undefined &&
+        (imported.source === SERVICE_SOURCE || (runtimeSource && imported.source.startsWith("."))) &&
+        imported.specifier.type === "ImportSpecifier" &&
+        moduleExportName(imported.specifier.imported) === SERVICE
+      );
+    }
+
+    // The role a runtime factory's call (awaited or not) gives the value it returns, or `yield* CurrentIntl` its read.
     function factoryRole(init: ESTree.Expression): Found | undefined {
       const value = unwrap(init);
+
+      if (value.type === "YieldExpression") {
+        return value.delegate && value.argument !== null && isService(value.argument)
+          ? { role: "intl", source: `yield* ${SERVICE}` }
+          : undefined;
+      }
       const called = value.type === "AwaitExpression" ? unwrap(value.argument) : value;
 
       if (called.type !== "CallExpression" || called.callee.type === "Super") {

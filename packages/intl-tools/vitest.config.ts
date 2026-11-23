@@ -22,6 +22,7 @@ export default defineConfig({
         replacement: runtime("src/react.tsx"),
       },
       { find: /^@elmeragroup\/intl\/server$/u, replacement: runtime("src/server.ts") },
+      { find: /^@elmeragroup\/intl\/effect$/u, replacement: runtime("src/effect.ts") },
       // The message corpus has one home, the runtime's tests; the extractor tests read the same file.
       { find: /^#corpus$/u, replacement: runtime("test/fixtures.tsx") },
     ],

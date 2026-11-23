@@ -13,6 +13,16 @@ this. Meeting this guide makes a PR eligible for merge. The code owner decides w
 Follow [Development](README.md#development) to set up the workspace. Read [AGENTS.md](AGENTS.md)
 for the package responsibilities, code conventions and checks.
 
+### Effect diagnostics in the editor
+
+Code that uses Effect values is checked by the Effect language service: `pnpm lint:effect`, part of
+`pnpm lint` and CI, runs its rules over the whole workspace through the Effect-patched oxlint. The committed editor settings
+keep the stock tsrs and oxlint, so they show none of these diagnostics. To see them while editing,
+point your editor's TypeScript server at the Effect-patched build:
+`pnpm exec effect-tsgo get-exe-path` prints its path, and `pnpm exec effect-tsgo setup` walks through
+the editor setup. The path is per machine, so it stays in your user settings. The patched build
+reads `tooling/typescript/effect.json`, the same rules as the gate.
+
 <a id="placement"></a>
 
 ## Ask first: intl or the consuming app?

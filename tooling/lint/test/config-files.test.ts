@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { catalogEntries, lintConfigFindings, parseJsonc } from "./config-files.ts";
+import { catalogEntries, effectPresetFindings, lintConfigFindings, parseJsonc } from "./config-files.ts";
 
 // Unit under test: the manifest test's config readers. Oracle: the JSON and YAML specifications, by hand-written
 // inputs whose parsed value is stated in each case.
@@ -80,5 +80,29 @@ describe("lintConfigFindings", () => {
     const config = `{ "rules": { /* Why a is off. */ "a": "off", "b": "error", "c": "off" } }`;
 
     expect(lintConfigFindings(config).unexplainedOffs).toEqual(["c"]);
+  });
+});
+
+describe("effectPresetFindings", () => {
+  it("names a warning, a suggestion and an uncommented off, and passes a commented run of offs", () => {
+    const preset = `{
+      "compilerOptions": {
+        "plugins": [{
+          "name": "@effect/language-service",
+          "diagnosticSeverity": {
+            "a": "error",
+            "b": "warning",
+            "c": "suggestion",
+            // Why d and e are off.
+            "d": "off",
+            "e": "off",
+            "f": "error",
+            "g": "off"
+          }
+        }]
+      }
+    }`;
+
+    expect(effectPresetFindings(preset)).toEqual({ unclear: ["b", "c"], unexplainedOffs: ["g"] });
   });
 });
