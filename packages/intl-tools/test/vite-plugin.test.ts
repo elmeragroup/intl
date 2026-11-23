@@ -423,8 +423,10 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       const before = watches();
       // A message the first sync adds, so the watch has started once its start settles.
       project.write("src/first.tsx", component("First"));
-      // A real dev server, for the config the plugin reads; the plugin's hooks are called below, as Vite would.
-      const server = await devServer(project, { plugins: [] });
+      // A real dev server, for the config the plugin reads; the plugin's hooks are called below, as Vite would. Its own
+      // file watcher is off: on Linux it opens a handle per directory and file shortly after the server starts, and
+      // keeps them until teardown, so only the plugin's watchers are counted.
+      const server = await devServer(project, { plugins: [], server: { watch: null } });
       const { configureServer, closeBundle } = hooksOf("elmera-intl:watch");
       expect([configureServer, closeBundle].map((hook) => hook === undefined)).toEqual([false, false]);
 
