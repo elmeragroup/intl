@@ -1,7 +1,6 @@
 // The `elmera-intl` executable's program: effect/cli parses the arguments into a command, a one-shot command runs
 // through command-run.ts (which the hosts call directly), and a watch runs until a signal stops it.
 
-import * as NodePath from "@effect/platform-node-shared/NodePath";
 import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
 import * as Cause from "effect/Cause";
 import * as CliConfig from "effect/cli/CliConfig";
@@ -13,9 +12,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Runtime from "effect/Runtime";
@@ -25,9 +25,10 @@ import * as Terminal from "effect/Terminal";
 import { relative, resolve } from "node:path";
 import process from "node:process";
 
-import { CatalogFiles } from "./catalog-files";
 import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
-import { CONFIG_FILE, loadConfig } from "./project-config";
+import { CONFIG_FILE } from "./project-config";
+import { readConfig } from "./project-config-read";
+import { projectServices } from "./project-services";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
@@ -264,9 +265,6 @@ export const cliProgram = /* @__PURE__ */ Effect.fn("elmera-intl")(
   )
 );
 
-// The watch lifts its still-synchronous config read into the program, until the commands layer makes it an effect; an
-// exception is a defect, as before.
-const watchConfig = (configPath: string) => Effect.sync(() => loadConfig(configPath));
 // The signals that stop the watch. On just before the watch starts (a one-shot command, or a config still being read,
 // keeps Node's default and ends at once), so they are on before the first sync, and off again when the watch's scope
 // closes, a failed start included. The first signal takes both off, so a second gets Node's default.
@@ -294,7 +292,7 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   mode: WatchMode
 ) {
   const reporter = yield* Reporter;
-  const loaded = yield* watchConfig(configPath);
+  const loaded = yield* readConfig(configPath);
 
   if (loaded._tag === "ConfigInvalid") {
     yield* printProblems([loaded.problem]);
@@ -330,8 +328,8 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
 });
 
 /**
- * The executable's program: the arguments from `Stdio`, the command's output on `io`, Node's catalog files, the extract and
- * Node's file events for a watch, provided once for the whole program, and a crash printed.
+ * The executable's program: the arguments from `Stdio`, the command's output on `io`, the project's services on Node,
+ * the extract and Node's file events for a watch, provided once for the whole program, and a crash printed.
  *
  * @param io - The process's working directory and output streams.
  * @returns The program to run as the process's main fiber; `exitCodeOf` reads its exit.
@@ -345,7 +343,7 @@ export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
     Effect.provide([
       CliPlatform,
       Reporter.layer(io),
-      Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()),
+      Layer.provideMerge(CatalogSync.layer(), projectServices()),
       FileEvents.layer(),
     ])
   );
@@ -374,31 +372,32 @@ export function exitCodeOf(exit: Exit.Exit<unknown, unknown>): number {
   return Predicate.hasProperty(failure, Runtime.errorExitCode) ? Runtime.getErrorExitCode(failure) : 2;
 }
 
-// A service the CLI does not use: its flags read no file, it prompts for nothing and spawns nothing. The layer that
-// first uses one provides its Node implementation instead (@effect/platform-node-shared).
+// A service effect/cli requires that its parsing never uses: its flags read no file, it prompts for nothing and spawns
+// nothing.
 const unused = (service: string) => Effect.die(`elmera-intl uses no ${service}`);
 
 /**
- * The services effect/cli requires of every program (`Command.Environment`): Node's `Stdio` (the process's arguments)
- * and `Path`, and the services the CLI does not use, each a defect if reached.
+ * The services effect/cli requires of every program (`Command.Environment`) that the project's services do not
+ * provide: Node's `Stdio` (the process's arguments), and stand-ins for the services its parsing never uses (a terminal
+ * and a child-process spawner, defects if reached). Its `FileSystem` and `Path` are the commands' own, from
+ * `projectServices()`, their one provider: no second file system can shadow the one the commands read through.
  */
-export const CliPlatform: Layer.Layer<Command.Environment> = /* @__PURE__ */ Layer.mergeAll(
-  NodeStdio.layer,
-  /* @__PURE__ */ FileSystem.layerNoop({}),
-  NodePath.layer,
-  /* @__PURE__ */ Layer.succeed(
-    Terminal.Terminal,
-    /* @__PURE__ */ Terminal.make({
-      columns: /* @__PURE__ */ unused("terminal"),
-      rows: /* @__PURE__ */ unused("terminal"),
-      size: /* @__PURE__ */ unused("terminal"),
-      readInput: /* @__PURE__ */ unused("terminal"),
-      readLine: /* @__PURE__ */ unused("terminal"),
-      display: () => unused("terminal"),
-    })
-  ),
-  /* @__PURE__ */ Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    /* @__PURE__ */ ChildProcessSpawner.make(() => unused("child process"))
-  )
-);
+export const CliPlatform: Layer.Layer<Exclude<Command.Environment, FileSystem.FileSystem | Path.Path>> =
+  /* @__PURE__ */ Layer.mergeAll(
+    NodeStdio.layer,
+    /* @__PURE__ */ Layer.succeed(
+      Terminal.Terminal,
+      /* @__PURE__ */ Terminal.make({
+        columns: /* @__PURE__ */ unused("terminal"),
+        rows: /* @__PURE__ */ unused("terminal"),
+        size: /* @__PURE__ */ unused("terminal"),
+        readInput: /* @__PURE__ */ unused("terminal"),
+        readLine: /* @__PURE__ */ unused("terminal"),
+        display: () => unused("terminal"),
+      })
+    ),
+    /* @__PURE__ */ Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      /* @__PURE__ */ ChildProcessSpawner.make(() => unused("child process"))
+    )
+  );

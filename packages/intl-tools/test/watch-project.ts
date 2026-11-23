@@ -1,8 +1,10 @@
+import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { makeMethods, test } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
@@ -14,12 +16,15 @@ import { CatalogFiles, ioFailureReason } from "../src/catalog-files";
 import type { ExtractOptions, ExtractResult } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
-import type { SyncResult, Watching, WatchMode, WatchOutput, WatchServices } from "../src/watch";
+import type { ProjectServices } from "../src/project-services";
+import { projectServices } from "../src/project-services";
+import type { SyncResult, SyncServices, Watching, WatchMode, WatchOutput, WatchServices } from "../src/watch";
 import { CatalogSync, SyncFailed, watchCatalogs } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
+import { SYNC_FILE_SYSTEM } from "./sync-file-system";
 
 // The watch tests' shared project and helpers: the executable's and in-process watches (`watch.test.ts`,
 // `watch-lifecycle.test.ts`), and the watch on the test clock: its timing (`watch-clock.test.ts`) and the saves it keeps
@@ -84,8 +89,9 @@ export function projectConfig(project: Project): ProjectConfig {
 }
 
 /**
- * A host's runtime for `watchProject`, as the Vite plugin makes one: `extractCatalogs` on Node's catalog files and
- * Node's file events, disposed when the test ends (after every cleanup registered later, such as a watch's close).
+ * A host's runtime for `watchProject`, as the Vite plugin makes one: `extractCatalogs` on the project's services on
+ * Node and Node's file events, disposed when the test ends (after every cleanup registered later, such as a watch's
+ * close).
  *
  * @param project - The project whose teardown disposes it.
  * @param events - The file events it provides; Node's unless a test delivers its own.
@@ -95,24 +101,53 @@ export function projectConfig(project: Project): ProjectConfig {
 export function hostRuntime(
   project: Project,
   events: Layer.Layer<FileEvents> = FileEvents.layer(),
-  sync: Layer.Layer<CatalogSync, never, CatalogFiles> = CatalogSync.layer()
+  sync: Layer.Layer<CatalogSync, never, SyncServices> = CatalogSync.layer()
 ): ManagedRuntime.ManagedRuntime<WatchServices, never> {
-  const runtime = ManagedRuntime.make(Layer.mergeAll(Layer.provide(sync, CatalogFiles.layer()), events));
+  const runtime = ManagedRuntime.make(Layer.mergeAll(Layer.provide(sync, projectServices()), events));
   project.defer(() => runtime.dispose());
 
   return runtime;
 }
 
 /**
- * The services a host provides a CLI program: Node's catalog files, and the sync's extract on them.
+ * The services a host provides a CLI program: the project's services on Node, and the sync's extract on them.
  *
  * @param sync - The sync's extract; `extractCatalogs` unless a test holds it.
  * @returns A layer providing both.
  */
 export function catalogServices(
-  sync: Layer.Layer<CatalogSync, never, CatalogFiles> = CatalogSync.layer()
-): Layer.Layer<CatalogSync | CatalogFiles> {
-  return Layer.provideMerge(sync, CatalogFiles.layer());
+  sync: Layer.Layer<CatalogSync, never, SyncServices> = CatalogSync.layer()
+): Layer.Layer<CatalogSync | ProjectServices> {
+  return Layer.provideMerge(sync, projectServices());
+}
+
+// The synchronous file system, with Node's paths.
+const SYNC_PLATFORM = Layer.merge(SYNC_FILE_SYSTEM, NodePath.layer);
+
+/**
+ * `catalogServices` built synchronously, on the synchronous file system (`SYNC_FILE_SYSTEM`) and Node's paths: a
+ * program forked on it runs up to its first suspension of its own, as when every read was synchronous. Node's services
+ * import the platform as they are built, a suspension before the program starts.
+ *
+ * @returns A layer providing the sync's extract and the commands' services.
+ */
+export function syncCatalogServices(): Layer.Layer<CatalogSync | ProjectServices> {
+  return Layer.provideMerge(CatalogSync.layer(), projectServices(CatalogFiles.layer(), SYNC_PLATFORM));
+}
+
+/**
+ * Node's catalog files, each operation wrapped by `wrap`: a test's hook after one of a command's storage operations.
+ *
+ * @param wrap - The operations, given the live ones.
+ * @returns A `CatalogFiles` layer running them.
+ */
+export function wrapped(
+  wrap: (live: CatalogFiles["Service"]) => CatalogFiles["Service"]
+): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> {
+  return Layer.effect(
+    CatalogFiles,
+    CatalogFiles.use((live) => Effect.succeed(wrap(live)))
+  ).pipe(Layer.provide(CatalogFiles.layer()));
 }
 
 /**
@@ -127,7 +162,7 @@ export function asSyncFailed(failure: ProjectIoFailed): SyncFailed {
 
 /**
  * The watch's sync step as `extract`, an effect a test can save in between a sync's read and its writes, or hold. It
- * runs on the host's catalog files, as `CatalogSync.layer()` does.
+ * runs on the host's services, as `CatalogSync.layer()` does.
  *
  * @param extract - The sync step.
  * @returns A `CatalogSync` layer running it.
@@ -136,17 +171,17 @@ export function syncing(
   extract: (
     config: ProjectConfig,
     options: ExtractOptions
-  ) => Effect.Effect<ExtractResult, ProjectIoFailed, CatalogFiles>
-): Layer.Layer<CatalogSync, never, CatalogFiles> {
+  ) => Effect.Effect<ExtractResult, ProjectIoFailed, SyncServices>
+): Layer.Layer<CatalogSync, never, SyncServices> {
   return Layer.effect(
     CatalogSync,
     Effect.gen(function* () {
-      const files = yield* CatalogFiles;
+      const services = yield* Effect.context<SyncServices>();
 
       return {
         extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
           return yield* extract(config, options).pipe(
-            Effect.provideService(CatalogFiles, files),
+            Effect.provideContext(services),
             Effect.mapError(asSyncFailed)
           );
         }),
@@ -195,9 +230,9 @@ export const woken = <A>(effect: Effect.Effect<A>): Effect.Effect<A> =>
 /** How `launchWatch` starts a watch. */
 export type ClockedWatchOptions = {
   /** The sync step; `CatalogSync.layer()` unless a test holds or changes it. */
-  readonly layer?: Layer.Layer<CatalogSync, never, CatalogFiles>;
+  readonly layer?: Layer.Layer<CatalogSync, never, SyncServices>;
   /** The catalog files the sync reads and writes; Node's unless a test stands between a sync's reads and writes. */
-  readonly files?: Layer.Layer<CatalogFiles>;
+  readonly files?: Layer.Layer<CatalogFiles, never, FileSystem.FileSystem>;
   /** Writes each result; records its tag unless a test writes it. */
   readonly report?: (result: SyncResult) => Effect.Effect<void>;
   /** The watch's clock; the test clock unless a test moves the wall clock alone. */
@@ -214,7 +249,8 @@ export type ClockedWatchOptions = {
 
 /**
  * Start the watch in a scope of its own inside the test's, with its sync step built in that scope so it lives as long
- * as the watch. It starts from a test-clock wake, so its poll and its debounce time from 1 ms.
+ * as the watch. It starts from a test-clock wake, so its poll and its debounce time from 1 ms. Its reads are Node's
+ * synchronous ones (`SYNC_FILE_SYSTEM`), so each sync completes within the clock's move.
  *
  * @param project - The watched project.
  * @param options - What the test changes about the watch.
@@ -230,7 +266,7 @@ export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
   const stop = options.stop ?? (yield* Deferred.make<void>());
   const services = yield* Layer.buildWithScope(
     Layer.merge(
-      Layer.provide(options.layer ?? CatalogSync.layer(), options.files ?? CatalogFiles.layer()),
+      Layer.provide(options.layer ?? CatalogSync.layer(), projectServices(options.files, SYNC_PLATFORM)),
       options.events ?? FileEvents.layer()
     ),
     scope

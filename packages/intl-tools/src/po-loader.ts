@@ -29,8 +29,9 @@ export default function poLoader(this: LoaderContext, po: string): void {
 
 // Calls the callback exactly once: with the module, or with the failure the import reports. A throw (a defect, or I/O
 // this does not classify) is passed on as loader-runner passes a synchronous throw after `this.async()`, as an Error
-// even when the thrown value is not one, so a `throw null` cannot read as success. A Promise, though the compile is
-// still synchronous, so a later layer can run it as an Effect program.
+// even when the thrown value is not one, so a `throw null` cannot read as success. The compile is synchronous: a loader
+// worker has no Effect runtime, so it reads the config and the formats module with Node's sync fs and keeps the formats
+// memo for the worker's life (project-formats.ts).
 async function run(
   context: LoaderContext,
   po: string,

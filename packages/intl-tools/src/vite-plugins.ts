@@ -9,7 +9,6 @@ import type { Environment, Plugin, ResolvedConfig } from "vite";
 
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
-import type { CatalogFiles } from "./catalog-files";
 import { catalogModule } from "./catalog-module";
 import { oneShot } from "./command-run";
 import { compileCatalog } from "./compile";
@@ -19,6 +18,7 @@ import { describeProblem } from "./problem";
 import { catalogLocale, catalogPath } from "./project-catalogs";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import { loadFormats } from "./project-formats";
+import type { ProjectServices } from "./project-services";
 import { Reporter } from "./reporter";
 import type { WatchMode, WatchServices } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
@@ -35,8 +35,8 @@ export type IntlPluginOptions = {
 
 const NAME = "elmera-intl";
 
-// What each session's runtime provides: the watch's services, and the catalog files the build's check reads.
-type PluginServices = WatchServices | CatalogFiles;
+// What each session's runtime provides: the watch's services, and the project's services the build's check runs on.
+type PluginServices = WatchServices | ProjectServices;
 
 /**
  * The `intl()` plugins, each session's runtime built from `services`: the catalog plugin, the dev server's watch and
@@ -239,9 +239,10 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
         return null;
       }
 
-      // A Promise for each catalog (every other id stays a synchronous null), so a later layer can compile behind an
-      // Effect program; the compile itself is still synchronous, and Promise.try turns this.error's throw into the
-      // hook's rejection.
+      // A Promise for each catalog (every other id stays a synchronous null); the compile is synchronous, as the loader's:
+      // `intlCatalogs` also runs alone (a Vitest config), with no session runtime, so it reads the config and the
+      // formats module with Node's sync fs and the process's formats memo. Promise.try turns this.error's throw into
+      // the hook's rejection.
       return Promise.try(() => {
         const loaded = loadConfig(resolve(this.environment.config.root, options.config ?? CONFIG_FILE));
 

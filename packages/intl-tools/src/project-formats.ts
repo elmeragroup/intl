@@ -1,5 +1,6 @@
 // The app's `formats` module, loaded as the runtime gets it. A leaf, so the loaders (Next's po-loader, Vite's `load`)
-// compile a catalog with the app's formats without loading the extractor.
+// compile a catalog with the app's formats without loading the extractor or Effect. Its evaluation and judgment are
+// shared with `ProjectFormats` (project-formats-service.ts), which loads them for the hosts' Effect runtimes.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
@@ -10,25 +11,36 @@ import type { Formats } from "@elmeragroup/intl/internal/icu";
 import type { Problem } from "./problem";
 import type { ProjectConfig } from "./project-config";
 
+/** The app's formats, or why its module does not provide them. */
+export type FormatsLoaded =
+  | { readonly _tag: "Formats"; readonly formats: Formats | undefined }
+  | { readonly _tag: "ConfigInvalid"; readonly problem: Problem };
+
 /**
  * Load the app's `formats` from the module the config names. Node loads it (type stripping for TypeScript), so the
  * module must import nothing at runtime: a `satisfies Formats` object, with type-only imports, whose options are
  * JSON values. Reloaded whenever the module's content changes, so a long-lived dev server or watch build validates
- * what the app now imports.
+ * what the app now imports. Synchronous, with a memo for the process: the loaders' path, which has no runtime.
  *
  * @param config - The project config.
  * @returns The formats (undefined when the config names none), or why the module does not provide them.
  */
-export function loadFormats(
-  config: ProjectConfig
-):
-  | { readonly _tag: "Formats"; readonly formats: Formats | undefined }
-  | { readonly _tag: "ConfigInvalid"; readonly problem: Problem } {
-  if (config.formats === undefined) {
-    return { _tag: "Formats", formats: undefined };
-  }
+export function loadFormats(config: ProjectConfig): FormatsLoaded {
+  return config.formats === undefined
+    ? { _tag: "Formats", formats: undefined }
+    : judgeFormats(config.root, config.formats, evaluateFormats(config.formats));
+}
 
-  const file = relative(config.root, config.formats);
+/**
+ * Judge an evaluation of the config's formats module: the formats, or the problem with them.
+ *
+ * @param root - The project root, which the problem names the module from.
+ * @param module - The module's absolute path.
+ * @param loaded - What evaluating it gave.
+ * @returns The formats, or the `FormatsInvalid` problem.
+ */
+export function judgeFormats(root: string, module: string, loaded: Evaluated): FormatsLoaded {
+  const file = relative(root, module);
   const invalid = (message: string) => ({
     _tag: "ConfigInvalid" as const,
     problem: {
@@ -38,8 +50,6 @@ export function loadFormats(
       file,
     },
   });
-  const loaded = evaluateFormats(config.formats);
-
   if (loaded._tag === "FormatsUnloadable") {
     return invalid(`cannot load: ${loaded.reason}`);
   }
@@ -103,45 +113,130 @@ const found = formats === undefined ? undefined : nonJson(formats, "formats");
 process.stdout.write(JSON.stringify(found === undefined ? { formats } : { nonJson: found }));
 `;
 
-// The last evaluation per module path, keyed by the content it evaluated: a per-process memo of a pure function of
-// that content, so an edit evaluates again and an unchanged module costs one read.
-const EVALUATED = new Map<string, { readonly content: string; readonly result: Evaluated }>();
+/** The last successful evaluation of each module path, keyed by the content it evaluated: never a failure. */
+export type FormatsMemo = Map<string, { readonly content: string; readonly result: EvaluatedFormats }>;
 
-type Evaluated =
-  | { readonly _tag: "Evaluated"; readonly exported: unknown; readonly nonJson: string | undefined }
-  | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
+/**
+ * The memo's evaluation of a module's content, if it kept one.
+ *
+ * @param memo - The memo.
+ * @param path - The module's absolute path.
+ * @param content - The module's text, as read before the evaluation.
+ * @returns The kept evaluation of exactly that text, or undefined.
+ */
+export function remembered(memo: FormatsMemo, path: string, content: string): EvaluatedFormats | undefined {
+  const hit = memo.get(path);
 
-// A fresh Node evaluates the module: Node's module cache, which require and import share, never evicts an ES module, so
-// an in-process load would keep the first content for the life of a dev server. Synchronous, so check stays so.
+  return hit?.content === content ? hit.result : undefined;
+}
+
+/**
+ * Keep an evaluation of a module, the one caching policy of both memos. Only a successful evaluation, and only while
+ * the module still holds the text read before it (`after`), so a save that lasts past the evaluation (an editor's
+ * truncate-then-write) is not memoized under the earlier text. An edit undone before the re-read still can be (the
+ * child imports the module itself, as 963d3e4's did): this narrows that race, it does not close it (#17). A failed
+ * evaluation is never kept: its cause may lie outside the module's text (a module it imports, not there yet), so it
+ * runs again on every load while the module is broken.
+ *
+ * @param memo - The memo.
+ * @param path - The module's absolute path.
+ * @param content - The module's text, as read before the evaluation.
+ * @param after - The module's text, as read after it (undefined: unreadable).
+ * @param result - What the evaluation gave.
+ */
+export function remember(
+  memo: FormatsMemo,
+  path: string,
+  content: string,
+  after: string | undefined,
+  result: Evaluated
+): void {
+  if (after === content && result._tag === "Evaluated") {
+    memo.set(path, { content, result });
+  }
+}
+
+// The loaders' memo: per process, keyed by the content, so an edit evaluates again and an unchanged module that
+// evaluated costs one read.
+const EVALUATED: FormatsMemo = new Map();
+
+/** What evaluating a formats module gave: its export and the first value JSON would not carry, or why it failed. */
+export type Evaluated = EvaluatedFormats | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
+
+/** A formats module that evaluated: its export and the first value JSON would not carry. */
+export type EvaluatedFormats = {
+  readonly _tag: "Evaluated";
+  readonly exported: unknown;
+  readonly nonJson: string | undefined;
+};
+
+// The loaders' evaluation: synchronous, its memo the process's (see `remember` for what it keeps).
 function evaluateFormats(path: string): Evaluated {
-  let content: string;
+  const content = readContent(path);
+
+  if (content._tag === "FormatsUnloadable") {
+    return content;
+  }
+
+  const hit = remembered(EVALUATED, path, content.text);
+
+  if (hit !== undefined) {
+    return hit;
+  }
+
+  const result = evaluateModule(path);
+  const after = readContent(path);
+  remember(EVALUATED, path, content.text, after._tag === "Content" ? after.text : undefined, result);
+
+  return result;
+}
+
+function readContent(
+  path: string
+):
+  | { readonly _tag: "Content"; readonly text: string }
+  | { readonly _tag: "FormatsUnloadable"; readonly reason: string } {
   try {
-    content = readFileSync(path, "utf8");
+    return { _tag: "Content", text: readFileSync(path, "utf8") };
   } catch (error) {
     return { _tag: "FormatsUnloadable", reason: error instanceof Error ? error.message : String(error) };
   }
+}
 
-  const hit = EVALUATED.get(path);
-
-  if (hit?.content === content) {
-    return hit.result;
-  }
-
+/**
+ * Evaluate a formats module in a fresh Node, with `spawnSync`, for the loaders and `ProjectFormats` alike. A fresh Node
+ * because Node's module cache, which require and import share, never evicts an ES module, so an in-process load would
+ * keep the first content for the life of a dev server.
+ *
+ * `spawnSync`, not effect/process's `ChildProcessSpawner`, on purpose: its semantics are the CLI's contract, and the
+ * Effect spawner does not reproduce them. It caps the combined output at 1 MiB with its `ENOBUFS` reason, keeps the
+ * child in the CLI's process group (Ctrl-C reaches it), gives it stdin at EOF, keeps stderr when a signal ends the
+ * child, and decodes stdout keeping a byte order mark (so a module that prints one is "writes to stdout").
+ *
+ * @param path - The module's absolute path.
+ * @returns What evaluating it gave.
+ */
+export function evaluateModule(path: string): Evaluated {
   const child = spawnSync(
     process.execPath,
     ["--input-type=module", "--eval", PRINT_FORMATS, pathToFileURL(path).href],
     // The host's NODE_OPTIONS (an inspector port, a loader) belong to the host, not to this evaluation.
     { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } }
   );
-  const result: Evaluated =
-    child.error === undefined
-      ? parseEvaluation(child.status, child.stdout, child.stderr)
-      : { _tag: "FormatsUnloadable", reason: child.error.message };
-  EVALUATED.set(path, { content, result });
 
-  return result;
+  return child.error === undefined
+    ? parseEvaluation(child.status, child.stdout, child.stderr)
+    : { _tag: "FormatsUnloadable", reason: child.error.message };
 }
 
+/**
+ * Read what the evaluating Node printed.
+ *
+ * @param status - Its exit code; null when a signal ended it.
+ * @param stdout - What it printed on stdout.
+ * @param stderr - What it printed on stderr.
+ * @returns The evaluation.
+ */
 function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
   if (status !== 0) {
     // The error line, not Node's stack and source excerpt around it.

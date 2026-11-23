@@ -7,17 +7,16 @@ import { relative } from "node:path";
 import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { checkLocale, checkSources, compileLocale } from "./catalog-check";
-import { CatalogFiles, ioEdge } from "./catalog-files";
+import { CatalogFiles } from "./catalog-files";
 import type { CatalogPlan, CatalogText, WrittenCatalog } from "./catalog-plan";
 import { mergeCatalogs } from "./catalog-plan";
 import type { UnreachableArm } from "./compile";
 import type { UnusedEntries } from "./po";
 import type { Problem } from "./problem";
-import type { ParseCache } from "./project";
 import { scanProject } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
-import { loadFormats } from "./project-formats";
+import { ProjectFormats } from "./project-formats-service";
 
 /** What one command run found. Success has no problems. */
 export type CommandReport = {
@@ -30,12 +29,10 @@ export type CommandReport = {
   readonly unreachable: ReadonlyArray<UnreachableArm>;
 };
 
-/** How `runExtract` merges and scans. */
+/** How `runExtract` merges. Its scan reuses the runtime's parse cache (`SourceCaches`). */
 export type ExtractOptions = {
   /** Whether entries no source uses any more are dropped (`extract`) or kept (`extract --watch`). */
   readonly unused: UnusedEntries;
-  /** Parse results to reuse across runs; a one-shot run starts empty. */
-  readonly cache: ParseCache;
   /**
    * What a PO saved between its read and the write does: `overwrite` writes over it (`extract`), `yield` writes
    * nothing more so the next sync merges the save (`extract --watch`, where a translator saves while a sync runs).
@@ -52,8 +49,6 @@ export type ExtractResult = Omit<CommandReport, "written" | "unreachable"> & {
    */
   readonly superseded: boolean;
 };
-
-const scan = (config: ProjectConfig, cache: ParseCache) => ioEdge("scan", () => scanProject(config, cache));
 
 // A locale's PO as it is now.
 const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig, locale: string) {
@@ -92,7 +87,7 @@ const snapshotCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: Pr
  * Writes nothing when any source or catalog fails.
  *
  * @param config - The project config.
- * @param options - Merge mode and parse cache; by default a full sync that drops unused entries.
+ * @param options - Merge mode and what a concurrent save does; by default a full sync that drops unused entries.
  * @returns The problems (if any), the message count and the files written; fails with `ProjectIoFailed` on I/O the
  *   commands do not classify.
  */
@@ -102,7 +97,7 @@ export const runExtract = /* @__PURE__ */ Effect.fn("elmera-intl.extract")(funct
 ) {
   const { problems, messages, written } = yield* extractCatalogs(
     config,
-    options ?? { unused: "drop", cache: new Map(), concurrentSave: "overwrite" }
+    options ?? { unused: "drop", concurrentSave: "overwrite" }
   );
 
   return {
@@ -118,7 +113,7 @@ export const runExtract = /* @__PURE__ */ Effect.fn("elmera-intl.extract")(funct
  * read an edit saved since.
  *
  * @param config - The project config.
- * @param options - Merge mode, parse cache and what a concurrent save does.
+ * @param options - Merge mode and what a concurrent save does.
  * @returns The problems (if any), the message count and each file written with its text.
  */
 export const extractCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.extractCatalogs")(function* (
@@ -132,14 +127,14 @@ export const extractCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.extractCat
  * Scan the sources, read each PO and merge: every catalog `writeCatalogs` would write, and the POs it read.
  *
  * @param config - The project config.
- * @param options - Merge mode and parse cache.
+ * @param options - Merge mode.
  * @returns The problems (if any), the message count, the POs read and the outputs.
  */
 export const planCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.planCatalogs")(function* (
   config: ProjectConfig,
   options: ExtractOptions
 ) {
-  const scanned = yield* scan(config, options.cache);
+  const scanned = yield* scanProject(config);
 
   if (scanned._tag === "Failed") {
     return { problems: scanned.problems, messages: 0, read: new Map(), outputs: [] } satisfies CatalogPlan;
@@ -234,13 +229,13 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
  *   `ProjectIoFailed` on I/O the commands do not classify.
  */
 export const runCheck = /* @__PURE__ */ Effect.fn("elmera-intl.check")(function* (config: ProjectConfig) {
-  const formats = yield* ioEdge("formats", () => loadFormats(config));
+  const formats = yield* ProjectFormats.use((loader) => loader.load(config));
 
   if (formats._tag === "ConfigInvalid") {
     return { problems: [formats.problem], messages: 0, written: [], unreachable: [] } satisfies CommandReport;
   }
 
-  const scanned = yield* scan(config, new Map());
+  const scanned = yield* scanProject(config);
 
   if (scanned._tag === "Failed") {
     return { problems: scanned.problems, messages: 0, written: [], unreachable: [] } satisfies CommandReport;

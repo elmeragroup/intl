@@ -10,8 +10,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -24,10 +26,11 @@ import { CatalogFiles, ioFailureReason } from "./catalog-files";
 import type { ExtractOptions, ExtractResult } from "./commands";
 import { extractCatalogs } from "./commands";
 import type { Problem } from "./problem";
-import type { ParseCache } from "./project";
-import { isExcludedDirectory, isProjectSource } from "./project";
+import { isExcludedDirectory, isProjectSource, SourceCaches, SourceDiscovery } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
+import type { ProjectFormats } from "./project-formats-service";
+import type { ProjectServices } from "./project-services";
 import type { Change, FileEvents, Intake } from "./watch-trees";
 import { includePrefixes, listenNative, movesTree, startPolling, watchRoots } from "./watch-trees";
 
@@ -118,6 +121,9 @@ export class SyncFailed
     message: Schema.String,
   }) {}
 
+/** What a sync's extract runs on: the commands' services but the formats, which only `check` loads. */
+export type SyncServices = Exclude<ProjectServices, ProjectFormats>;
+
 /**
  * One sync's extract: what the watch runs per burst of changes. A service so a test can act between a sync's read and
  * its writes, or hold a sync.
@@ -139,13 +145,21 @@ export class CatalogSync
    * synchronous call whose every throw was the sync's failure, any defect of the step (the merge's included). The watch
    * reports it and retries on the next change.
    *
-   * @returns A layer whose extract runs `extractCatalogs` on the host's `CatalogFiles`.
+   * @returns A layer whose extract runs `extractCatalogs` on the host's services.
    */
-  static layer(): Layer.Layer<CatalogSync, never, CatalogFiles> {
+  static layer(): Layer.Layer<CatalogSync, never, SyncServices> {
     return Layer.effect(
       CatalogSync,
       Effect.gen(function* () {
-        const files = yield* CatalogFiles;
+        // Only these services, never the rest of the builder's context: its current span (the layer's build) would
+        // otherwise parent every sync's spans, which belong under `CatalogSync.extract`.
+        const services = Context.pick(
+          CatalogFiles,
+          FileSystem.FileSystem,
+          Path.Path,
+          SourceDiscovery,
+          SourceCaches
+        )(yield* Effect.context<SyncServices>());
 
         return {
           extract: Effect.fn("CatalogSync.extract")(function* (
@@ -153,7 +167,7 @@ export class CatalogSync
             options: ExtractOptions
           ) {
             return yield* extractCatalogs(config, options).pipe(
-              Effect.provideService(CatalogFiles, files),
+              Effect.provideContext(services),
               Effect.mapError((failure) => new SyncFailed({ message: ioFailureReason(failure) })),
               Effect.catchDefect((defect) =>
                 Effect.fail(
@@ -219,8 +233,6 @@ type Pipeline = {
   readonly config: ProjectConfig;
   readonly catalogs: ReadonlySet<string>;
   readonly includeRoots: ReadonlyArray<string>;
-  // Outlives each sync: an unchanged file is not parsed again.
-  readonly cache: ParseCache;
   // The text this watch last wrote to each catalog: a change that finds it unchanged is our own write.
   readonly written: Ref.Ref<ReadonlyMap<string, string>>;
   // Each admitted change, for classification.
@@ -253,7 +265,6 @@ const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (
     stop,
     catalogs: new Set(config.locales.map((locale) => catalogPath(config, locale))),
     includeRoots: includePrefixes(config),
-    cache: new Map(),
     written: yield* Ref.make<ReadonlyMap<string, string>>(new Map()),
     intake: yield* Queue.unbounded<Change>(),
     results: yield* Queue.unbounded<Output, Cause.Done>(),
@@ -299,7 +310,6 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
     yield* Queue.clear(pipeline.triggers);
     const result = yield* catalogSync.extract(pipeline.config, {
       unused: "keep",
-      cache: pipeline.cache,
       concurrentSave: "yield",
     });
     yield* Ref.update(

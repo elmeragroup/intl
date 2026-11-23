@@ -2,20 +2,22 @@ import { describe, expect } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import type * as FileSystem from "effect/FileSystem";
 import type * as Layer from "effect/Layer";
 import { rmSync } from "node:fs";
 
-import { CatalogFiles, NODE_CATALOG_FILES } from "../src/catalog-files";
+import { CatalogFiles } from "../src/catalog-files";
 import type { OneShotCommand } from "../src/command-run";
 import { oneShot } from "../src/command-run";
+import { projectServices } from "../src/project-services";
 import { Reporter } from "../src/reporter";
 import type { Project } from "./project-fixture";
-import { it } from "./watch-project";
+import { it, wrapped } from "./watch-project";
 
 // `check` reads each PO where its rules read it and again for each compile (its locale's, and the English pass from
 // the first locale's), as the loaders will read it: a PO removed or replaced in between is judged as it is at the
-// compile. Unit under test: `oneShot("check")`, the in-process run the hosts share, on Node's catalog files with a hook
-// after one read of nb. Oracle: the layer 4 check, by hand (62bfdb1): a PO removed after its first read, or after the
+// compile. Unit under test: `oneShot("check")`, the in-process run the hosts share, on the project's services on Node
+// with a hook after one read of nb. Oracle: the layer 4 check, by hand (62bfdb1): a PO removed after its first read, or after the
 // Norwegian compile's, crashes with the next read's ENOENT; a malformed one swapped in is a CatalogInvalid problem
 // (the English pass's, after the Norwegian compile).
 describe("check reads each catalog again to compile it", () => {
@@ -29,7 +31,11 @@ describe("check reads each catalog again to compile it", () => {
   });
 
   // Runs `command` on `files`, with the problems and summary collected.
-  const run = (project: Project, command: OneShotCommand, files: Layer.Layer<CatalogFiles>) => {
+  const run = (
+    project: Project,
+    command: OneShotCommand,
+    files: Layer.Layer<CatalogFiles, never, FileSystem.FileSystem>
+  ) => {
     let output = "";
 
     return oneShot(command, {
@@ -45,7 +51,7 @@ describe("check reads each catalog again to compile it", () => {
             output += text;
           },
         }),
-        files,
+        projectServices(files),
       ]),
       Effect.exit,
       Effect.map((exit) => ({ exit, output }))
@@ -65,22 +71,24 @@ describe("check reads each catalog again to compile it", () => {
     project: Project,
     operation: Moment["operation"],
     after: () => void
-  ): Layer.Layer<CatalogFiles> => {
+  ): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> => {
     const nb = project.path("messages/nb.po");
     let done = false;
-    const hook = <A>(path: string, value: A): A => {
-      if (!done && path === nb) {
-        done = true;
-        after();
-      }
+    const hook = (path: string) =>
+      Effect.sync(() => {
+        if (!done && path === nb) {
+          done = true;
+          after();
+        }
+      });
 
-      return value;
-    };
-
-    return CatalogFiles.layer(
+    return wrapped((live) =>
       operation === "read"
-        ? { ...NODE_CATALOG_FILES, read: (path) => hook(path, NODE_CATALOG_FILES.read(path)) }
-        : { ...NODE_CATALOG_FILES, readExisting: (path) => hook(path, NODE_CATALOG_FILES.readExisting(path)) }
+        ? { ...live, read: (path: string) => live.read(path).pipe(Effect.tap(() => hook(path))) }
+        : {
+            ...live,
+            readExisting: (path: string) => live.readExisting(path).pipe(Effect.tap(() => hook(path))),
+          }
     );
   };
 
