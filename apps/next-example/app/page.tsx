@@ -4,7 +4,6 @@ import { getFormat, getT } from "@elmeragroup/intl/server";
 import { ApiDemo } from "../components/api-demo";
 import { Cart } from "../components/cart";
 import { LocaleSwitcher } from "../components/locale-switcher";
-import "../intl/configure";
 import { NOW, ORDER, ORDER_STATUS, SHOP_OPEN } from "../intl/messages";
 
 /** The example page: server-rendered messages and formats, then the client and API demos. */

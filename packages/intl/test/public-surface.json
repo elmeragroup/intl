@@ -20,9 +20,9 @@
     "useIntl",
     "useT"
   ],
-  "./server": ["configureRequestIntl", "getFormat", "getIntl", "getT"],
+  "./server": ["getFormat", "getIntl", "getT"],
   "./next": ["useLocaleSwitch"],
-  "./next/server": ["configureNextIntl"],
+  "./next/server": ["createRequestConfig"],
   "./start": ["createCatalogReload", "loadIntlConfig", "useLocaleSwitch"],
   "./effect": ["CurrentIntl"]
 }

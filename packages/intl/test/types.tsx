@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import type { CreateIntlOptions, Descriptor } from "@elmeragroup/intl/core";
 import { createIntl, msg } from "@elmeragroup/intl/core";
 import { CurrentIntl } from "@elmeragroup/intl/effect";
+import { createRequestConfig } from "@elmeragroup/intl/next/server";
 import { Select, Val } from "@elmeragroup/intl/react";
 
 import { english } from "./catalogs";
@@ -108,3 +109,7 @@ const _unserved: Effect.Effect<string> = greet;
 // CurrentIntl.layer discharges the CurrentIntl requirement and adds neither a failure nor a requirement of its own.
 declare const fixedOptions: CreateIntlOptions;
 const _fixed: Effect.Effect<string> = Effect.provide(greet, CurrentIntl.layer(fixedOptions));
+
+// The request config resolves the whole IntlConfig: an adapter without a time zone would leave dates in the host's.
+// @ts-expect-error createRequestConfig needs resolveTimeZone
+createRequestConfig({ resolveLocale: () => "en", loadCatalog: () => Promise.resolve(english()) });

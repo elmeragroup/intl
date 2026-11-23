@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-import type { IntlNextConfig } from "../src/next";
+import type { IntlNextConfig, WithIntlOptions } from "../src/next";
 import { withIntl } from "../src/next";
 
 const require = createRequire(import.meta.url);
@@ -14,6 +14,12 @@ const NEXT = dirname(require.resolve("next/package.json"));
 // SAFETY: Next's config loader as `next build` and `next start` call it; its d.ts is the type.
 const { default: loadNextConfig } = require("next/dist/server/config.js") as {
   readonly default: typeof loadNextConfigType;
+};
+
+// SAFETY: Next's config schema (a zod schema), which `next build` validates the loaded config against; its d.ts names
+// zod's types, which this package does not install, so only the call the tests make is typed.
+const { configSchema } = require("next/dist/server/config-schema.js") as {
+  readonly configSchema: { readonly safeParse: (config: IntlNextConfig) => { readonly success: boolean } };
 };
 
 let sandbox = "";
@@ -164,3 +170,197 @@ it.each([
     ).toEqual([["apps/web/intl/nb.po"], ["apps/web/intl/nb.po"]]);
   }
 );
+
+const REQUEST_MODULE = "@elmeragroup/intl/internal/request-module";
+
+// withIntl's result for the app at apps/web (Next and its intl config installed), with the given request modules below
+// the sandbox.
+function withIntlFor(
+  config: IntlNextConfig,
+  options: Pick<WithIntlOptions, "request">,
+  modules: ReadonlyArray<string> = []
+): IntlNextConfig {
+  installNext(".");
+  writeIntlConfig("intl/{locale}.po");
+  for (const file of modules) {
+    mkdirSync(dirname(join(sandbox, file)), { recursive: true });
+    writeFileSync(join(sandbox, file), "export default null;\n");
+  }
+
+  return withIntl(config, { ...options, dir: join(workspace, "apps/web") });
+}
+
+// Unit under test: the Turbopack alias withIntl adds from the runtime's request module to the app's. Oracle: Turbopack's
+// alias semantics as Next 16.4.6 applies them (verified on the fixture app, packages/intl-e2e): a relative target
+// resolves from the project directory, so the target is that directory's relative path with `./` or `../`, as a plain
+// string (only the runtime's react-server request config imports the specifier, so the alias needs no condition); an
+// app without a request module at the default path gets no alias (and so the runtime's stub); and Next's own config
+// schema accepts the result, which `loadNextConfig({ silent: true })` would not check.
+it.each([
+  {
+    name: "the default module, when it exists",
+    config: {},
+    options: {},
+    modules: ["workspace/apps/web/intl/request.ts"],
+    aliases: { [REQUEST_MODULE]: "./intl/request.ts" },
+  },
+  { name: "nothing, without the default module", config: {}, options: {}, modules: [], aliases: undefined },
+  {
+    name: "an explicit nested path that does not exist",
+    config: {},
+    options: { request: "src/i18n/request.ts" },
+    modules: [],
+    aliases: { [REQUEST_MODULE]: "./src/i18n/request.ts" },
+  },
+  {
+    name: "a module above the project directory inside the Turbopack root",
+    config: {},
+    options: { request: "../shared/request.ts" },
+    modules: ["workspace/apps/shared/request.ts"],
+    aliases: { [REQUEST_MODULE]: "../shared/request.ts" },
+  },
+  // Whether Turbopack resolves the module is Next's to decide (a pruned `next start`, symlinks, additional roots); the
+  // stub names the cause when it does not, so withIntl aliases the module wherever it lies.
+  {
+    name: "an explicit module outside the Turbopack root, without a throw",
+    config: { turbopack: { root: "apps/web" } },
+    options: { request: "../shared/request.ts" },
+    modules: ["workspace/apps/shared/request.ts"],
+    aliases: { [REQUEST_MODULE]: "../shared/request.ts" },
+  },
+  {
+    name: "the request module beside the app's own aliases",
+    config: { turbopack: { resolveAlias: { underscore: "lodash" } } },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    aliases: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" },
+  },
+  {
+    name: "idempotently, over the alias it wrote before",
+    config: { turbopack: { resolveAlias: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" } } },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    aliases: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" },
+  },
+  // A wildcard is literal outside its `*`s: these miss the specifier (another package, a dot read as itself).
+  {
+    name: "the request module beside wildcard aliases that do not match it",
+    config: {
+      turbopack: {
+        resolveAlias: {
+          "@elmeragroup/intl-tools/*": "./vendor/tools/*",
+          "@elmeragroup/intl/internal/request.*": "./x",
+        },
+      },
+    },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    aliases: {
+      "@elmeragroup/intl-tools/*": "./vendor/tools/*",
+      "@elmeragroup/intl/internal/request.*": "./x",
+      [REQUEST_MODULE]: "./intl/request.ts",
+    },
+  },
+  {
+    name: "nothing, beside the app's own aliases, without the default module",
+    config: { turbopack: { resolveAlias: { underscore: "lodash" } } },
+    options: {},
+    modules: [],
+    aliases: { underscore: "lodash" },
+  },
+])("aliases $name", ({ config, options, modules, aliases }) => {
+  const rooted =
+    config.turbopack?.root === undefined
+      ? config
+      : { ...config, turbopack: { ...config.turbopack, root: join(workspace, config.turbopack.root) } };
+  const result = withIntlFor(rooted, options, modules);
+
+  expect(result.turbopack?.resolveAlias).toEqual(aliases);
+  expect(result.turbopack !== undefined && "resolveAlias" in result.turbopack).toBe(aliases !== undefined);
+  expect(configSchema.safeParse(result).success).toBe(true);
+});
+
+// Each would leave the runtime on its stub, or the app's module replaced by another, with no error until a request.
+it.each([
+  {
+    name: "the project directory",
+    config: {},
+    options: { request: "." },
+    modules: [],
+    error: /project directory or one above it/u,
+  },
+  {
+    name: "the directory above it",
+    config: {},
+    options: { request: ".." },
+    modules: [],
+    error: /project directory or one above it/u,
+  },
+  {
+    name: "another alias for the request module",
+    config: { turbopack: { resolveAlias: { [REQUEST_MODULE]: "./src/request.ts" } } },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    error:
+      /maps @elmeragroup\/intl\/internal\/request-module to "\.\/src\/request\.ts", which withIntl reserves/u,
+  },
+  // Turbopack reads a conditional alias differently from the plain target withIntl writes.
+  {
+    name: "a conditional alias to the same module",
+    config: {
+      turbopack: { resolveAlias: { [REQUEST_MODULE]: { browser: false, default: "./intl/request.ts" } } },
+    },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    error: /maps @elmeragroup\/intl\/internal\/request-module to \{"browser":false/u,
+  },
+  // withIntl aliases nothing (no request module at the default path), so the entry would stand in for the app's module
+  // unchecked.
+  {
+    name: "an alias for the request module when withIntl aliases none",
+    config: { turbopack: { resolveAlias: { [REQUEST_MODULE]: "./intl/request.ts" } } },
+    options: {},
+    modules: [],
+    error:
+      /maps @elmeragroup\/intl\/internal\/request-module to "\.\/intl\/request\.ts", which withIntl reserves; .*`request` option/u,
+  },
+  {
+    name: "a conditional alias for the request module when withIntl aliases none",
+    config: {
+      turbopack: {
+        resolveAlias: { underscore: "lodash", [REQUEST_MODULE]: { default: "./src/request.ts" } },
+      },
+    },
+    options: {},
+    modules: [],
+    error: /which withIntl reserves/u,
+  },
+  // Turbopack applies a wildcard key to every specifier its pattern matches, so this one supplies another module's
+  // config to `getIntl`, beside or instead of withIntl's exact entry.
+  {
+    name: "a wildcard alias matching the request module",
+    config: {
+      turbopack: { resolveAlias: { "@elmeragroup/intl/internal/request-mod*": "./intl/review-mod*.ts" } },
+    },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    error:
+      /maps @elmeragroup\/intl\/internal\/request-module \(through "@elmeragroup\/intl\/internal\/request-mod\*"\) to "\.\/intl\/review-mod\*\.ts", which withIntl reserves/u,
+  },
+  {
+    name: "a wildcard alias matching the request module, beside the default module",
+    config: { turbopack: { resolveAlias: { "@elmeragroup/*/request-module": "./intl/request.ts" } } },
+    options: {},
+    modules: ["workspace/apps/web/intl/request.ts"],
+    error: /\(through "@elmeragroup\/\*\/request-module"\)/u,
+  },
+  {
+    name: "a wildcard alias matching the request module when withIntl aliases none",
+    config: { turbopack: { resolveAlias: { "@elmeragroup/intl/*": "./vendor/intl/*" } } },
+    options: {},
+    modules: [],
+    error: /\(through "@elmeragroup\/intl\/\*"\) to "\.\/vendor\/intl\/\*", which withIntl reserves/u,
+  },
+])("rejects $name", ({ config, options, modules, error }) => {
+  expect(() => withIntlFor(config, options, modules)).toThrow(error);
+});

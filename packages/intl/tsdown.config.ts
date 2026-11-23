@@ -33,6 +33,8 @@ export default defineConfig([
       "internal/catalog": "src/catalog.ts",
       "internal/icu": "src/icu.ts",
       "internal/message": "src/message.ts",
+      "internal/request-config": "src/request-config.ts",
+      "internal/request-config-server": "src/request-config-server.ts",
     },
     dts: { sourcemap: true },
     clean: true,

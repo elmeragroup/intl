@@ -42,7 +42,7 @@ createTester().run("export-prefixes", exportPrefixes, {
       code: `export function getRequest(): Promise<number> { return Promise.resolve(1); }`,
       filename: fixture("runtime/src/next-server.ts"),
     },
-    { code: `export function configureNextIntl(): void {}`, filename: fixture("runtime/src/next-server.ts") },
+    { code: `export function configureServer(): void {}`, filename: fixture("runtime/src/next-server.ts") },
     {
       code: `export function compileCatalog(): string { return ""; }`,
       filename: fixture("tools/src/compile.ts"),
@@ -114,9 +114,9 @@ createTester().run("export-prefixes", exportPrefixes, {
       errors: [{ messageId: "getAsync" }],
     },
     {
-      code: `export function configureRequestIntl(): void {}`,
+      code: `export function configureServer(): void {}`,
       filename: fixture("runtime/src/core.ts"),
-      errors: [{ messageId: "server", data: { name: "configureRequestIntl", prefix: "configure" } }],
+      errors: [{ messageId: "server", data: { name: "configureServer", prefix: "configure" } }],
     },
     {
       code: `export function compileMessage(): string { return ""; }`,

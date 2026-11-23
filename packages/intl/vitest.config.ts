@@ -16,6 +16,14 @@ export default defineConfig({
       { find: /^@elmeragroup\/intl\/internal\/formatter$/u, replacement: path("dist/internal/formatter.js") },
       { find: /^@elmeragroup\/intl\/(react|internal\/react-client)$/u, replacement: path("src/react.tsx") },
       { find: /^@elmeragroup\/intl\/server$/u, replacement: path("src/server.ts") },
+      // The request config the server entries read, which under `react-server` is the request module an app's build
+      // plugin aliases (Next: withIntl to `intl/request.ts`): both specifiers are a fixture here, so the server entries
+      // read a request as they do in an app. public-surface.test.ts reaches the built stub through `/server`, in a plain
+      // Node process.
+      {
+        find: /^@elmeragroup\/intl\/internal\/request-(config|module)$/u,
+        replacement: path("test/request-config.ts"),
+      },
       { find: /^@elmeragroup\/intl\/effect$/u, replacement: path("src/effect.ts") },
       // Catalogs come from the one compiler, as apps get them. Not a package dependency: intl-tools depends on this
       // package, so the tests reach its source directly (as its tests reach the corpus here).

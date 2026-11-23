@@ -31,7 +31,8 @@ Keep the dependency direction `intl-e2e` → `intl-tools` → `intl`
 (`elmera-workspace/import-boundaries`). The example apps consume `intl` and `intl-tools` from the
 workspace as any app does, and are leaves: no package declares one (the manifest test), and no file
 outside an app imports one (`elmera-workspace/import-boundaries`). The tools reach the runtime's serializer, catalog codec and
-formatter through its `/internal/*` subpaths. Both published packages are self-contained: they import
+formatter through its `/internal/*` subpaths, and the Next build plugin aliases `/internal/request-module`, which
+`/server` reaches only through `/internal/request-config`'s `react-server` condition, to the app's request module. Both published packages are self-contained: they import
 no other `@elmeragroup` package, so a consumer installs nothing else of ours.
 
 ## Setup and checks
@@ -151,8 +152,8 @@ bundled from another project gets an entry there (check the `//#region` paths in
 dependency or bundling change), or beside the files when only tests carry it
 (`test/conformance/LICENSE-next-intl`). Every runtime export is listed in its package's
 `test/public-surface.json`, which lint checks against `src` and the public-surface test against the
-built package; change both together. `/internal/*` exists for the tools and carries no semver
-promise.
+built package; change both together. `/internal/*` exists for the tools and the build plugins, and
+carries no semver promise.
 
 Bundle with tsdown and emit declarations from `src` only. Keep runtime dependencies pinned and few:
 the browser-facing runtime ships no ICU parser, and G7 proves it.

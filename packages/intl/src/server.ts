@@ -1,37 +1,26 @@
-// Server-only: the per-request IntlInstance React Server Components read, resolved lazily by the framework adapter.
+// Server-only: the per-request IntlInstance React Server Components read, from the request config the host's build
+// plugin resolves.
 import { cache } from "react";
 
+// The package's own specifier, not `./request-config`: it stays an import in the build, so the host's bundler resolves
+// it by export condition. Under `react-server` it reaches the app's request module through the alias the host's build
+// plugin sets (Next: withIntl's `turbopack.resolveAlias`); client and SSR code get the stub, whose error names the
+// cause. A relative import would be bundled in, and the stub would always win.
+import requestConfig from "@elmeragroup/intl/internal/request-config";
+
 import type { Format, IntlInstance, Translate } from "./intl";
-
-// The one process-wide seam a framework adapter fills at module load (Next renders layout and page in parallel, so
-// each reads the same cached per-request value). Not request state: the resolver reads the request itself.
-let resolveRequestIntl: (() => Promise<IntlInstance>) | undefined;
+import { createIntl } from "./intl";
 
 /**
- * Register how a request's `IntlInstance` is built. Call once at server module load (a framework adapter such as
- * `@elmeragroup/intl/next/server` does it for you).
- *
- * @param resolver - Builds the current request's translator; called at most once per request.
- */
-export function configureRequestIntl(resolver: () => Promise<IntlInstance>): void {
-  resolveRequestIntl = resolver;
-}
-
-/**
- * The current request's translator, cached per request with `React.cache`.
+ * The current request's translator. Layouts and pages render in parallel, and actions and route handlers load no
+ * layout, so each reader resolves it here; `React.cache` shares one instance within a render.
  *
  * @returns The request's `IntlInstance`.
- * @throws When `configureRequestIntl` was never called: a setup defect, not a request failure.
+ * @throws When the host has no request config (no `withIntl` in next.config): a setup defect, not a request failure.
  */
-export const getIntl: () => Promise<IntlInstance> = /* @__PURE__ */ cache(async (): Promise<IntlInstance> => {
-  if (!resolveRequestIntl) {
-    throw new Error(
-      "configureRequestIntl was not called; configure the request IntlInstance in a server module first"
-    );
-  }
-
-  return resolveRequestIntl();
-});
+export const getIntl: () => Promise<IntlInstance> = /* @__PURE__ */ cache(async (): Promise<IntlInstance> =>
+  createIntl(await requestConfig())
+);
 
 /**
  * The current request's `t`, for async server components (`const t = await getT()`).

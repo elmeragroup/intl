@@ -19,6 +19,7 @@ export {
   createLocaleSwitcher,
   resolveIntlConfig,
   type LocaleSwitchPort,
+  type RequestConfig,
   type RequestLike,
   type ServerAdapter,
   type SwitchOutcome,

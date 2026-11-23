@@ -116,6 +116,18 @@ msgstr "Pris '<' 100 #1"
 msgid "Read <x0>this</x0> and <x1>that</x1>"
 msgstr "Les <x0>dette</x0> og <x1>det</x1>"
 
+#: app/actions.ts
+msgid "Read in the action"
+msgstr "Lest i handlingen"
+
+#: app/(main)/page.tsx
+msgid "Rendered with the action's locale"
+msgstr "Gjengitt med handlingens språk"
+
+#: app/api/translation/route.ts
+msgid "Route handler text"
+msgstr "Tekst fra rutebehandleren"
+
 #: app/(main)/page.tsx
 msgid "Server element"
 msgstr "Serverelement"

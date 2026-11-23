@@ -1,7 +1,7 @@
 // The framework adapter contract and the framework-free locale switch every adapter shares.
 import type { Catalog, Formats, IntlConfig } from "./intl";
 
-/** The part of a request locale resolution reads: a `Request`, or Next's `headers()` wrapped as `{ headers }`. */
+/** The part of a request locale resolution reads: a `Request`, or the request Next's `createRequestConfig` builds. */
 export type RequestLike = {
   readonly headers: { get(name: string): string | null };
 };
@@ -17,6 +17,9 @@ export type ServerAdapter = {
   /** Named styles messages refer to (`{d, date, short}`), the same for every request, like next-intl's `formats`. */
   readonly formats?: Formats;
 };
+
+/** How a host reads the current request's `IntlConfig`, per call (Next: `createRequestConfig(adapter)`). */
+export type RequestConfig = () => Promise<IntlConfig>;
 
 /**
  * Resolve a request's `IntlConfig` through the app's adapter: the value both the server translator and the client

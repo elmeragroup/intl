@@ -2,7 +2,6 @@ import { IntlProvider } from "@elmeragroup/intl/react";
 import { getIntl } from "@elmeragroup/intl/server";
 
 import { IntlOnly } from "../../../components/intl-only";
-import "../../../intl/configure";
 
 export const dynamic = "force-dynamic";
 

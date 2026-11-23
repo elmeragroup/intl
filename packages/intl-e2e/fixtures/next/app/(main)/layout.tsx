@@ -3,8 +3,6 @@ import type { ReactNode } from "react";
 import { IntlProvider } from "@elmeragroup/intl/react";
 import { getIntl } from "@elmeragroup/intl/server";
 
-import "../../intl/configure";
-
 // The react-server provider hands the client the request locale's catalog.
 export default async function MainLayout({ children }: { readonly children: ReactNode }) {
   const intl = await getIntl();

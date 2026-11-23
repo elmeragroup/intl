@@ -70,36 +70,46 @@ it.each([
   expect(PARSER_ERROR_CODES.filter((codeName) => code.includes(codeName))).toEqual(expected);
 });
 
-// Each subpath's built module, and every built entry (the react-server branch of ./react included).
-const BUILT = new Map(Object.entries(manifest.exports).map(([subpath, target]) => [subpath, target.import]));
-const ENTRIES = [
-  ...new Set(
-    Object.values(manifest.exports).flatMap((target) => [
-      ...("react-server" in target ? [target["react-server"].import] : []),
-      target.import,
-    ])
-  ),
-];
+// The consumer condition sets a subpath's graph resolves under, as a bundler hands them to its resolver: a
+// server-component layer (Next's RSC layer: server components, server actions, route handlers) adds `react-server`;
+// client and SSR code do not. Neither lists `elmera-source`, so every self-specifier resolves to the built package.
+const CONDITIONS = {
+  default: ["import", "default"],
+  "react-server": ["react-server", "import", "default"],
+} as const;
+type Condition = keyof typeof CONDITIONS;
+const CONDITION_KEYS: ReadonlyArray<Condition> = ["default", "react-server"];
 
-// A built entry's whole graph: its chunks and the package's own subpaths it imports (resolved through the export map,
-// as Node resolves them), bundled; every other package stays an external import, listed by its specifier.
-async function graphOf(
-  entry: string
-): Promise<{ readonly modules: ReadonlyArray<string>; readonly external: ReadonlyArray<string> }> {
+const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
+const SUBPATHS = Object.keys(manifest.exports);
+
+// What a subpath reaches under a condition set, bundled from the package directory by its specifier as a consumer's
+// bundler resolves it: Rolldown's own resolver walks the export map (whose order decides the branch a condition set
+// takes), every self-specifier is followed into the built module it resolves to, and every other package stays
+// external.
+async function reach(subpath: string, condition: Condition) {
+  const specifiers = new Set<string>();
   const bundle = await rolldown({
-    input: fileURLToPath(new URL(`../${entry}`, import.meta.url)),
+    input: `${SELF}${subpath.slice("./".length)}`,
+    cwd: PACKAGE_DIR,
     platform: "neutral",
     logLevel: "silent",
+    // The export map, not the tsconfig paths that map the runtime's specifiers to source.
+    tsconfig: false,
+    resolve: { conditionNames: [...CONDITIONS[condition]] },
     // Every import counts, used or not: Node loads a module's imports whether or not a bundler would drop them.
     treeshake: false,
     external: isExternal,
     plugins: [
       {
         name: "self-specifiers",
-        resolveId(id) {
-          const file = id.startsWith(SELF) ? BUILT.get(`./${id.slice(SELF.length)}`) : undefined;
+        // Records each self-specifier a module imports; the entry, which no module imports, is not one.
+        resolveId(source, importer) {
+          if (importer !== undefined && source.startsWith(SELF)) {
+            specifiers.add(source);
+          }
 
-          return file === undefined ? null : fileURLToPath(new URL(`../${file}`, import.meta.url));
+          return null;
         },
       },
     ],
@@ -108,20 +118,93 @@ async function graphOf(
   await bundle.close();
 
   return {
-    modules: output.flatMap((file) => (file.type === "chunk" ? file.moduleIds : [])),
-    external: externalImports(output),
+    entry: output.flatMap((file) =>
+      file.type === "chunk" && file.isEntry && file.facadeModuleId !== null ? [file.facadeModuleId] : []
+    )[0],
+    modules: new Set(output.flatMap((file) => (file.type === "chunk" ? file.moduleIds : []))),
+    external: new Set(externalImports(output)),
+    specifiers,
   };
 }
 
-// Unit under test: each built entry's import graph, followed through its chunks and the package's own subpaths. Oracle:
-// the optional-peer contract: `effect` is reached only from dist/effect.js, the `/effect` entry, which imports it as an
-// external specifier, so an app that never imports `/effect` never needs `effect` installed.
-it.each(ENTRIES)("%s reaches effect only if it is the /effect entry", async (entry) => {
-  const { modules, external } = await graphOf(entry);
-  const isEffectEntry = entry === "./dist/effect.js";
+const REACH = new Map(
+  await Promise.all(
+    SUBPATHS.flatMap((subpath) =>
+      CONDITION_KEYS.map(
+        async (condition) => [`${subpath} ${condition}`, await reach(subpath, condition)] as const
+      )
+    )
+  )
+);
 
-  expect(external.some((id) => EFFECT.test(id))).toBe(isEffectEntry);
-  expect(modules.filter((id) => id.endsWith("/dist/effect.js"))).toEqual(
-    isEffectEntry ? [fileURLToPath(new URL("../dist/effect.js", import.meta.url))] : []
-  );
+function reachOf(subpath: string, condition: Condition) {
+  const reached = REACH.get(`${subpath} ${condition}`);
+
+  if (reached === undefined) {
+    throw new Error(`${subpath} under ${condition} was not bundled`);
+  }
+
+  return reached;
+}
+
+const REQUEST_CONFIG = `${SELF}internal/request-config`;
+const REQUEST_MODULE = `${SELF}internal/request-module`;
+
+// The subpaths, by condition, that may reach each server-only module; every other must not. `effect` is the optional
+// peer of `/effect` alone, so an app that never imports `/effect` never needs it installed. The request config is read
+// by `/server` and the server `/react`. The request module, which the host aliases to the app's request module (holding
+// the app's adapter), and the react-server request config that imports it are reached under `react-server` only:
+// client and SSR code that reached them would bundle the app's adapter, and `next/headers` with it. `next/headers`
+// throws outside a request scope and belongs to `/next/server` alone.
+const ALLOWED = {
+  effect: new Set(["./effect default", "./effect react-server"]),
+  requestConfig: new Set(["./server default", "./server react-server", "./react react-server"]),
+  requestModule: new Set([
+    "./server react-server",
+    "./react react-server",
+    "./internal/request-config react-server",
+  ]),
+  nextHeaders: new Set(["./next/server default", "./next/server react-server"]),
+};
+
+// The modules ALLOWED names by what their specifiers resolve to, never by a file name: the `/effect` entry, and the
+// request config that `react-server` resolves `internal/request-config` to.
+const EFFECT_ENTRY = reachOf("./effect", "default").entry;
+const REQUEST_CONFIG_SERVER = reachOf("./internal/request-config", "react-server").entry;
+
+// Control: the condition sets take effect. Under `react-server` the request config resolves to a module of its own,
+// which the default set never resolves to; were they one, the table below could not tell the layers apart.
+it("resolves the request config to its own module under react-server", () => {
+  const client = reachOf("./internal/request-config", "default").entry;
+
+  expect([REQUEST_CONFIG_SERVER, client]).toEqual([expect.any(String), expect.any(String)]);
+  expect(REQUEST_CONFIG_SERVER).not.toBe(client);
 });
+
+// Unit under test: each subpath's import graph under each consumer condition set, as Rolldown's resolver follows it
+// through the export map and the package's own specifiers, for every subpath the manifest lists (new ones included).
+// Oracle: the server-only contracts above, as ALLOWED states them by hand per subpath and condition; the allowed cases
+// are the positive controls, so a walk that stopped seeing a module, or stopped following a condition, would fail them.
+it.each(SUBPATHS.flatMap((subpath) => CONDITION_KEYS.map((condition) => [subpath, condition] as const)))(
+  "%s under %s reaches effect, the request config and module, and next/headers only where allowed",
+  (subpath, condition) => {
+    const { modules, external, specifiers } = reachOf(subpath, condition);
+    const allowed = (contract: ReadonlySet<string>) => contract.has(`${subpath} ${condition}`);
+
+    expect({
+      effect: [...external].some((id) => EFFECT.test(id)),
+      effectEntry: EFFECT_ENTRY !== undefined && modules.has(EFFECT_ENTRY),
+      requestConfig: specifiers.has(REQUEST_CONFIG),
+      requestModule: specifiers.has(REQUEST_MODULE),
+      requestConfigServer: REQUEST_CONFIG_SERVER !== undefined && modules.has(REQUEST_CONFIG_SERVER),
+      nextHeaders: external.has("next/headers"),
+    }).toEqual({
+      effect: allowed(ALLOWED.effect),
+      effectEntry: allowed(ALLOWED.effect),
+      requestConfig: allowed(ALLOWED.requestConfig),
+      requestModule: allowed(ALLOWED.requestModule),
+      requestConfigServer: allowed(ALLOWED.requestModule),
+      nextHeaders: allowed(ALLOWED.nextHeaders),
+    });
+  }
+);

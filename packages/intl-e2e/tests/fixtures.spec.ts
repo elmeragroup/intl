@@ -1,5 +1,8 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { CORPUS } from "./corpus-expectations.ts";
 import { FIXTURE_RUNTIME, FIXTURE_SERVER, NEXT_URL, START_URL } from "./fixture-mode.ts";
@@ -106,9 +109,10 @@ declare global {
 }
 
 type FetchWatch = {
-  /** Records from now on: every fetch/XHR request's URL, and the body of every fetch the page calls with the header. */
+  /** Records from now on: every fetch/XHR request, and the body of every fetch the page calls with the header. */
   readonly start: () => Promise<void>;
-  readonly requests: ReadonlyArray<string>;
+  /** Each request's URL, and whether it carries the header. */
+  readonly requests: ReadonlyArray<{ readonly url: string; readonly watched: boolean }>;
   readonly bodies: ReadonlyArray<string>;
 };
 
@@ -117,7 +121,7 @@ type FetchWatch = {
 // request from Playwright's own HTTP client, and once it held Next's RSC refresh past the expect timeout, leaving the
 // page in the old locale. Not response.text(): Chromium sometimes keeps no DevTools copy of a streamed fetch body.
 async function watchFetches(page: Page, header: string): Promise<FetchWatch> {
-  const requests: Array<string> = [];
+  const requests: Array<{ readonly url: string; readonly watched: boolean }> = [];
   const bodies: Array<string> = [];
   await page.exposeFunction("intlE2eRecordBody", (body: string) => {
     bodies.push(body);
@@ -147,7 +151,7 @@ async function watchFetches(page: Page, header: string): Promise<FetchWatch> {
         const type = request.resourceType();
 
         if (type === "fetch" || type === "xhr") {
-          requests.push(request.url());
+          requests.push({ url: request.url(), watched: request.headers()[header] !== undefined });
         }
       });
       await page.evaluate(() => {
@@ -253,6 +257,52 @@ test.describe(`next fixture, ${BUILD}, server components`, () => {
   });
 });
 
+// Unit under test: createRequestConfig (`/next/server`) behind withIntl's alias to the fixture's request module, whose
+// adapter reads the locale from the request's `cookie` header. Oracle: the fixture's committed catalog (intl/no.po)
+// and English sources, per locale cookie.
+test.describe(`next fixture, ${BUILD}, request config`, () => {
+  for (const [locale, text] of [
+    ["en", "Route handler text"],
+    ["no", "Tekst fra rutebehandleren"],
+  ] as const) {
+    // A route handler loads no layout and imports only `/server`: the alias alone reaches the request module.
+    test(`answers a route handler in ${locale} with no setup import`, async ({ request }) => {
+      const response = await request.get(`${NEXT_URL}/api/translation`, {
+        headers: { cookie: cookieFor(locale) },
+      });
+
+      expect(response.status()).toBe(200);
+      expect(await response.text()).toBe(text);
+    });
+  }
+
+  // Inside a server action `headers()` is the request as it arrived: an adapter handed it would see the old locale
+  // cookie after the action set the new one, in what the action reads and in the page Next re-renders in its response.
+  test("switches no to en in a server action, which reads and re-renders the new locale in its own response", async ({
+    page,
+  }) => {
+    const fetches = await watchFetches(page, "next-action");
+    await gotoHydrated(page, NEXT_URL);
+    await expect(page.locator("#rsc-action-switch")).toHaveText("Gjengitt med handlingens språk");
+    await fetches.start();
+    await page.locator("#action-switch-en").click();
+
+    await expect(page.locator("#action-switch-before")).toHaveText("Lest i handlingen");
+    await expect(page.locator("#action-switch-after")).toHaveText("Read in the action");
+    await expect(page.locator("#rsc-action-switch")).toHaveText("Rendered with the action's locale");
+    await expect(page.locator("#action-switch-state")).toHaveText("idle");
+    // The action's POST carried the re-rendered page, and no refresh followed it.
+    await expect.poll(() => fetches.bodies.length).toBe(1);
+    expect(
+      fetches.bodies.map((body) => ({
+        en: body.includes("Rendered with the action's locale"),
+        no: body.includes("Gjengitt med handlingens språk"),
+      }))
+    ).toEqual([{ en: true, no: false }]);
+    expect(fetches.requests.map(({ watched }) => watched)).toEqual([true]);
+  });
+});
+
 // Every JS response of a full page load, after it went idle: what the page's client chunks are.
 async function clientScripts(page: Page, url: string): Promise<ReadonlyArray<string>> {
   const scripts: Array<Promise<string>> = [];
@@ -291,5 +341,62 @@ test.describe(`client chunks, ${BUILD}`, () => {
     await expect(page.locator("#call")).toHaveText("Hei fra et kall");
     expect(scripts.length).toBeGreaterThan(0);
     expect(parserCodes(scripts)).toEqual([]);
+  });
+});
+
+// A string only the fixture's request module (intl/fixture-request.ts) holds, in an error path it keeps.
+const REQUEST_SENTINEL = "FORESPORSELVAKT-5R8";
+// The stub's guidance, each part as a token that survives HTML escaping: the server-code setup (withIntl and the
+// request module) and the Client Component remedy.
+const STUB_GUIDANCE = [
+  /withIntl/u,
+  /intl\/request\.ts/u,
+  /useT and useFormat from @elmeragroup\/intl\/react/u,
+];
+const NEXT_BUILD = fileURLToPath(new URL("../fixtures/next/.next/", import.meta.url));
+
+// Every file below a directory of the build, read as text.
+function buildFiles(directory: string, extension: RegExp): ReadonlyArray<string> {
+  return readdirSync(join(NEXT_BUILD, directory), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && extension.test(entry.name))
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
+}
+
+// Unit under test: `/server`'s request config under Turbopack, imported by a Client Component, which client and SSR
+// code resolve to the stub (`internal/request-config` outside `react-server`). Oracle: the stub's guidance, and the
+// request module's sentinel, which the server build carries (the route handler and pages reach it) and no client
+// chunk may. Were the alias reached from client or SSR code, the build would fail, the call would resolve or throw
+// next/headers' error instead, or the sentinel would ship.
+test.describe(`next fixture, ${BUILD}, /server in a Client Component`, () => {
+  test("rejects with the stub's guidance while the server renders it", async ({ request }) => {
+    const html = await (await request.get(`${NEXT_URL}/server-from-client`)).text();
+    const rendered = /<output id="server-from-client-render">([^<]*)<\/output>/u.exec(html)?.[1] ?? "";
+
+    expect(STUB_GUIDANCE.filter((guidance) => !guidance.test(rendered))).toEqual([]);
+  });
+
+  test("loads, and rejects with the stub's guidance in the browser", async ({ page }) => {
+    const errors = collectErrors(page);
+    await gotoHydrated(page, `${NEXT_URL}/server-from-client`);
+    await page.locator("#server-from-client").click();
+
+    await expect(page.locator("#server-from-client-outcome")).not.toHaveText("idle");
+    const outcome = (await page.locator("#server-from-client-outcome").textContent()) ?? "";
+    expect(STUB_GUIDANCE.filter((guidance) => !guidance.test(outcome))).toEqual([]);
+    await expect(page.locator("#server-from-client-render")).toHaveText(outcome);
+    expect(errors).toEqual([]);
+  });
+
+  // Every client chunk the build emitted, not only those one page load fetches; the dev server writes no build.
+  test("ships the request module in no client chunk of the build", () => {
+    test.skip(FIXTURE_SERVER === "dev", "the dev server emits no production build");
+    const client = buildFiles("static", /\.js$/u);
+    const server = buildFiles("server", /\.js$/u);
+
+    expect(client.length).toBeGreaterThan(0);
+    expect({
+      client: client.some((code) => code.includes(REQUEST_SENTINEL)),
+      server: server.some((code) => code.includes(REQUEST_SENTINEL)),
+    }).toEqual({ client: false, server: true });
   });
 });

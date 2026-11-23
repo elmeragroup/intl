@@ -47,6 +47,14 @@ The framework an app runs on (Next.js, TanStack Start). Each host has one subpat
 runtime and one build plugin in the tools.
 _Avoid_: platform, integration
 
+**Request config**:
+How the server half of the runtime (`getIntl`, `getT`, `getFormat`, the server `<T>`) reads the current
+request's locale, catalog, time zone and formats. On Next it is the app's request module,
+`intl/request.ts`, whose default export is `createRequestConfig(adapter)`; `withIntl` aliases the
+runtime's `/internal/request-module` to it, which only the `react-server` branch of `/internal/request-config` imports,
+so no page, layout, action or route imports setup code and no client chunk holds the adapter.
+_Avoid_: configure step, setup import
+
 **CurrentIntl**:
 The Effect service `@elmeragroup/intl/effect` exports: its value is the request's or job's `IntlInstance`, read with
 `const { t } = yield* CurrentIntl` and provided per request by `CurrentIntl.provide(options)` or once by
