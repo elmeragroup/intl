@@ -322,9 +322,10 @@
         "anti-slop/no-runtime-typeof": "off"
       }
     },
-    // Config boundary of the intl CLI: elmera-intl.json and the app's formats module are parsed here.
+    // Config boundary of the intl CLI: elmera-intl.json (project-config.ts) and the app's formats module (project.ts)
+    // are parsed here.
     {
-      "files": ["packages/intl-tools/src/project.ts"],
+      "files": ["packages/intl-tools/src/project-config.ts", "packages/intl-tools/src/project.ts"],
       "rules": {
         "anti-slop/no-runtime-typeof": "off"
       }

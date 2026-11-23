@@ -11,8 +11,10 @@ import { compileCatalog } from "./compile";
 import { kindConflicts, kindMismatches, messageSlots } from "./message-slots";
 import type { PoEntry, PoFile, UnusedEntries } from "./po";
 import { formatPo, mergeEntries, parsePo, SERIALIZER_HEADER } from "./po";
-import type { ParseCache, Problem, ProjectConfig, ProjectMessage } from "./project";
+import type { Problem } from "./problem";
+import type { ParseCache, ProjectMessage } from "./project";
 import { catalogPath, loadFormats, scanProject } from "./project";
+import type { ProjectConfig } from "./project-config";
 
 /** What one command run found. Success has no problems. */
 export type CommandReport = {

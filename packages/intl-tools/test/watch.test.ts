@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "../src/cli-run";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import { parsePo } from "../src/po";
-import { loadConfig } from "../src/project";
+import { loadConfig } from "../src/project-config";
 import type { ProjectWatcher, WatchMode } from "../src/watch";
 import { watchProject } from "../src/watch";
 import { cliFromSource } from "./cli-source";
@@ -82,9 +82,9 @@ function component(text: string): string {
 }
 
 // One-shot extract, then a msgstr for each pair.
-function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): void {
+async function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): Promise<void> {
   const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-  expect(runCli(["extract"], io)).toBe(0);
+  expect(await runCli(["extract"], io)).toBe(0);
   let po = read("messages/nb.po");
   for (const [source, translation] of pairs) {
     po = po.replace(`msgid "${source}"\nmsgstr ""`, `msgid "${source}"\nmsgstr "${translation}"`);
@@ -310,7 +310,7 @@ describe("extract --watch", { timeout: 20_000 }, () => {
   });
 
   it("keeps a deleted message's entry and translation", async () => {
-    extractTranslated([["Hello", "Hei"]]);
+    await extractTranslated([["Hello", "Hei"]]);
     await startWatch();
     // The added message is the signal that the sync after the deletion ran.
     write("src/other.tsx", component("Other"));
@@ -329,7 +329,7 @@ msgstr ""
   });
 
   it("prints a syntax error, leaves the catalog byte-identical, and resumes once the file is fixed", async () => {
-    extractTranslated([["Hello", "Hei"]]);
+    await extractTranslated([["Hello", "Hei"]]);
     const po = read("messages/nb.po");
     const { output } = await startWatch();
     write("src/broken.tsx", `${IMPORT}export const C = () => <T>Broken</T;\n`);
@@ -347,7 +347,7 @@ msgstr ""
     files.forEach((i) => {
       write(`src/gen/f${i}.tsx`, component(`Message ${i}`));
     });
-    extractTranslated(files.map((i) => [`Message ${i}`, `Melding ${i}`]));
+    await extractTranslated(files.map((i) => [`Message ${i}`, `Melding ${i}`]));
     await startWatch();
     // A branch switch: every file rewritten at once.
     files.forEach((i) => {
@@ -394,7 +394,7 @@ msgstr ""
   it("keeps a moved-out directory's entries while syncing the one moved in", async () => {
     write("src/old/a.tsx", component("Moved out"));
     write("staging/new/b.tsx", component("Moved in"));
-    extractTranslated([["Moved out", "Flyttet ut"]]);
+    await extractTranslated([["Moved out", "Flyttet ut"]]);
     await startWatch();
     renameSync(join(root, "src/old"), join(root, "staging/old"));
     renameSync(join(root, "staging/new"), join(root, "src/new"));
@@ -418,31 +418,6 @@ msgstr ""
     rmSync(join(root, "messages/nb.po"), { recursive: true });
     write("src/second.tsx", component("Second"));
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Second"`);
-  });
-
-  it.each([
-    ["check", ["check", "--watch"]],
-    ["--json", ["extract", "--watch", "--json"]],
-  ])("exits 2 with usage for --watch with %s instead of watching", (_label, args) => {
-    // The timeout is a hang guard: a CLI that starts watching never exits on its own.
-    const run = spawnSync(execPath, cliFromSource(...args), { cwd: root, encoding: "utf8", timeout: 10_000 });
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain("usage: elmera-intl");
-  });
-
-  // Oracle: the usage contract: `--poll` takes a positive whole number of milliseconds, and only with `--watch`.
-  it.each([
-    ["without --watch", ["extract", "--poll", "50"], "--poll goes with extract --watch only"],
-    ["with no interval", ["extract", "--watch", "--poll"], "--poll needs an interval in milliseconds"],
-    ["with a zero interval", ["extract", "--watch", "--poll", "0"], "between 10 and 2147483647"],
-    ["with a fraction", ["extract", "--watch", "--poll", "1.5"], "--poll needs an interval in milliseconds"],
-    // Node turns a delay past 2^31 - 1 ms into 1 ms, which would scan without pause; under 10 ms a walk per tick is a
-    // continuous scan of a real project.
-    ["past Node's timer range", ["extract", "--watch", "--poll", "2147483648"], "between 10 and 2147483647"],
-    ["under the 10 ms floor", ["extract", "--watch", "--poll", "5"], "between 10 and 2147483647"],
-  ])("exits 2 with usage for --poll %s", (_label, args, reason) => {
-    const run = spawnSync(execPath, cliFromSource(...args), { cwd: root, encoding: "utf8", timeout: 10_000 });
-    expect([run.status, run.stderr.split("\n")[0]]).toEqual([2, expect.stringContaining(reason)]);
   });
 
   it("exits 0 on SIGINT", async () => {

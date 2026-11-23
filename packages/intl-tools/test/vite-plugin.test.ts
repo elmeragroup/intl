@@ -34,12 +34,12 @@ let server: ViteDevServer | undefined;
 let watchers: Array<Rolldown.RolldownWatcher> = [];
 
 // A synced, translated project: `<T>Hello</T>` -> "Hei". The entry has no messages; the extractor scans the rest.
-beforeEach(() => {
+beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "elmera-intl-vite-"));
   write("elmera-intl.json", JSON.stringify(CONFIG));
   write("src/main.ts", "export const answer = 42;\n");
   write("src/page.tsx", component("Hello"));
-  extractAndTranslate();
+  await extractAndTranslate();
 });
 
 afterEach(async () => {
@@ -110,13 +110,13 @@ async function watchBuild(extra: InlineConfig = {}): Promise<Array<Array<string>
   );
 }
 
-function extract(): void {
-  expect(runCli(["extract"], { cwd: root, stdout: () => undefined, stderr: () => undefined })).toBe(0);
+async function extract(): Promise<void> {
+  expect(await runCli(["extract"], { cwd: root, stdout: () => undefined, stderr: () => undefined })).toBe(0);
 }
 
 // Syncs the catalogs and translates them: "Hello" is "Hei", and any other message gets `msgstr`.
-function extractAndTranslate(more: ReadonlyArray<readonly [string, string]> = []): void {
-  extract();
+async function extractAndTranslate(more: ReadonlyArray<readonly [string, string]> = []): Promise<void> {
+  await extract();
   let po = read("messages/nb.po");
   for (const [source, translation] of [["Hello", "Hei"], ...more]) {
     po = po.replace(
@@ -132,14 +132,14 @@ function moneyFormats(currency: string): string {
 }
 
 // A translated message in the `money` style, which the config's formats module defines with `currency`.
-function useMoneyFormats(currency: string): void {
+async function useMoneyFormats(currency: string): Promise<void> {
   write(
     "src/price.tsx",
     `import { msg } from "@elmeragroup/intl/react";\nexport const P = msg("{n, number, money}");\n`
   );
   write("intl-formats.ts", moneyFormats(currency));
   write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
-  extractAndTranslate([["{n, number, money}", "{n, number, money} totalt"]]);
+  await extractAndTranslate([["{n, number, money}", "{n, number, money} totalt"]]);
 }
 
 // Unit under test: the intl() Vite plugin. Oracle: the check's problem code, the PO text, and the nb render, by hand.
@@ -163,7 +163,7 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect.poll(() => outcomes.at(-1), HANG_GUARD).toContain("CatalogOutOfSync");
 
     // The repair touches only the catalog: extract, then translate.
-    extract();
+    await extract();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace(
@@ -176,7 +176,7 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   // Oracle: Intl rejects the currency "NOKK". The edit touches only the formats module.
   it("checks the catalogs with the edited formats module after a watch rebuild", async () => {
-    useMoneyFormats("NOK");
+    await useMoneyFormats("NOK");
     const [outcomes = []] = await watchBuild();
     await expect.poll(() => outcomes, HANG_GUARD).toContain("BUNDLE_END");
 
@@ -252,13 +252,13 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     const [outcomes = []] = await watchBuild();
     await expect.poll(() => outcomes.at(-1), HANG_GUARD).toContain("elmera-intl check failed");
 
-    repair();
+    await repair();
     await expect.poll(() => outcomes.at(-1), HANG_GUARD).toBe("BUNDLE_END");
   });
 
   // Oracle: Intl rejects the currency "NOKK". A dev server's PO load re-runs on the formats module's save.
   it("loads a catalog with the edited formats module during dev", async () => {
-    useMoneyFormats("NOK");
+    await useMoneyFormats("NOK");
     server = await createServer({
       root,
       configFile: false,
@@ -361,12 +361,12 @@ function catalogExport(exports: ReadonlyMap<string, unknown>, name: string): Cat
 describe("intlCatalogs()", { timeout: 15_000 }, () => {
   const COUNT = "{n, number} items";
 
-  beforeEach(() => {
+  beforeEach(async () => {
     write(
       "src/count.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const COUNT = msg(${JSON.stringify(COUNT)});\n`
     );
-    extractAndTranslate([[COUNT, "{n, number} varer"]]);
+    await extractAndTranslate([[COUNT, "{n, number} varer"]]);
   });
 
   it("compiles a PO import to its locale's catalog, and ?source to the English one", async () => {
@@ -404,7 +404,7 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
       "src/price.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const P = msg("{n, number, money}");\n`
     );
-    extractAndTranslate([["{n, number, money}", "{n, number, money} totalt"]]);
+    await extractAndTranslate([["{n, number, money}", "{n, number, money} totalt"]]);
     write(
       "intl-formats.ts",
       `export const formats = { number: { money: { style: "currency", currency: "NOKK" } } };\n`
@@ -444,9 +444,9 @@ describe("./-prefixed patterns", { timeout: 15_000 }, () => {
     write("src/skip/draft.tsx", component("Draft"));
   });
 
-  it("extracts and checks the included files, skipping the excluded ones", () => {
+  it("extracts and checks the included files, skipping the excluded ones", async () => {
     const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-    expect([runCli(["extract"], io), runCli(["check"], io)]).toEqual([0, 0]);
+    expect([await runCli(["extract"], io), await runCli(["check"], io)]).toEqual([0, 0]);
     expect(read("messages/nb.po")).not.toContain("Draft");
   });
 });
@@ -462,9 +462,9 @@ describe.each([
     write("src/skip/draft.tsx", component("Draft"));
   });
 
-  it("extracts and checks without the directory's files", () => {
+  it("extracts and checks without the directory's files", async () => {
     const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-    expect([runCli(["extract"], io), runCli(["check"], io)]).toEqual([0, 0]);
+    expect([await runCli(["extract"], io), await runCli(["check"], io)]).toEqual([0, 0]);
     expect(read("messages/nb.po")).not.toContain("Draft");
   });
 });

@@ -62,7 +62,7 @@ pnpm dev                                    # rebuild packages on change (turbo 
 pnpm tcw                                    # type-check in watch mode
 pnpm --filter @elmeragroup/intl test        # one package's tests in watch mode
 pnpm turbo run test:run --filter=@elmeragroup/intl -- conformance   # one package, one file filter
-pnpm bench                                  # runtime cost and client formatter size
+pnpm bench                                  # runtime cost, client formatter size, and the tools' cost to their hosts
 ```
 
 Tests that read `dist` (public surface, the formatter as it ships) depend on `build` in the

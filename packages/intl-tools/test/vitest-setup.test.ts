@@ -31,20 +31,20 @@ function write(path: string, text: string): void {
 }
 
 // The test process runs in packages/intl-tools, so a setup that checked process.cwd() would not see this project.
-it("checks the vitest project root, not the process cwd", () => {
+it("checks the vitest project root, not the process cwd", async () => {
   const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-  expect(runCli(["extract"], io)).toBe(0);
+  expect(await runCli(["extract"], io)).toBe(0);
   // Check also flags an empty msgstr, so translate the one message.
   const po = join(root, "messages/nb.po");
   writeFileSync(
     po,
     readFileSync(po, "utf8").replace('msgid "Order"\nmsgstr ""', 'msgid "Order"\nmsgstr "Ordre"')
   );
-  expect(runCli(["extract"], io)).toBe(0);
-  expect(() => checkIntlCatalogs({ config: { root } })).not.toThrow();
+  expect(await runCli(["extract"], io)).toBe(0);
+  await expect(checkIntlCatalogs({ config: { root } })).resolves.toBeUndefined();
 
   write("src/page.tsx", `${PAGE}export function Greeting() { return <T>Hello</T>; }\n`);
-  expect(() => checkIntlCatalogs({ config: { root } })).toThrow(
+  await expect(checkIntlCatalogs({ config: { root } })).rejects.toThrow(
     `elmera-intl check found problems in ${root}`
   );
 });

@@ -1,13 +1,17 @@
 import { spawnSync } from "node:child_process";
-// A project the CLI works on: its config file, and the messages its sources declare.
+// A project the CLI works on: its formats, its catalogs and the messages its sources declare (project-config.ts reads
+// its config).
 import { createHash } from "node:crypto";
-import { existsSync, globSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, matchesGlob, posix, relative, resolve, sep } from "node:path";
+import { globSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { Formats } from "@elmeragroup/intl/internal/icu";
 
 import { extractMessages } from "./extract";
+import type { Problem } from "./problem";
+import type { ProjectConfig } from "./project-config";
+import { CONFIG_FILE } from "./project-config";
 
 /**
  * Extraction results by project-relative path, each with its source's content hash, so a rescan parses only changed
@@ -18,42 +22,6 @@ export type ParseCache = Map<
   { readonly hash: string; readonly result: ReturnType<typeof extractMessages> }
 >;
 
-/** The config file name the CLI looks for in the project root. */
-export const CONFIG_FILE = "elmera-intl.json";
-
-/** A parsed `elmera-intl.json`. */
-export type ProjectConfig = {
-  /** The directory paths in the config are relative to. */
-  readonly root: string;
-  /** Glob patterns of source files to extract, root-relative and normalized (`loadConfig` drops a leading `./`). */
-  readonly include: ReadonlyArray<string>;
-  /** Glob patterns to skip, normalized like `include`; `node_modules` is always skipped. */
-  readonly exclude: ReadonlyArray<string>;
-  /** Catalog path pattern with a `{locale}` placeholder, ending in `.po`. */
-  readonly catalogs: string;
-  /** Locales to keep catalogs for; the source (English) needs none, its catalog compiles from any PO's msgids. */
-  readonly locales: ReadonlyArray<string>;
-  /**
-   * Absolute path of the module whose `formats` export is the app's `formats`, when the app has any. The runtime
-   * adapter imports it, and `check` and the loaders load it, so all three validate and format with one definition.
-   */
-  readonly formats: string | undefined;
-};
-
-/** A problem the CLI reports, with the fix it names. */
-export type Problem = {
-  /** Stable identifier for tooling. */
-  readonly code: string;
-  readonly message: string;
-  /** What to do about it. */
-  readonly fix: string;
-  readonly file?: string;
-  readonly line?: number;
-  readonly column?: number;
-  readonly locale?: string;
-  readonly key?: string;
-};
-
 /** A message and every file that uses it. */
 export type ProjectMessage = {
   readonly key: string;
@@ -62,95 +30,6 @@ export type ProjectMessage = {
   readonly references: ReadonlyArray<string>;
   readonly comments: ReadonlyArray<string>;
 };
-
-const CONFIG_EXAMPLE =
-  '{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }';
-
-/**
- * Read and parse the project config.
- *
- * @param path - Path of `elmera-intl.json`.
- * @returns The config, or the problems with it.
- */
-export function loadConfig(
-  path: string
-):
-  | { readonly _tag: "Config"; readonly config: ProjectConfig }
-  | { readonly _tag: "ConfigInvalid"; readonly problem: Problem } {
-  const configProblem = (message: string) => ({
-    _tag: "ConfigInvalid" as const,
-    problem: { code: "ConfigInvalid", message, fix: `write ${CONFIG_FILE} as ${CONFIG_EXAMPLE}`, file: path },
-  });
-
-  if (!existsSync(path)) {
-    return configProblem(`${path} not found`);
-  }
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    return configProblem(`not JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  if (typeof raw !== "object" || raw === null) {
-    return configProblem("not a JSON object");
-  }
-
-  const fields = new Map<string, unknown>(Object.entries(raw));
-  // Normalized once here so `./src/**` matches `src/page.ts` wherever membership is decided (isProjectSource).
-  const include = stringListField(fields, "include")?.map((pattern) => posix.normalize(pattern));
-  const exclude = fields.has("exclude")
-    ? stringListField(fields, "exclude")?.map((pattern) => posix.normalize(pattern))
-    : [];
-  const locales = stringListField(fields, "locales");
-  const catalogs = fields.get("catalogs");
-  const formats = fields.get("formats");
-
-  if (include === undefined || include.length === 0) {
-    return configProblem('"include" must be a non-empty array of glob strings');
-  }
-
-  if (exclude === undefined) {
-    return configProblem('"exclude" must be an array of glob strings');
-  }
-
-  const escaping = [...include, ...exclude].find(
-    (pattern) => isAbsolute(pattern) || pattern.startsWith("../")
-  );
-
-  if (escaping !== undefined) {
-    return configProblem(`glob ${JSON.stringify(escaping)} reaches outside the project root`);
-  }
-
-  if (locales === undefined || locales.length === 0) {
-    return configProblem('"locales" must be a non-empty array of locale strings');
-  }
-
-  if (typeof catalogs !== "string" || !catalogs.includes("{locale}") || !catalogs.endsWith(".po")) {
-    return configProblem('"catalogs" must be a path pattern with {locale} ending in .po');
-  }
-
-  if (formats !== undefined && (typeof formats !== "string" || !FORMATS_MODULE.test(formats))) {
-    return configProblem('"formats" must be the path of a .ts or .js module exporting `formats`');
-  }
-
-  const root = dirname(resolve(path));
-
-  return {
-    _tag: "Config",
-    config: {
-      root,
-      include,
-      exclude,
-      catalogs,
-      locales,
-      formats: formats === undefined ? undefined : resolve(root, formats),
-    },
-  };
-}
-
-const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/u;
 
 /**
  * Load the app's `formats` from the module the config names. Node loads it (type stripping for TypeScript), so the
@@ -504,16 +383,4 @@ function cachedExtract(cache: ParseCache, path: string, text: string): ReturnTyp
   cache.set(path, { hash, result });
 
   return result;
-}
-
-function stringListField(fields: ReadonlyMap<string, unknown>, name: string): Array<string> | undefined {
-  const value = fields.get(name);
-
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-
-  const items: Array<unknown> = value;
-
-  return items.every((item): item is string => typeof item === "string") ? items : undefined;
 }

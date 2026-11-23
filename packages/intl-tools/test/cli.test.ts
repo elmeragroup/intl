@@ -6,16 +6,18 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli-run";
-import { cliFromSource } from "./cli-source";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 const PAGE = `import { T, Val, useT, msg } from "@elmeragroup/intl/react";
@@ -61,10 +63,21 @@ function read(path: string): string {
 
 type CliRun = { readonly code: number; readonly stdout: string; readonly stderr: string };
 
-function cli(...args: Array<string>): CliRun {
+// The built `elmera-intl` executable, spawned as a user's shell runs it: its bytes on stdout and stderr and its exit
+// code are the CLI's contract, whatever runs behind them.
+const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
+
+function bin(...args: Array<string>): CliRun {
+  // The timeout is a hang guard: a CLI that starts watching never exits on its own.
+  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8", timeout: 10_000 });
+
+  return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
+}
+
+async function cli(...args: Array<string>): Promise<CliRun> {
   let stdout = "";
   let stderr = "";
-  const code = runCli(args, {
+  const code = await runCli(args, {
     cwd: root,
     stdout: (text) => {
       stdout += text;
@@ -97,14 +110,14 @@ function readReport(text: string): CheckReport {
   return value as CheckReport;
 }
 
-function check(): CheckRun {
-  const { code, stdout } = cli("check", "--json");
+async function check(): Promise<CheckRun> {
+  const { code, stdout } = await cli("check", "--json");
   const report = readReport(stdout);
 
   return { code, report };
 }
 
-function translateAll(): void {
+async function translateAll(): Promise<void> {
   let po = read("messages/nb.po");
   for (const [source, translation] of TRANSLATIONS) {
     po = po.replace(
@@ -113,13 +126,13 @@ function translateAll(): void {
     );
   }
   write("messages/nb.po", po);
-  expect(cli("extract").code).toBe(0);
+  expect((await cli("extract")).code).toBe(0);
 }
 
 // Unit under test: the elmera-intl CLI. Oracle: the PO text and problem codes written out per case.
 describe("extract", () => {
-  it("writes a sorted PO with tag comments and line-free references, and nothing else", () => {
-    const { code, stdout } = cli("extract");
+  it("writes a sorted PO with tag comments and line-free references, and nothing else", async () => {
+    const { code, stdout } = await cli("extract");
     expect(code).toBe(0);
     expect(stdout).toBe("3 messages; wrote 1 file(s)\n");
     expect(read("messages/nb.po")).toBe(`${HEADER}
@@ -140,39 +153,43 @@ msgstr ""
     expect(readdirSync(join(root, "messages"))).toEqual(["nb.po"]);
   });
 
-  it("keeps translations, and rewrites nothing on an unchanged rerun", () => {
-    cli("extract");
-    translateAll();
+  it("keeps translations, and rewrites nothing on an unchanged rerun", async () => {
+    await cli("extract");
+    await translateAll();
     const before = read("messages/nb.po");
-    expect(cli("extract").stdout).toBe("3 messages; wrote 0 file(s)\n");
+    // A fixed past mtime: a rewrite of the same bytes still moves it, and watchers key off it.
+    const past = new Date("2001-02-03T04:05:06Z");
+    utimesSync(join(root, "messages/nb.po"), past, past);
+    expect((await cli("extract")).stdout).toBe("3 messages; wrote 0 file(s)\n");
     expect(read("messages/nb.po")).toBe(before);
+    expect(statSync(join(root, "messages/nb.po")).mtime).toEqual(past);
   });
 
-  it("drops entries no source uses", () => {
-    cli("extract");
+  it("drops entries no source uses", async () => {
+    await cli("extract");
     write(
       "src/page.tsx",
       `import { useT } from "@elmeragroup/intl/react";\nexport function P() { const t = useT(); return t("Order {id}", { id: "1" }); }\n`
     );
-    cli("extract");
+    await cli("extract");
     expect(read("messages/nb.po")).not.toContain("Open");
   });
 
-  it("writes nothing when a source cannot be extracted, and points at it", () => {
+  it("writes nothing when a source cannot be extracted, and points at it", async () => {
     write(
       "src/bad.tsx",
       `import { useT } from "@elmeragroup/intl/react";\nexport function B(label: string) {\n  const t = useT();\n  return t(label);\n}\n`
     );
-    const { code, stderr } = cli("extract");
+    const { code, stderr } = await cli("extract");
     expect(code).toBe(1);
     expect(stderr).toContain("src/bad.tsx:4:9: ExtractFailed: t() takes a string literal");
     expect(() => read("messages/nb.po")).toThrow();
   });
 
-  it("refuses to overwrite a PO it cannot read", () => {
-    cli("extract");
+  it("refuses to overwrite a PO it cannot read", async () => {
+    await cli("extract");
     write("messages/nb.po", `# translator note\n${read("messages/nb.po")}`);
-    const { code, stderr } = cli("extract");
+    const { code, stderr } = await cli("extract");
     expect(code).toBe(1);
     expect(stderr).toContain("CatalogUnreadable");
     expect(read("messages/nb.po")).toContain("# translator note");
@@ -180,53 +197,54 @@ msgstr ""
 });
 
 describe("check", () => {
-  it("passes a fully translated, extracted project", () => {
-    cli("extract");
-    translateAll();
-    const { code, report } = check();
+  it("passes a fully translated, extracted project", async () => {
+    await cli("extract");
+    await translateAll();
+    const { code, report } = await check();
     expect([code, report.ok, report.problems]).toEqual([0, true, []]);
   });
 
-  const codes = (): Array<string> => check().report.problems.map((problem) => problem.code);
+  const codes = async (): Promise<Array<string>> =>
+    (await check()).report.problems.map((problem) => problem.code);
 
-  it("reports untranslated messages", () => {
-    cli("extract");
-    expect(check().code).toBe(1);
-    expect(codes()).toEqual(["TranslationMissing", "TranslationMissing", "TranslationMissing"]);
+  it("reports untranslated messages", async () => {
+    await cli("extract");
+    expect((await check()).code).toBe(1);
+    expect(await codes()).toEqual(["TranslationMissing", "TranslationMissing", "TranslationMissing"]);
   });
 
-  it("reports a catalog missing a new source message, and an obsolete entry", () => {
-    cli("extract");
-    translateAll();
+  it("reports a catalog missing a new source message, and an obsolete entry", async () => {
+    await cli("extract");
+    await translateAll();
     write("src/page.tsx", PAGE.replace("Order {id}", "Ordered {id}"));
-    expect(check().report.problems.map((problem) => [problem.code, problem.key])).toEqual([
+    expect((await check()).report.problems.map((problem) => [problem.code, problem.key])).toEqual([
       ["CatalogOutOfSync", "Ordered {id}"],
       ["CatalogOutOfSync", "Order {id}"],
     ]);
   });
 
   // Oracle: a pair found by search (the 36^7 hash space makes one rare, so it is pinned here, not searched for).
-  it("reports two messages that share a wire key", () => {
+  it("reports two messages that share a wire key", async () => {
     write(
       "src/collide.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const A = msg("Order 577786");\nexport const B = msg("Order 634976");\n`
     );
-    cli("extract");
-    translateAll();
-    expect(check().report.problems.filter(({ code }) => code === "KeyCollision")).toEqual([
+    await cli("extract");
+    await translateAll();
+    expect((await check()).report.problems.filter(({ code }) => code === "KeyCollision")).toEqual([
       expect.objectContaining({ key: "Order 634976" }),
     ]);
   });
 
   // The compiled artifact, dry-formatted as the loaders compile it: a currency Intl rejects parses fine and passes
   // every slot check, and would throw only when rendered.
-  it("reports a translation that throws when formatted", () => {
+  it("reports a translation that throws when formatted", async () => {
     write(
       "src/price.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const P = msg("{n, number, ::currency/NOK}");\n`
     );
-    cli("extract");
-    translateAll();
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace(
@@ -234,13 +252,13 @@ describe("check", () => {
         'msgid "{n, number, ::currency/NOK}"\nmsgstr "{n, number, ::currency/NOKK}"'
       )
     );
-    expect(check().report.problems.map(({ code, key }) => [code, key])).toEqual([
+    expect((await check()).report.problems.map(({ code, key }) => [code, key])).toEqual([
       ["TranslationUnformattable", "{n, number, ::currency/NOK}"],
     ]);
   });
 
   // Oracle: Intl rejects `currency: "NOKK"`; the named style is only invalid through the app's formats module.
-  it("dry-formats with the formats module the config names, and reports one that does not load", () => {
+  it("dry-formats with the formats module the config names, and reports one that does not load", async () => {
     write(
       "src/price.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const P = msg("{n, number, money}");\n`
@@ -249,8 +267,8 @@ describe("check", () => {
       "intl-formats.ts",
       `export const formats = { number: { money: { style: "currency", currency: "NOKK" } } };\n`
     );
-    cli("extract");
-    translateAll();
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace(
@@ -258,28 +276,28 @@ describe("check", () => {
         'msgid "{n, number, money}"\nmsgstr "{n, number, money} kr"'
       )
     );
-    expect(codes()).toEqual([]);
+    expect(await codes()).toEqual([]);
 
     write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
-    expect(check().report.problems.map(({ code, key }) => [code, key])).toEqual([
+    expect((await check()).report.problems.map(({ code, key }) => [code, key])).toEqual([
       ["TranslationUnformattable", "{n, number, money}"],
       ["SourceUnformattable", "{n, number, money}"],
     ]);
 
     write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "missing.ts" }));
-    expect(codes()).toEqual(["FormatsInvalid"]);
+    expect(await codes()).toEqual(["FormatsInvalid"]);
   });
 
   // Oracle: CLDR's nb and en `one`, which is 1 alone among integers: the exact arms take it, and the search cannot
   // prove that, so check lists the arm as information and passes.
-  it("lists an arm no sample reaches, and passes", () => {
+  it("lists an arm no sample reaches, and passes", async () => {
     const source = "{n, plural, =1 {exactly one} =-1 {minus one} one {one} other {#}}";
     write(
       "src/count.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const C = msg(${JSON.stringify(source)});\n`
     );
-    cli("extract");
-    translateAll();
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace(
@@ -288,7 +306,7 @@ describe("check", () => {
       )
     );
 
-    const { code, report } = check();
+    const { code, report } = await check();
 
     expect([code, report.ok, report.problems, report.unreachable]).toEqual([
       0,
@@ -307,16 +325,16 @@ describe("check", () => {
     ["Infinity", "Infinity"],
     ["NaN", "NaN"],
     ["a Date", "new Date(0)"],
-  ])("reports a formats option that is not JSON: %s", (_label, value) => {
-    cli("extract");
-    translateAll();
+  ])("reports a formats option that is not JSON: %s", async (_label, value) => {
+    await cli("extract");
+    await translateAll();
     write(
       "intl-formats.ts",
       `export const formats = { number: { precise: { maximumFractionDigits: ${value} } } };\n`
     );
     write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
 
-    expect(check().report.problems.map(({ code, message }) => [code, message])).toEqual([
+    expect((await check()).report.problems.map(({ code, message }) => [code, message])).toEqual([
       ["FormatsInvalid", expect.stringContaining("formats.number.precise.maximumFractionDigits")],
     ]);
   });
@@ -328,41 +346,41 @@ describe("check", () => {
     ["a text placeholder formatted as a number", "Ordre {id, number}", "ArgumentKindMismatch"],
     ["a text placeholder formatted as a date", "Ordre {id, date, short}", "ArgumentKindMismatch"],
     ["a text placeholder used as a plural", "{id, plural, other {Ordre #}}", "ArgumentKindMismatch"],
-  ] as const)("reports %s", (_label, translation, code) => {
-    cli("extract");
-    translateAll();
+  ] as const)("reports %s", async (_label, translation, code) => {
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace('msgstr "Ordre {id}"', `msgstr ${JSON.stringify(translation)}`)
     );
-    cli("extract");
-    expect(codes()).toEqual([code]);
+    await cli("extract");
+    expect(await codes()).toEqual([code]);
   });
 
   // The reviewer's mutation: an msgstr left as the English renders English and passed every slot check.
-  it("reports a translation identical to its source", () => {
-    cli("extract");
-    translateAll();
+  it("reports a translation identical to its source", async () => {
+    await cli("extract");
+    await translateAll();
     write("messages/nb.po", read("messages/nb.po").replace('msgstr "Ordre {id}"', 'msgstr "Order {id}"'));
-    expect(check().report.problems.map(({ code, key }) => [code, key])).toEqual([
+    expect((await check()).report.problems.map(({ code, key }) => [code, key])).toEqual([
       ["TranslationIdenticalToSource", "Order {id}"],
     ]);
   });
 
   const flagged = '#, ignore-same\nmsgid "Order {id}"';
 
-  it("accepts an identical translation flagged ignore-same, and extract keeps the flag", () => {
-    cli("extract");
-    translateAll();
+  it("accepts an identical translation flagged ignore-same, and extract keeps the flag", async () => {
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po")
         .replace('msgid "Order {id}"', flagged)
         .replace('msgstr "Ordre {id}"', 'msgstr "Order {id}"')
     );
-    expect(cli("extract").code).toBe(0);
+    expect((await cli("extract")).code).toBe(0);
     expect(read("messages/nb.po")).toContain(flagged);
-    const { code, report } = check();
+    const { code, report } = await check();
     expect([code, report.problems]).toEqual([0, []]);
   });
 
@@ -371,19 +389,19 @@ describe("check", () => {
     ["split, ignore-same first", "#, ignore-same\n#, fuzzy"],
     ["split, fuzzy first", "#, fuzzy\n#, ignore-same"],
     ["one line", "#, ignore-same, fuzzy"],
-  ])("keeps every flag when they are %s", (_label, flagLines) => {
-    cli("extract");
-    translateAll();
+  ])("keeps every flag when they are %s", async (_label, flagLines) => {
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po")
         .replace('msgid "Order {id}"', `${flagLines}\nmsgid "Order {id}"`)
         .replace('msgstr "Ordre {id}"', 'msgstr "Order {id}"')
     );
-    expect(check().report.problems).toEqual([]);
-    expect(cli("extract").code).toBe(0);
+    expect((await check()).report.problems).toEqual([]);
+    expect((await cli("extract")).code).toBe(0);
     expect(read("messages/nb.po")).toContain('#, fuzzy, ignore-same\nmsgid "Order {id}"');
-    const { code, report } = check();
+    const { code, report } = await check();
     expect([code, report.problems]).toEqual([0, []]);
   });
 
@@ -437,38 +455,38 @@ describe("check", () => {
       `${openEntry}\n#, fuzzy\n\nmsgid "Order {id}"\nmsgstr "Order {id}"\n`,
       `${openEntry}\n#: src/page.tsx\n${fuzzyOrder}`,
     ],
-  ])("keeps each entry's flags to itself when %s", (_label, entries, extracted) => {
-    cli("extract");
-    translateAll();
+  ])("keeps each entry's flags to itself when %s", async (_label, entries, extracted) => {
+    await cli("extract");
+    await translateAll();
     write("messages/nb.po", read("messages/nb.po").replace(`${openEntry}\n${orderEntry}`, entries));
-    const problems = (): [number, Array<[string, string | undefined]>] => {
-      const { code, report } = check();
+    const problems = async (): Promise<[number, Array<[string, string | undefined]>]> => {
+      const { code, report } = await check();
 
       return [code, report.problems.map((problem) => [problem.code, problem.key])];
     };
     const identical = [1, [["TranslationIdenticalToSource", "Order {id}"]]];
-    expect(problems()).toEqual(identical);
-    expect(cli("extract").code).toBe(0);
+    expect(await problems()).toEqual(identical);
+    expect((await cli("extract")).code).toBe(0);
     expect(read("messages/nb.po").slice(-extracted.length - 2)).toBe(`\n\n${extracted}`);
-    expect(problems()).toEqual(identical);
+    expect(await problems()).toEqual(identical);
   });
 
-  it("reports an ignore-same flag on a translation that differs from its source", () => {
-    cli("extract");
-    translateAll();
+  it("reports an ignore-same flag on a translation that differs from its source", async () => {
+    await cli("extract");
+    await translateAll();
     write("messages/nb.po", read("messages/nb.po").replace('msgid "Order {id}"', flagged));
-    expect(check().report.problems.map(({ code, key }) => [code, key])).toEqual([
+    expect((await check()).report.problems.map(({ code, key }) => [code, key])).toEqual([
       ["IgnoreSameUnused", "Order {id}"],
     ]);
   });
 
-  it("extracts a <Select> inside <T> and checks its translation", () => {
+  it("extracts a <Select> inside <T> and checks its translation", async () => {
     write(
       "src/pick.tsx",
       `import { T, Select } from "@elmeragroup/intl/react";\nexport const Pick = ({ kind }: { kind: string }) => <T>Pick <b><Select kind={kind} _a="A" other="O" /></b></T>;\n`
     );
-    cli("extract");
-    translateAll();
+    await cli("extract");
+    await translateAll();
     const source = 'msgid "Pick <x0>{kind, select, a {A} other {O}}</x0>"\nmsgstr ""';
     expect(read("messages/nb.po")).toContain(source);
     write(
@@ -478,19 +496,19 @@ describe("check", () => {
         source.replace('msgstr ""', 'msgstr "Velg <x0>{kind, select, a {Å} other {Ø}}</x0>"')
       )
     );
-    const { code, report } = check();
+    const { code, report } = await check();
     expect([code, report.problems]).toEqual([0, []]);
   });
 
-  it("accepts a text placeholder used as a select", () => {
-    cli("extract");
-    translateAll();
+  it("accepts a text placeholder used as a select", async () => {
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace('msgstr "Ordre {id}"', 'msgstr "Ordre {id, select, other {{id}}}"')
     );
-    cli("extract");
-    expect(codes()).toEqual([]);
+    await cli("extract");
+    expect(await codes()).toEqual([]);
   });
 
   // A plain `{x}` takes text only, so a number or date shown plainly fails at runtime, and text formatted as a number renders NaN.
@@ -543,13 +561,13 @@ describe("check", () => {
       "{s, select, a {Å} other {{s}}}",
       [],
     ],
-  ] as const)("judges %s", (_label, source, translation, expected) => {
+  ] as const)("judges %s", async (_label, source, translation, expected) => {
     write(
       "src/kinds.tsx",
       `import { msg } from "@elmeragroup/intl/react";\nexport const d = msg(${JSON.stringify(source)});\n`
     );
-    cli("extract");
-    translateAll();
+    await cli("extract");
+    await translateAll();
     write(
       "messages/nb.po",
       read("messages/nb.po").replace(
@@ -557,26 +575,26 @@ describe("check", () => {
         `msgid ${JSON.stringify(source)}\nmsgstr ${JSON.stringify(translation)}`
       )
     );
-    cli("extract");
-    expect(codes()).toEqual(expected);
+    await cli("extract");
+    expect(await codes()).toEqual(expected);
   });
 
-  it("reports a dropped tag", () => {
-    cli("extract");
-    translateAll();
+  it("reports a dropped tag", async () => {
+    await cli("extract");
+    await translateAll();
     const po = read("messages/nb.po");
     write("messages/nb.po", po.replace("Hei {name}, les <x0>vilkårene</x0>.", "Hei {name}, les vilkårene."));
-    cli("extract");
-    expect(codes()).toEqual(["TagMismatch"]);
+    await cli("extract");
+    expect(await codes()).toEqual(["TagMismatch"]);
   });
 
-  it("accepts reordered tags", () => {
+  it("accepts reordered tags", async () => {
     write(
       "src/two.tsx",
       `import { T } from "@elmeragroup/intl/react";\nexport const two = <T>Read <a href="/a">this</a> and <b>that</b></T>;\n`
     );
-    cli("extract");
-    translateAll();
+    await cli("extract");
+    await translateAll();
     const source = "Read <x0>this</x0> and <x1>that</x1>";
     const po = read("messages/nb.po");
     write(
@@ -586,77 +604,140 @@ describe("check", () => {
         `msgid "${source}"\nmsgstr "Les <x1>det</x1> og <x0>dette</x0>"`
       )
     );
-    cli("extract");
-    expect(codes()).toEqual([]);
+    await cli("extract");
+    expect(await codes()).toEqual([]);
   });
 
-  it("reports a catalog keyed by another serializer version, and extract refuses to rewrite it", () => {
-    cli("extract");
-    translateAll();
+  it("reports a catalog keyed by another serializer version, and extract refuses to rewrite it", async () => {
+    await cli("extract");
+    await translateAll();
     const stale = read("messages/nb.po").replace("X-Elmera-Serializer: 1", "X-Elmera-Serializer: 0");
     write("messages/nb.po", stale);
-    const { report } = check();
+    const { report } = await check();
     expect(report.problems.map((problem) => problem.code)).toEqual(["SerializerMismatch"]);
     expect(report.problems[0]?.fix).toContain("move each msgstr to its re-keyed msgid by hand");
-    expect(cli("extract").code).toBe(1);
+    expect((await cli("extract")).code).toBe(1);
     expect(read("messages/nb.po")).toBe(stale);
   });
 
-  it("reports a missing catalog", () => {
-    expect(codes()).toEqual(["CatalogMissing"]);
+  it("reports a missing catalog", async () => {
+    expect(await codes()).toEqual(["CatalogMissing"]);
   });
 
-  it("reports an include pattern that matches no file, and extract writes nothing", () => {
+  it("reports an include pattern that matches no file, and extract writes nothing", async () => {
     write(
       "elmera-intl.json",
       JSON.stringify({ ...CONFIG, include: [...CONFIG.include, "missing/**/*.tsx"] })
     );
-    expect(codes()).toContain("IncludeUnmatched");
-    expect(cli("extract").code).toBe(1);
+    expect(await codes()).toContain("IncludeUnmatched");
+    expect((await cli("extract")).code).toBe(1);
     expect(existsSync(join(root, "messages/nb.po"))).toBe(false);
   });
 
-  it("skips a directory whose name matches an include pattern", () => {
-    cli("extract");
-    translateAll();
+  it("skips a directory whose name matches an include pattern", async () => {
+    await cli("extract");
+    await translateAll();
     write("src/odd.tsx/readme.md", "a directory named like a source file");
-    const { code, report } = check();
+    const { code, report } = await check();
     expect([code, report.ok]).toEqual([0, true]);
   });
 
-  it("skips a dangling symlink that matches an include pattern", () => {
-    cli("extract");
-    translateAll();
+  it("skips a dangling symlink that matches an include pattern", async () => {
+    await cli("extract");
+    await translateAll();
     symlinkSync(join(root, "src/deleted.tsx"), join(root, "src/dangling.tsx"));
-    const { code, report } = check();
+    const { code, report } = await check();
     expect([code, report.ok]).toEqual([0, true]);
   });
 
-  it("writes only the JSON report to stdout", () => {
-    cli("extract");
-    const { stdout, stderr } = cli("check", "--json");
-    expect(() => readReport(stdout)).not.toThrow();
-    expect(stderr).toBe("");
+  // Oracle: the report tooling parses, written out by hand: two-space indentation, keys in the order ok, problems,
+  // messages, written, unreachable, and a trailing newline.
+  it("writes only the JSON report to stdout", async () => {
+    await cli("extract");
+    const untranslated = (key: string) => `    {
+      "code": "TranslationMissing",
+      "message": "untranslated",
+      "fix": "translate it in messages/nb.po, then run \`elmera-intl extract\`",
+      "file": "messages/nb.po",
+      "locale": "nb",
+      "key": ${key}
+    }`;
+    const { code, stdout, stderr } = bin("check", "--json");
+    expect([code, stderr]).toEqual([1, ""]);
+    expect(stdout).toBe(`{
+  "ok": false,
+  "problems": [
+${[untranslated('"Hello {name}, read the <x0>terms</x0>."'), untranslated('"status\\u0004Open"'), untranslated('"Order {id}"')].join(",\n")}
+  ],
+  "messages": 3,
+  "written": [],
+  "unreachable": []
+}
+`);
   });
 });
 
 describe("usage", () => {
+  // Oracle: the usage text, written out by hand.
+  const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to elmera-intl.json>]
+       elmera-intl extract --watch [--poll <ms>] [--config <path to elmera-intl.json>]
+`;
+
   it.each([
-    ["an unknown command", ["translate"]],
-    ["an unknown flag", ["check", "--unknown", "--json"]],
-    ["--config without a value", ["check", "--config"]],
-    ["--config followed by a flag", ["check", "--config", "--json"]],
-    ["a stray argument", ["check", "extra"]],
-    ["a repeated flag", ["check", "--json", "--json"]],
-  ])("exits 2 with usage on %s", (_label, args) => {
-    const { code, stdout, stderr } = cli(...args);
+    ["an unknown command", ["translate"], "unknown command: translate"],
+    ["no command", [], "unknown command: (none)"],
+    ["an unknown flag", ["check", "--unknown", "--json"], "unexpected argument: --unknown"],
+    ["--config without a value", ["check", "--config"], "--config needs a path"],
+    ["--config followed by a flag", ["check", "--config", "--json"], "--config needs a path"],
+    ["a stray argument", ["check", "extra"], "unexpected argument: extra"],
+    ["a repeated flag", ["check", "--json", "--json"], "unexpected argument: --json"],
+    // Flag values only as separate arguments, and no `--` terminator: both are arguments the parser rejects.
+    ["a flag with an inline value", ["check", "--json=yes"], "unexpected argument: --json=yes"],
+    ["an argument terminator", ["check", "--"], "unexpected argument: --"],
+    // --watch runs instead of exiting; with check or --json it is refused before anything starts.
+    ["--watch with check", ["check", "--watch"], "--watch goes with extract only, without --json"],
+    [
+      "--watch with --json",
+      ["extract", "--watch", "--json"],
+      "--watch goes with extract only, without --json",
+    ],
+    // `--poll` takes a whole number of milliseconds from 10 to 2^31 - 1, and only with `--watch`: Node turns a delay
+    // past 2^31 - 1 ms into 1 ms, which would scan without pause, and under 10 ms a walk per tick is a continuous scan.
+    ["--poll without --watch", ["extract", "--poll", "50"], "--poll goes with extract --watch only"],
+    [
+      "--poll with no interval",
+      ["extract", "--watch", "--poll"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
+    [
+      "--poll with a zero interval",
+      ["extract", "--watch", "--poll", "0"],
+      "--poll 0: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+    [
+      "--poll with a fraction",
+      ["extract", "--watch", "--poll", "1.5"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
+    [
+      "--poll past Node's timer range",
+      ["extract", "--watch", "--poll", "2147483648"],
+      "--poll 2147483648: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+    [
+      "--poll under the 10 ms floor",
+      ["extract", "--watch", "--poll", "5"],
+      "--poll 5: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+  ])("exits 2 with usage on %s", (_label, args, reason) => {
+    const { code, stdout, stderr } = bin(...args);
     expect([code, stdout]).toEqual([2, ""]);
-    expect(stderr).toContain("usage: elmera-intl");
+    expect(stderr).toBe(`${reason}\n${USAGE}`);
   });
 
-  it("names the fix for a missing config", () => {
+  it("names the fix for a missing config", async () => {
     rmSync(join(root, "elmera-intl.json"));
-    const { code, stderr } = cli("check");
+    const { code, stderr } = await cli("check");
     expect(code).toBe(1);
     expect(stderr).toContain("ConfigInvalid");
     expect(stderr).toContain('fix: write elmera-intl.json as { "include"');
@@ -666,23 +747,23 @@ describe("usage", () => {
   it.each([
     ["include", "src/../../shared/**/*.tsx", '"../shared/**/*.tsx"'],
     ["exclude", "/abs/**", '"/abs/**"'],
-  ])("rejects an %s pattern reaching outside the project root", (field, pattern, reported) => {
+  ])("rejects an %s pattern reaching outside the project root", async (field, pattern, reported) => {
     write("elmera-intl.json", JSON.stringify({ ...CONFIG, [field]: [pattern] }));
-    const { code, stderr } = cli("check");
+    const { code, stderr } = await cli("check");
     expect(code).toBe(1);
     expect(stderr).toContain(`glob ${reported} reaches outside the project root`);
   });
 });
 
 describe("bin", () => {
-  it("writes a JSON report larger than a pipe buffer in full", () => {
+  it("writes a JSON report larger than a pipe buffer in full", async () => {
     write(
       "src/many.ts",
       `import { msg } from "@elmeragroup/intl/react";\n${Array.from({ length: 1500 }, (_, i) => `msg("Message number ${i} with some padding text");`).join("\n")}\n`
     );
     // Every message untranslated: one problem each.
-    expect(cli("extract").code).toBe(0);
-    const run = spawnSync(execPath, cliFromSource("check", "--json"), {
+    expect((await cli("extract")).code).toBe(0);
+    const run = spawnSync(execPath, [BIN, "check", "--json"], {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -694,8 +775,8 @@ describe("bin", () => {
   it("exits 2 and names the failure when the CLI throws", () => {
     // A file where the catalog directory goes: extract's mkdir throws, an I/O failure the CLI does not classify.
     write("messages", "");
-    const run = spawnSync(execPath, cliFromSource("extract"), { cwd: root, encoding: "utf8" });
-    expect(run.status).toBe(2);
+    const run = bin("extract");
+    expect(run.code).toBe(2);
     expect(run.stderr).toMatch(/^elmera-intl failed: Error:/u);
   });
 
@@ -704,8 +785,8 @@ describe("bin", () => {
       "src/many.ts",
       `import { msg } from "@elmeragroup/intl/react";\n${Array.from({ length: 1500 }, (_, i) => `msg("Message number ${i} with some padding text");`).join("\n")}\n`
     );
-    expect(cli("extract").code).toBe(0);
-    const child = spawn(execPath, cliFromSource("check", "--json"), { cwd: root });
+    expect((await cli("extract")).code).toBe(0);
+    const child = spawn(execPath, [BIN, "check", "--json"], { cwd: root });
     let stderr = "";
     child.stderr.setEncoding("utf8").on("data", (text: string) => {
       stderr += text;
