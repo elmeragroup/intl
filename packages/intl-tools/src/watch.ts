@@ -363,17 +363,21 @@ type Scopes = {
   readonly workers: Scope.Closeable;
 };
 
-// The watch's one stop, and the outcome everyone who waits for it shares. One fiber of `own` runs it, uninterruptibly,
-// once the stop signal or a halt comes: it shuts the gate (`halt`, in the same synchronous step); closes `sources`, so
-// the watchers close at once; closes `workers`, which drops a pending sync and waits for a running one; ends the
-// results; and joins the writer, so every result already made is written. It ends as the writing ended, then as a
-// worker's defect, then as the watchers closed, and settles `finished` with that. `own`'s close halts the watch, so the
-// same stop runs, and waits for it (this adds that finalizer last, so it runs first, whatever the caller's strategy);
-// it fails with the outcome unless `done` handed it to someone, so an interrupted caller never hides a defect.
-const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
+// The watch's one stop, and the outcome everyone who waits for it shares. One fiber runs it, uninterruptibly, once the
+// stop signal or a halt comes: it shuts the gate (`halt`); closes `sources`, so the watchers close at once; closes
+// `workers`, which drops a pending sync and waits for a running one; ends the results; and joins the writer, so every
+// result already made is written. It ends as the writing ended, then as a worker's defect, then as the watchers closed,
+// and settles `finished` with that.
+//
+// The writer and that stopper are acquired together on `own`, each forked detached, so neither depends on `own` being
+// open: an acquire is uninterruptible and its release always runs, at once when `own` is closed already (a caller
+// scope closed before the watch, or during its setup), else first as `own` closes, whatever the caller's strategy. The
+// release halts the watch, waits for the stopper, and fails with the stop's outcome unless `done` handed it to someone,
+// so an interrupted caller never hides a defect.
+const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
   pipeline: Pipeline,
   scopes: Scopes,
-  writing: Fiber.Fiber<void>,
+  writes: Effect.Effect<void, never, R>,
   stop: Deferred.Deferred<void>
 ) {
   const { halt } = pipeline;
@@ -382,35 +386,44 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
   // Whether the stop's outcome reached someone (`done`'s caller, or a start that failed with it).
   let delivered = false;
   const finished = yield* Deferred.make<void>();
-  const halting = Effect.sync(() => {
-    Deferred.doneUnsafe(halt, Effect.void);
-  });
-  const shutdown = Effect.gen(function* () {
-    yield* halting;
-    const closed = yield* Effect.exit(Scope.close(scopes.sources, Exit.void));
-    yield* Scope.close(scopes.workers, Exit.void);
-    yield* Queue.end(pipeline.results);
-    yield* Fiber.join(writing);
+  const shutdown = Effect.fnUntraced(
+    function* (writing: Fiber.Fiber<void>) {
+      yield* Deferred.succeed(halt, undefined);
+      const closed = yield* Effect.exit(Scope.close(scopes.sources, Exit.void));
+      yield* Scope.close(scopes.workers, Exit.void);
+      yield* Queue.end(pipeline.results);
+      yield* Fiber.join(writing);
 
-    if (defect !== undefined) {
-      return yield* Effect.failCause(defect);
-    }
+      if (defect !== undefined) {
+        return yield* Effect.failCause(defect);
+      }
 
-    return yield* closed;
-  }).pipe(Deferred.into(finished), Effect.uninterruptible);
-  yield* Effect.raceFirst(Deferred.await(stop), Deferred.await(halt)).pipe(
-    Effect.andThen(shutdown),
-    Effect.forkIn(scopes.own)
+      return yield* closed;
+    },
+    Deferred.into(finished),
+    Effect.uninterruptible
   );
-  yield* Scope.addFinalizer(
-    scopes.own,
-    halting.pipe(
-      Effect.andThen(Effect.exit(Deferred.await(finished))),
-      Effect.flatMap((exit) => (delivered ? Effect.void : exit))
-    )
-  );
+  const fibers = yield* Effect.acquireRelease(
+    Effect.gen(function* () {
+      const writing = yield* Effect.forkDetach(writes);
+      const stopping = yield* Effect.raceFirst(Deferred.await(stop), Deferred.await(halt)).pipe(
+        Effect.andThen(shutdown(writing)),
+        Effect.forkDetach
+      );
+
+      return { writing, stopping };
+    }),
+    ({ stopping }) =>
+      Deferred.succeed(halt, undefined).pipe(
+        Effect.andThen(Fiber.await(stopping)),
+        Effect.andThen(Effect.exit(Deferred.await(finished))),
+        Effect.flatMap((exit) => (delivered ? Effect.void : exit))
+      )
+  ).pipe(Scope.provide(scopes.own));
 
   return {
+    // The writer, for a host that waits for its first writes.
+    writing: fibers.writing,
     // Waits for the stop, then hands its outcome to the caller, who then owns reporting it.
     done: Effect.exit(Deferred.await(finished)).pipe(
       Effect.flatMap((exit) =>
@@ -422,7 +435,7 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
       )
     ),
     // A worker whose defect halts the watch, the stop then ending with it.
-    supervised: <R>(worker: Effect.Effect<void, never, R>) =>
+    supervised: <A>(worker: Effect.Effect<void, never, A>) =>
       worker.pipe(
         Effect.onError((cause) =>
           Cause.hasInterruptsOnly(cause)
@@ -430,7 +443,7 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
             : Effect.suspend(() => {
                 defect ??= cause;
 
-                return halting;
+                return Deferred.succeed(halt, undefined);
               })
         )
       ),
@@ -482,8 +495,7 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
   const watchers = yield* Scope.fork(sources, "sequential");
   const opening = yield* Scope.fork(sources, "sequential");
   const workers = yield* Scope.fork(own, "sequential");
-  const writing = yield* writer(pipeline, output).pipe(Effect.forkIn(own));
-  const owned = yield* ownedStop(pipeline, { own, sources, workers }, writing, stop);
+  const owned = yield* ownedStop(pipeline, { own, sources, workers }, writer(pipeline, output), stop);
   const isHalted = () => Deferred.isDoneUnsafe(stop) || Deferred.isDoneUnsafe(halt);
 
   // The stop gate, at delivery: each warning and change is admitted at once, synchronously, as the tree delivers it
@@ -501,7 +513,9 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
       );
     }
 
-    Queue.offerAllUnsafe(pipeline.intake, item.changes);
+    if (item.changes.length > 0) {
+      Queue.offerAllUnsafe(pipeline.intake, item.changes);
+    }
   };
   // A directory the config excludes holds no source; one holding a catalog is still walked.
   const prune = (directory: string): boolean =>
@@ -529,7 +543,12 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
           ? Effect.void
           : sync.pipe(
               Effect.andThen(Queue.offer(results, { _tag: "Ready" })),
-              Effect.andThen(Deferred.succeed(pipeline.firstSynced, undefined))
+              // Not once the watch has halted meanwhile: the start then waits for the stop, and ends as it did.
+              Effect.andThen(
+                Effect.suspend(() =>
+                  isHalted() ? Effect.void : Deferred.succeed(pipeline.firstSynced, undefined)
+                )
+              )
             )
       ).pipe(Effect.uninterruptible)
     )
@@ -543,7 +562,7 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
 
   return {
     done: owned.done,
-    reported: Effect.raceFirst(Deferred.await(pipeline.readyWritten), Fiber.join(writing)),
+    reported: Effect.raceFirst(Deferred.await(pipeline.readyWritten), Fiber.join(owned.writing)),
   } satisfies Watching;
 });
 

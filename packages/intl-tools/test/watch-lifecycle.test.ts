@@ -1,9 +1,12 @@
 import { describe, expect } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as References from "effect/References";
+import * as Scope from "effect/Scope";
 import { existsSync, rmSync } from "node:fs";
 
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
@@ -12,7 +15,7 @@ import { extractCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { Reporter } from "../src/reporter";
 import type { SyncResult } from "../src/watch";
-import { CatalogSync, watchProject } from "../src/watch";
+import { CatalogSync, watchCatalogs, watchProject } from "../src/watch";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import {
@@ -673,6 +676,72 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
   // Linux only: there a recursive watch of an unreadable directory fails as it starts, where macOS's event daemon
   // watches it all the same. Oracle: the contract by hand: the watches already started on the readable roots are
   // closed, and the signal listeners come off, so signals are Node's again.
+  // Unit under test: `watchCatalogs` in a caller scope that closes before, or while, it starts, on native events a test
+  // records. Oracle: the contract by hand: a watch's scope may close at any point, and its start and the close both
+  // settle, with every watcher it opened closed; a scope closed before the start opens none and syncs nothing.
+  describe("a caller scope that closes before or during the start", () => {
+    function watchIn(project: Project, scope: Scope.Scope, events: Layer.Layer<FileEvents>) {
+      return watchCatalogs(projectConfig(project), { _tag: "native" }, Deferred.makeUnsafe<void>(), {
+        report: () => Effect.void,
+        ready: Effect.void,
+      }).pipe(Scope.provide(scope), Effect.provide([CatalogSync.layer(), events]));
+    }
+
+    it("settles its start in a scope closed already, opening no tree", async ({ project }) => {
+      const events = deliveredEvents();
+      const scope = Scope.makeUnsafe();
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+      const exit = await project.within(
+        Effect.runPromiseExit(watchIn(project, scope, events.layer)),
+        "the start"
+      );
+
+      expect([exit._tag, events.calls(), events.open(), existsSync(project.path("messages/nb.po"))]).toEqual([
+        "Success",
+        0,
+        [],
+        false,
+      ]);
+    });
+
+    // With the scheduler yielding after every operation, the close lands after each number of the start's yields in
+    // turn, until the start has ended before it.
+    it("settles its start and the close wherever the close lands in the start", async ({ project }) => {
+      const events = deliveredEvents();
+      const sweep = Effect.gen(function* () {
+        const unsettled: Array<number> = [];
+
+        for (let yields = 0; yields < 1_000; yields += 1) {
+          const scope = yield* Scope.make();
+          const starting = yield* Effect.forkDetach(watchIn(project, scope, events.layer));
+
+          for (let turn = 0; turn < yields; turn += 1) {
+            yield* Effect.yieldNow;
+          }
+
+          const startedFirst = starting.pollUnsafe() !== undefined;
+          yield* Scope.close(scope, Exit.void);
+          const exit = yield* Fiber.await(starting);
+
+          if (!Exit.isSuccess(exit) || events.open().length > 0) {
+            unsettled.push(yields);
+          }
+
+          if (startedFirst) {
+            return { swept: yields > 0, unsettled };
+          }
+        }
+
+        return { swept: false, unsettled };
+      }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 1));
+
+      expect(await project.within(Effect.runPromise(sweep), "the sweep")).toEqual({
+        swept: true,
+        unsettled: [],
+      });
+    });
+  });
+
   describe.skipIf(process.platform !== "linux")("a watcher that fails to start", () => {
     // Unit under test: `watchProject`, as the Vite plugin starts it. Its start rejects after every watch it started is
     // closed, so a failed dev-server start leaves no handle behind.

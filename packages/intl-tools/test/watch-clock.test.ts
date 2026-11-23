@@ -876,6 +876,38 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
+  it.effect("ends the start as the stop ends when the stop lands during the first sync", ({ project }) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const sync = holding(gate, 1);
+      const reporting = yield* Deferred.make<void>();
+      const stop = yield* Deferred.make<void>();
+      const events = deliveredEvents({ closeFails: new Error("close failed") });
+      const { watching } = yield* launch(project, {
+        layer: sync.layer,
+        mode: NATIVE,
+        events: events.layer,
+        stop,
+        report: () => Deferred.await(reporting),
+      });
+      // Before the watch's scope closes, which waits for the held report, should an assertion end the test first.
+      yield* Effect.addFinalizer(() => Deferred.succeed(reporting, undefined));
+      expect(sync.calls()).toBe(1);
+
+      yield* Deferred.succeed(stop, undefined);
+      yield* woken(Deferred.succeed(gate, undefined));
+      // The first sync's result is still being written: the stop has not drained.
+      const settledBeforeDrain = watching.pollUnsafe() !== undefined;
+      yield* Deferred.succeed(reporting, undefined);
+      const exit = yield* Fiber.await(watching);
+
+      expect({ settledBeforeDrain, exit: Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit }).toEqual({
+        settledBeforeDrain: false,
+        exit: new Error("close failed"),
+      });
+    })
+  );
+
   // A defect in a sync is no lost worker: it stops the watch, and the start (for the first sync) or `done` (for a
   // later one) ends with it.
   it.effect("fails the start with a defect in the first sync", ({ project }) =>
