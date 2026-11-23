@@ -231,7 +231,8 @@ function probe<T>(project: Project, script: string, args: ReadonlyArray<string>)
 // Unit under test: the public `./next` entry, as an app's next.config resolves and calls it, and then the loader its
 // rule names, in a fresh loader worker. Oracle: Next loads next.config in several processes, so withIntl loads no
 // extractor, oxc native binding or Effect, on a valid config or a malformed one; the loader runs in every Turbopack
-// and webpack worker, so it loads no CLI, commands, watcher, extractor or oxc, compiling or reporting. The fixture's "Hello" is "Hei"
+// and webpack worker, so it loads no CLI, commands (nor their catalog planning, checks or files), watcher, extractor or
+// oxc, compiling or reporting. The fixture's "Hello" is "Hei"
 // in nb, and a malformed config is a ConfigInvalid problem. The rule names the built loader beside the built `./next`
 // entry, dist/po-loader.js, which the export map resolves to.
 it(
@@ -267,8 +268,9 @@ it(
     expect(
       loader.modules.filter(
         (module) =>
-          /(?:^|\/)src\/(?:cli-run|commands|watch|extract[\w-]*|bindings|scopes)\.ts$/u.test(module) ||
-          /\/(?:oxc-parser|oxc-transform|@oxc-parser)\//u.test(module)
+          /(?:^|\/)src\/(?:cli-run|commands|catalog-(?:plan|check|files)|watch|extract[\w-]*|bindings|scopes)\.ts$/u.test(
+            module
+          ) || /\/(?:oxc-parser|oxc-transform|@oxc-parser)\//u.test(module)
       )
     ).toEqual([]);
   }

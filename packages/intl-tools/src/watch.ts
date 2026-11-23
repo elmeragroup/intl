@@ -20,6 +20,7 @@ import * as Semaphore from "effect/Semaphore";
 import { readFileSync } from "node:fs";
 import { sep } from "node:path";
 
+import { ioFailureReason } from "./catalog-files";
 import type { ExtractOptions, ExtractResult } from "./commands";
 import { extractCatalogs } from "./commands";
 import type { Problem } from "./problem";
@@ -34,7 +35,7 @@ import { includePrefixes, listenNative, movesTree, startPolling, watchRoots } fr
 export type SyncResult =
   | { readonly _tag: "Written"; readonly files: ReadonlyArray<string> }
   | { readonly _tag: "Unchanged" }
-  /** A catalog was saved during the sync, so it wrote nothing; another sync follows. */
+  /** A catalog was saved during the sync, so it wrote nothing more; another sync follows. */
   | { readonly _tag: "Superseded" }
   | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> };
 
@@ -110,7 +111,7 @@ export function pollEvery(intervalMs: number): WatchMode | PollIntervalOutOfRang
 // Long enough to fold a branch switch or a formatter's multi-file save into one sync.
 const DEBOUNCE_MS = 100;
 
-/** A sync's extract threw: I/O the extractor does not classify, such as a file a checkout deletes mid-scan. */
+/** A sync's extract failed on I/O the extractor does not classify, such as a file a checkout deletes mid-scan. */
 export class SyncFailed
   extends /* @__PURE__ */ Schema.TaggedError<SyncFailed>()("SyncFailed", {
     /** The thrown error's message. */
@@ -118,8 +119,8 @@ export class SyncFailed
   }) {}
 
 /**
- * One sync's extract: what the watch runs per burst of changes. A service so the commands can become effects behind
- * it, and so a test can act between a sync's read and its writes.
+ * One sync's extract: what the watch runs per burst of changes. A service so a test can act between a sync's read and
+ * its writes, or hold a sync.
  */
 export class CatalogSync
   extends /* @__PURE__ */ Context.Service<
@@ -134,18 +135,23 @@ export class CatalogSync
   >()("elmera-intl-tools/CatalogSync")
 {
   /**
-   * The synchronous `extractCatalogs`.
+   * `extractCatalogs`, its failure a `SyncFailed`: I/O it does not classify, and, as when the extract was one
+   * synchronous call whose every throw was the sync's failure, any defect of the step (the merge's included). The watch
+   * reports it and retries on the next change.
    *
-   * @returns A layer whose extract runs `extractCatalogs`, its throw a `SyncFailed`.
+   * @returns A layer whose extract runs `extractCatalogs`.
    */
   static layer(): Layer.Layer<CatalogSync> {
     return Layer.succeed(CatalogSync, {
       extract: Effect.fn("CatalogSync.extract")(function* (config: ProjectConfig, options: ExtractOptions) {
-        return yield* Effect.try({
-          try: () => extractCatalogs(config, options),
-          catch: (error) =>
-            new SyncFailed({ message: error instanceof Error ? error.message : String(error) }),
-        });
+        return yield* extractCatalogs(config, options).pipe(
+          Effect.mapError((failure) => new SyncFailed({ message: ioFailureReason(failure) })),
+          Effect.catchDefect((defect) =>
+            Effect.fail(
+              new SyncFailed({ message: defect instanceof Error ? defect.message : String(defect) })
+            )
+          )
+        );
       }),
     });
   }

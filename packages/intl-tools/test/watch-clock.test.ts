@@ -11,6 +11,7 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync, mkdirSync } from "node:fs";
 
+import { CatalogFiles } from "../src/catalog-files";
 import type { ExtractOptions } from "../src/commands";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
@@ -111,18 +112,18 @@ describe("extract --watch on the test clock", () => {
   // The sync step: `extractCatalogs`, its `hold`th call waiting for `gate` after its writes. `calls()` counts the calls.
   function holding(gate: Deferred.Deferred<void>, hold = 2) {
     let calls = 0;
-    const layer = Layer.succeed(CatalogSync, {
-      extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+    const layer = syncing(
+      Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
         calls += 1;
-        const result = extractCatalogs(config, options);
+        const result = yield* extractCatalogs(config, options);
 
         if (calls === hold) {
           yield* Deferred.await(gate);
         }
 
         return result;
-      }),
-    });
+      })
+    );
 
     return { layer, calls: () => calls };
   }
@@ -157,11 +158,7 @@ describe("extract --watch on the test clock", () => {
     return syncing((config, options) => {
       calls += 1;
 
-      if (calls === call) {
-        throw new Error("extract died");
-      }
-
-      return extractCatalogs(config, options);
+      return calls === call ? Effect.die(new Error("extract died")) : extractCatalogs(config, options);
     });
   }
 
@@ -234,12 +231,12 @@ describe("extract --watch on the test clock", () => {
       let running = 0;
       let overlapped = false;
       const { reports } = yield* start(project, {
-        layer: Layer.succeed(CatalogSync, {
-          extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
             calls += 1;
             overlapped ||= running > 0;
             running += 1;
-            const result = extractCatalogs(config, options);
+            const result = yield* extractCatalogs(config, options);
 
             // The second sync holds, after its writes, until the test releases it.
             if (calls === 2) {
@@ -249,8 +246,8 @@ describe("extract --watch on the test clock", () => {
             running -= 1;
 
             return result;
-          }),
-        }),
+          })
+        ),
       });
       project.write("src/a.tsx", component("A"));
       yield* TestClock.adjust("150 millis");
@@ -284,7 +281,7 @@ describe("extract --watch on the test clock", () => {
           calls += 1;
 
           return calls === 1
-            ? { problems: [], messages: 0, written: [], superseded: true }
+            ? Effect.succeed({ problems: [], messages: 0, written: [], superseded: true })
             : extractCatalogs(config, options);
         }),
       });
@@ -317,16 +314,18 @@ describe("extract --watch on the test clock", () => {
     Effect.gen(function* () {
       let calls = 0;
       const { reports } = yield* start(project, {
-        layer: syncing((config, options) => {
-          calls += 1;
-          const result = extractCatalogs(config, options);
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+            calls += 1;
+            const result = yield* extractCatalogs(config, options);
 
-          if (calls === 1) {
-            project.write("src/during.tsx", component("During"));
-          }
+            if (calls === 1) {
+              project.write("src/during.tsx", component("During"));
+            }
 
-          return result;
-        }),
+            return result;
+          })
+        ),
       });
       yield* TestClock.adjust("1 second");
       expect(reports).toEqual(["Written", "Written"]);
@@ -341,17 +340,17 @@ describe("extract --watch on the test clock", () => {
       const gate = yield* Deferred.make<void>();
       let calls = 0;
       const { reports, stop, watching } = yield* start(project, {
-        layer: Layer.succeed(CatalogSync, {
-          extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
             calls += 1;
 
             if (calls === 2) {
               yield* Deferred.await(gate);
             }
 
-            return extractCatalogs(config, options);
-          }),
-        }),
+            return yield* extractCatalogs(config, options);
+          })
+        ),
       });
       project.write("src/a.tsx", component("A"));
       yield* TestClock.adjust("150 millis");
@@ -462,16 +461,18 @@ describe("extract --watch on the test clock", () => {
     Effect.gen(function* () {
       let calls = 0;
       const { reports } = yield* start(project, {
-        layer: syncing((config, options) => {
-          calls += 1;
-          const result = extractCatalogs(config, options);
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+            calls += 1;
+            const result = yield* extractCatalogs(config, options);
 
-          if (calls === 1) {
-            project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
-          }
+            if (calls === 1) {
+              project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
+            }
 
-          return result;
-        }),
+            return result;
+          })
+        ),
       });
       yield* TestClock.adjust("1 second");
       expect(reports).toEqual(["Written", "Failed"]);
@@ -594,22 +595,24 @@ describe("extract --watch on the test clock", () => {
       const po = project.path("messages/nb.po");
       let saved = false;
       yield* start(project, {
-        layer: syncing((config, options) => {
-          const result = extractCatalogs(config, options);
-          const added = result.written.find(
-            ({ path, text }) => path === po && text.includes(`msgid "Ready"`)
-          );
-
-          if (!saved && added !== undefined) {
-            saved = true;
-            project.write(
-              "messages/nb.po",
-              added.text.replace(`msgid "Ready"\nmsgstr ""`, `msgid "Ready"\nmsgstr "Klar"`)
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+            const result = yield* extractCatalogs(config, options);
+            const added = result.written.find(
+              ({ path, text }) => path === po && text.includes(`msgid "Ready"`)
             );
-          }
 
-          return result;
-        }),
+            if (!saved && added !== undefined) {
+              saved = true;
+              project.write(
+                "messages/nb.po",
+                added.text.replace(`msgid "Ready"\nmsgstr ""`, `msgid "Ready"\nmsgstr "Klar"`)
+              );
+            }
+
+            return result;
+          })
+        ),
       });
       project.write("src/ready.tsx", component("Ready"));
       yield* TestClock.adjust("1 second");
@@ -628,29 +631,78 @@ describe("extract --watch on the test clock", () => {
       const po = project.path("messages/nb.po");
       let saved = false;
       yield* start(project, {
-        layer: syncing((config, options) => {
-          const plan = planCatalogs(config, options);
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+            const plan = yield* planCatalogs(config, options);
 
-          if (
-            !saved &&
-            plan.outputs.some(({ path, text }) => path === po && text.includes(`msgid "Ready"`))
-          ) {
-            saved = true;
-            project.write(
-              "messages/nb.po",
-              project
-                .read("messages/nb.po")
-                .replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hei"`)
-            );
-          }
+            if (
+              !saved &&
+              plan.outputs.some(({ path, text }) => path === po && text.includes(`msgid "Ready"`))
+            ) {
+              saved = true;
+              project.write(
+                "messages/nb.po",
+                project
+                  .read("messages/nb.po")
+                  .replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hei"`)
+              );
+            }
 
-          return writeCatalogs(plan, options);
-        }),
+            return yield* writeCatalogs(plan, options);
+          })
+        ),
       });
       project.write("src/ready.tsx", component("Ready"));
       yield* TestClock.adjust("1 second");
       expect(project.read("messages/nb.po")).toContain(`msgid "Hello"\nmsgstr "Hei"`);
       expect(project.read("messages/nb.po")).toContain(`msgid "Ready"`);
+    })
+  );
+
+  // A save that lands on one catalog while the sync writes another (D5's check-then-write): the sync re-reads each
+  // target right before its write and stops there, so the save is never written over, and the next sync merges it. The
+  // catalogs' writes go through `CatalogFiles`, whose write of nb saves sv the way a translator's editor would.
+  it.effect("keeps a msgstr saved in one catalog while the sync writes another", ({ project }) =>
+    Effect.gen(function* () {
+      project.write(
+        "elmera-intl.json",
+        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv"] }`
+      );
+      const nb = project.path("messages/nb.po");
+      let saved = false;
+      const { reports } = yield* start(project, {
+        layer: syncing(
+          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+            const files = yield* CatalogFiles;
+            const saving: typeof files = {
+              read: files.read,
+              write: (path, text) =>
+                files.write(path, text).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (!saved && path === nb && text.includes(`msgid "Ready"`)) {
+                        saved = true;
+                        project.write(
+                          "messages/sv.po",
+                          project
+                            .read("messages/sv.po")
+                            .replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hej"`)
+                        );
+                      }
+                    })
+                  )
+                ),
+            };
+
+            return yield* extractCatalogs(config, options).pipe(Effect.provideService(CatalogFiles, saving));
+          })
+        ),
+      });
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+
+      expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hej"[\s\S]*msgid "Ready"/u);
+      expect({ saved, reports }).toEqual({ saved: true, reports: ["Written", "Superseded", "Written"] });
     })
   );
 

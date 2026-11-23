@@ -4,11 +4,13 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { mkdirSync } from "node:fs";
 
+import type { ProjectIoFailed } from "../src/catalog-files";
+import { ioFailureReason } from "../src/catalog-files";
 import type { ExtractOptions, ExtractResult } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
 import type { WatchMode, WatchServices } from "../src/watch";
-import { CatalogSync } from "../src/watch";
+import { CatalogSync, SyncFailed } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
@@ -76,12 +78,12 @@ export function projectConfig(project: Project): ProjectConfig {
 }
 
 /**
- * A host's runtime for `watchProject`, as the Vite plugin makes one: the synchronous extract and Node's file events,
+ * A host's runtime for `watchProject`, as the Vite plugin makes one: `extractCatalogs` and Node's file events,
  * disposed when the test ends (after every cleanup registered later, such as a watch's close).
  *
  * @param project - The project whose teardown disposes it.
  * @param events - The file events it provides; Node's unless a test delivers its own.
- * @param sync - The sync's extract it provides; the synchronous one unless a test holds it.
+ * @param sync - The sync's extract it provides; `extractCatalogs` unless a test holds it.
  * @returns The runtime.
  */
 export function hostRuntime(
@@ -96,18 +98,27 @@ export function hostRuntime(
 }
 
 /**
- * The watch's sync step as `extract`, which runs inside one synchronous call, so a test can save between a sync's read
- * and its writes.
+ * A failure of the commands' I/O as the watch's `CatalogSync` reports it, for a test's own sync step.
+ *
+ * @param failure - The failure.
+ * @returns The `SyncFailed` naming its reason.
+ */
+export function asSyncFailed(failure: ProjectIoFailed): SyncFailed {
+  return new SyncFailed({ message: ioFailureReason(failure) });
+}
+
+/**
+ * The watch's sync step as `extract`, an effect a test can save in between a sync's read and its writes, or hold.
  *
  * @param extract - The sync step.
  * @returns A `CatalogSync` layer running it.
  */
 export function syncing(
-  extract: (config: ProjectConfig, options: ExtractOptions) => ExtractResult
+  extract: (config: ProjectConfig, options: ExtractOptions) => Effect.Effect<ExtractResult, ProjectIoFailed>
 ): Layer.Layer<CatalogSync> {
   return Layer.succeed(CatalogSync, {
     extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-      return yield* Effect.sync(() => extract(config, options));
+      return yield* extract(config, options).pipe(Effect.mapError(asSyncFailed));
     }),
   });
 }

@@ -20,6 +20,7 @@ import { CatalogSync, watchCatalogs, watchProject } from "../src/watch";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import {
+  asSyncFailed,
   component,
   CONFIG,
   deliveredEvents,
@@ -354,7 +355,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
             yield* Effect.promise(() => gate.promise);
           }
 
-          return extractCatalogs(config, options);
+          return yield* extractCatalogs(config, options).pipe(Effect.mapError(asSyncFailed));
         }),
       });
       let stdout = "";
@@ -514,7 +515,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
               log.push("sync resumed");
             }
 
-            return extractCatalogs(config, options);
+            return yield* extractCatalogs(config, options).pipe(Effect.mapError(asSyncFailed));
           }),
         }),
         () =>
@@ -560,7 +561,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
         held.resolve();
         yield* Effect.promise(() => gate.promise);
 
-        return extractCatalogs(config, options);
+        return yield* extractCatalogs(config, options).pipe(Effect.mapError(asSyncFailed));
       }),
     });
     const runtime = hostRuntime(project, events.layer, holding);
