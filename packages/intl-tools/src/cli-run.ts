@@ -1,7 +1,6 @@
 // The `elmera-intl` executable's program: effect/cli parses the arguments into a command, a one-shot command runs
 // through command-run.ts (which the hosts call directly), and a watch runs until a signal stops it.
 
-import * as NodePath from "@effect/platform-node-shared/NodePath";
 import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
 import * as Cause from "effect/Cause";
 import * as CliConfig from "effect/cli/CliConfig";
@@ -13,9 +12,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Runtime from "effect/Runtime";
@@ -377,28 +377,27 @@ export function exitCodeOf(exit: Exit.Exit<unknown, unknown>): number {
 const unused = (service: string) => Effect.die(`elmera-intl uses no ${service}`);
 
 /**
- * The services effect/cli requires of every program (`Command.Environment`): Node's `Stdio` (the process's arguments)
- * and `Path`, and stand-ins for the services its parsing never uses (a file system that reads nothing, a terminal and a
- * child-process spawner that are defects if reached). The commands' own file system comes with `projectServices`,
- * provided after this, which imports Node's as the program starts, never with the executable's modules.
+ * The services effect/cli requires of every program (`Command.Environment`) that the project's services do not
+ * provide: Node's `Stdio` (the process's arguments), and stand-ins for the services its parsing never uses (a terminal
+ * and a child-process spawner, defects if reached). Its `FileSystem` and `Path` are the commands' own, from
+ * `projectServices()`, their one provider: no second file system can shadow the one the commands read through.
  */
-export const CliPlatform: Layer.Layer<Command.Environment> = /* @__PURE__ */ Layer.mergeAll(
-  NodeStdio.layer,
-  /* @__PURE__ */ FileSystem.layerNoop({}),
-  NodePath.layer,
-  /* @__PURE__ */ Layer.succeed(
-    Terminal.Terminal,
-    /* @__PURE__ */ Terminal.make({
-      columns: /* @__PURE__ */ unused("terminal"),
-      rows: /* @__PURE__ */ unused("terminal"),
-      size: /* @__PURE__ */ unused("terminal"),
-      readInput: /* @__PURE__ */ unused("terminal"),
-      readLine: /* @__PURE__ */ unused("terminal"),
-      display: () => unused("terminal"),
-    })
-  ),
-  /* @__PURE__ */ Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    /* @__PURE__ */ ChildProcessSpawner.make(() => unused("child process"))
-  )
-);
+export const CliPlatform: Layer.Layer<Exclude<Command.Environment, FileSystem.FileSystem | Path.Path>> =
+  /* @__PURE__ */ Layer.mergeAll(
+    NodeStdio.layer,
+    /* @__PURE__ */ Layer.succeed(
+      Terminal.Terminal,
+      /* @__PURE__ */ Terminal.make({
+        columns: /* @__PURE__ */ unused("terminal"),
+        rows: /* @__PURE__ */ unused("terminal"),
+        size: /* @__PURE__ */ unused("terminal"),
+        readInput: /* @__PURE__ */ unused("terminal"),
+        readLine: /* @__PURE__ */ unused("terminal"),
+        display: () => unused("terminal"),
+      })
+    ),
+    /* @__PURE__ */ Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      /* @__PURE__ */ ChildProcessSpawner.make(() => unused("child process"))
+    )
+  );

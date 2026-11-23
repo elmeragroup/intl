@@ -10,7 +10,7 @@ import * as Layer from "effect/Layer";
 import { readText } from "./catalog-files";
 import type { ProjectConfig } from "./project-config";
 import type { Evaluated, FormatsLoaded, FormatsMemo } from "./project-formats";
-import { evaluateRemembered, judgeFormats } from "./project-formats";
+import { evaluateModule, judgeFormats } from "./project-formats";
 
 /** The app's `formats`, loaded for a host runtime. */
 export class ProjectFormats
@@ -43,7 +43,23 @@ export class ProjectFormats
             return { _tag: "FormatsUnloadable", reason: content.failure.reason() } satisfies Evaluated;
           }
 
-          return yield* Effect.sync(() => evaluateRemembered(memo, path, content.success));
+          const hit = memo.get(path);
+
+          if (hit?.content === content.success) {
+            return hit.result;
+          }
+
+          const result = yield* Effect.sync(() => evaluateModule(path));
+          // Kept only while the module still holds the text read before the evaluation, so a save that lasts past it (an
+          // editor's truncate-then-write) is not memoized under the earlier text. An edit undone before this re-read
+          // still can be: the child imports the module itself, as 963d3e4's did, a race this narrows but does not close.
+          const after = yield* readText(files, path).pipe(Effect.result);
+
+          if (after._tag === "Success" && after.success === content.success) {
+            memo.set(path, { content: content.success, result });
+          }
+
+          return result;
         });
 
         return {

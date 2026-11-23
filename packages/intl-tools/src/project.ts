@@ -223,14 +223,14 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
   for (const pattern of config.include) {
     const globbed = yield* discovery.find(config.root, pattern, ["**/node_modules/**", ...config.exclude]);
     const sources: Array<string> = [];
-    for (const found of globbed) {
-      // Root-relative and `/`-separated, whichever separator the discovery used; the file system's own path is
-      // built with the host's `Path`.
-      const file = found.split("\\").join("/");
+    for (const file of globbed) {
+      // The name as discovered for every file-system operation, joined by the supplied `Path`; membership on its
+      // root-relative path, `/`-separated by that `Path`'s own separator only (on POSIX a backslash is part of a name).
+      const absolute = paths.join(config.root, file);
 
       if (
-        isProjectPath(config, file) &&
-        (yield* isFile(files, paths.join(config.root, file)).pipe(Effect.mapError(platformFailed("scan"))))
+        isProjectPath(config, paths.relative(config.root, absolute).split(paths.sep).join("/")) &&
+        (yield* isFile(files, absolute).pipe(Effect.mapError(platformFailed("scan"))))
       ) {
         sources.push(file);
       }
@@ -252,9 +252,11 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
     { source: string; context: string | undefined; references: Set<string>; comments: Set<string> }
   >();
   const scannedPaths = new Set<string>();
-  for (const path of sources) {
+  for (const file of sources) {
+    // The catalogs' reference, spelled as it always was: `/` for every backslash, on any host.
+    const path = paths.relative(config.root, paths.join(config.root, file)).split("\\").join("/");
     scannedPaths.add(path);
-    const text = yield* readText(files, paths.join(config.root, path)).pipe(
+    const text = yield* readText(files, paths.join(config.root, file)).pipe(
       Effect.mapError(readFailed("scan"))
     );
     const result = cachedExtract(cache, path, text);

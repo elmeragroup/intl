@@ -2,7 +2,6 @@
 // compile a catalog with the app's formats without loading the extractor or Effect. Its evaluation and judgment are
 // shared with `ProjectFormats` (project-formats-service.ts), which loads them for the hosts' Effect runtimes.
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -95,23 +94,9 @@ export function judgeFormats(root: string, module: string, loaded: Evaluated): F
 const STYLE_KINDS = new Set(["dateTime", "number", "list"]);
 
 // Prints the module's `formats` export as JSON (`{}` when it has none), with the first value inside it that JSON would
-// drop or change, as "<path> is <what>": only this process sees the values before serialization. Beside them, `source`:
-// the digest of the module's text read right before the import, when the text is the same right after it, so the
-// parent memoizes the evaluation under the source it evaluated, never under a text it read itself.
+// drop or change, as "<path> is <what>": only this process sees the values before serialization.
 const PRINT_FORMATS = `
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-const url = new URL(process.argv[1]);
-const digest = () => {
-  try {
-    return createHash("sha256").update(readFileSync(url, "utf8")).digest("base64");
-  } catch {
-    return undefined;
-  }
-};
-const before = digest();
-const { formats } = await import(url.href);
-const source = before !== undefined && digest() === before ? before : undefined;
+const { formats } = await import(process.argv[1]);
 const nonJson = (value, path) => {
   if (value === null || typeof value === "string" || typeof value === "boolean") return undefined;
   if (typeof value === "number") return Number.isFinite(value) ? undefined : \`\${path} is \${value}\`;
@@ -125,7 +110,7 @@ const nonJson = (value, path) => {
   return undefined;
 };
 const found = formats === undefined ? undefined : nonJson(formats, "formats");
-process.stdout.write(JSON.stringify(found === undefined ? { formats, source } : { nonJson: found, source }));
+process.stdout.write(JSON.stringify(found === undefined ? { formats } : { nonJson: found }));
 `;
 
 /**
@@ -138,45 +123,8 @@ export function evaluationArgs(path: string): Array<string> {
   return ["--input-type=module", "--eval", PRINT_FORMATS, pathToFileURL(path).href];
 }
 
-/** The last evaluation of each module path, keyed by the digest of the source the child evaluated (`sourceDigest`). */
-export type FormatsMemo = Map<string, { readonly source: string; readonly result: Evaluated }>;
-
-/**
- * The digest of a formats module's text, as the evaluating child digests the text it imports.
- *
- * @param text - The module's text, decoded as UTF-8.
- * @returns Its SHA-256, in base64.
- */
-export function sourceDigest(text: string): string {
-  return createHash("sha256").update(text).digest("base64");
-}
-
-/**
- * The evaluation of the module at `path`, whose text is now `text`: the memo's when it holds an evaluation of exactly
- * that source, else a new one, kept under the source the child reports it imported. An evaluation of a source that
- * changed during its import (a save mid-evaluation) is returned but never kept, so no evaluation is ever served for a
- * text it did not evaluate, even when an edit is undone before the parent reads again.
- *
- * @param memo - The evaluations of this process or runtime.
- * @param path - The module's absolute path.
- * @param text - The module's text, as the caller just read it.
- * @returns What evaluating it gave.
- */
-export function evaluateRemembered(memo: FormatsMemo, path: string, text: string): Evaluated {
-  const hit = memo.get(path);
-
-  if (hit?.source === sourceDigest(text)) {
-    return hit.result;
-  }
-
-  const { result, source } = evaluateModule(path);
-
-  if (source !== undefined) {
-    memo.set(path, { source, result });
-  }
-
-  return result;
-}
+/** The last evaluation of each module path, keyed by the content it evaluated. */
+export type FormatsMemo = Map<string, { readonly content: string; readonly result: Evaluated }>;
 
 // The loaders' memo: per process, of a pure function of the content, so an edit evaluates again and an unchanged
 // module costs one read.
@@ -187,11 +135,31 @@ export type Evaluated =
   | { readonly _tag: "Evaluated"; readonly exported: unknown; readonly nonJson: string | undefined }
   | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
 
-// The loaders' evaluation: synchronous, its memo the process's.
+// The loaders' evaluation: synchronous, its memo the process's. An evaluation is kept only when the module still
+// holds the text read before it, so a save that lasts past the evaluation is not memoized under the earlier text. An
+// edit undone before the re-read still can be (the child imports the module itself, as 963d3e4's did): this narrows
+// that race, it does not close it.
 function evaluateFormats(path: string): Evaluated {
   const content = readContent(path);
 
-  return content._tag === "FormatsUnloadable" ? content : evaluateRemembered(EVALUATED, path, content.text);
+  if (content._tag === "FormatsUnloadable") {
+    return content;
+  }
+
+  const hit = EVALUATED.get(path);
+
+  if (hit?.content === content.text) {
+    return hit.result;
+  }
+
+  const result = evaluateModule(path);
+  const after = readContent(path);
+
+  if (after._tag === "Content" && after.text === content.text) {
+    EVALUATED.set(path, { content: content.text, result });
+  }
+
+  return result;
 }
 
 function readContent(
@@ -217,10 +185,9 @@ function readContent(
  * child, and decodes stdout keeping a byte order mark (so a module that prints one is "writes to stdout").
  *
  * @param path - The module's absolute path.
- * @returns What evaluating it gave, and the digest of the source it imported (undefined when unknown: the child failed,
- *   or the source changed during the import).
+ * @returns What evaluating it gave.
  */
-export function evaluateModule(path: string): Evaluation {
+export function evaluateModule(path: string): Evaluated {
   const child = spawnSync(
     process.execPath,
     evaluationArgs(path),
@@ -230,11 +197,8 @@ export function evaluateModule(path: string): Evaluation {
 
   return child.error === undefined
     ? parseEvaluation(child.status, child.stdout, child.stderr)
-    : { result: { _tag: "FormatsUnloadable", reason: child.error.message }, source: undefined };
+    : { _tag: "FormatsUnloadable", reason: child.error.message };
 }
-
-/** An evaluation, and the digest of the source the child imported for it, when known. */
-export type Evaluation = { readonly result: Evaluated; readonly source: string | undefined };
 
 /**
  * Read what the evaluating Node printed.
@@ -242,24 +206,21 @@ export type Evaluation = { readonly result: Evaluated; readonly source: string |
  * @param status - Its exit code; null when a signal ended it.
  * @param stdout - What it printed on stdout.
  * @param stderr - What it printed on stderr.
- * @returns The evaluation, with the digest of the source the child imported when it reported one.
+ * @returns The evaluation.
  */
-export function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluation {
+export function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
   if (status !== 0) {
     // The error line, not Node's stack and source excerpt around it.
     const reason = stderr.split("\n").find((line) => /^\w*Error\b/u.test(line)) ?? stderr.trim();
 
-    return { result: { _tag: "FormatsUnloadable", reason }, source: undefined };
+    return { _tag: "FormatsUnloadable", reason };
   }
 
   let printed: unknown;
   try {
     printed = JSON.parse(stdout);
   } catch {
-    return {
-      result: { _tag: "FormatsUnloadable", reason: "the module writes to stdout when loaded" },
-      source: undefined,
-    };
+    return { _tag: "FormatsUnloadable", reason: "the module writes to stdout when loaded" };
   }
 
   const fields =
@@ -267,14 +228,10 @@ export function parseEvaluation(status: number | null, stdout: string, stderr: s
       ? new Map<string, unknown>(Object.entries(printed))
       : undefined;
   const nonJson = fields?.get("nonJson");
-  const source = fields?.get("source");
 
   return {
-    result: {
-      _tag: "Evaluated",
-      exported: fields?.get("formats"),
-      nonJson: typeof nonJson === "string" ? nonJson : undefined,
-    },
-    source: typeof source === "string" ? source : undefined,
+    _tag: "Evaluated",
+    exported: fields?.get("formats"),
+    nonJson: typeof nonJson === "string" ? nonJson : undefined,
   };
 }

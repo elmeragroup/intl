@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execPath } from "node:process";
+import process, { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
@@ -435,6 +435,19 @@ describe("check", () => {
       1,
       ["not JSON: EISDIR: illegal operation on a directory, read"],
     ]);
+  });
+
+  // The child's output fits spawnSync's 1 MiB cap when the formats themselves do: it prints the formats as JSON and
+  // nothing else, as 963d3e4's did. Oracle: 963d3e4, where these formats, about 30 bytes under the cap once printed,
+  // load, and a clean project's check passes.
+  it("loads a formats module whose printed formats fit just under the 1 MiB cap", async ({ project }) => {
+    await cli(project, "extract");
+    await translateAll(project);
+    project.write("intl-formats.ts", `export const formats = { number: { ["x".repeat(1_048_510)]: {} } };\n`);
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
+    const { code, report } = await check(project);
+
+    expect([code, report.problems]).toEqual([0, []]);
   });
 
   // The formats module is evaluated by `spawnSync`, whose semantics the CLI's output carries (963d3e4): its 1 MiB
@@ -1181,6 +1194,21 @@ describe("bin", BIN_TEST, () => {
       ]).toEqual([2, "", true, false]);
     }
   );
+
+  // On POSIX a backslash is part of a file name: the scan keeps the name as found for every file-system operation, and
+  // the catalog's reference spells each backslash as `/`, as it always has. Oracle: 963d3e4, which extracted the one
+  // source and wrote its PO, exit 0.
+  it.skipIf(process.platform === "win32")("extracts a source whose name holds a backslash", ({ project }) => {
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, include: ["src/**/*.ts"] }));
+    project.write(
+      "src/odd\\name.ts",
+      `import { msg } from "@elmeragroup/intl/react";\nexport const M = msg("Odd");\n`
+    );
+    const run = bin(project, "extract");
+
+    expect([run.code, run.stdout, run.stderr]).toEqual([0, "1 messages; wrote 1 file(s)\n", ""]);
+    expect(project.read("messages/nb.po")).toContain('#: src/odd/name.ts\nmsgid "Odd"\nmsgstr ""\n');
+  });
 
   it("exits 2 and names the failure when the CLI throws", ({ project }) => {
     // A file where the catalog directory goes: extract's mkdir throws, an I/O failure the CLI does not classify.
