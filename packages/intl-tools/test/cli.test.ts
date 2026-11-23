@@ -263,34 +263,36 @@ msgstr ""
     expect(project.read(nb)).toBe(`msgid "Broken\n`);
   });
 
-  // An absolute catalog path through a linked directory: `messages/{locale}/../catalog.po` with `nb -> ../other/sub`
-  // names `other/catalog.po` for nb and `messages/catalog.po` for sv, two files one lexical path. Each is read on its
-  // own, as the layer below read them (e5f111b): sv's malformed catalog is the one problem, exit 1, and nothing is
-  // written.
-  it("reads each catalog an absolute path through a linked directory names", BIN_TEST, ({ project }) => {
-    project.write(
-      "elmera-intl.json",
-      JSON.stringify({
-        ...CONFIG,
-        catalogs: `${project.root}/messages/{locale}/../catalog.po`,
-        locales: ["nb", "sv"],
-      })
-    );
-    project.write("messages/catalog.po", `msgid "Broken\n`);
-    project.write("messages/sv/.keep", "");
-    project.write("other/sub/.keep", "");
-    symlinkSync("../other/sub", project.path("messages/nb"));
-    const run = bin(project, "extract", "--json");
+  // #18: `messages/{locale}/../catalog.po` with `messages/sv/` present and `messages/nb/` absent reads nb's catalog as
+  // absent; writing it creates `messages/nb/`, so nb's path then reaches the catalog sv names, and nb's catalog, merged
+  // from nothing, replaces sv's translation. A `..` after a `{locale}` segment is where a created directory can change
+  // the file a path names, so the config refuses it. Oracle: the contract by hand: the problem names the field, and the
+  // translation of a message the sources use is still there (on the code before, both modes ended with nb's empty one).
+  it.for(["extract", "extract --watch"])(
+    "refuses a catalogs pattern that climbs out of a {locale} directory, keeping the translation (%s)",
+    BIN_TEST,
+    (command, { project }) => {
+      project.write(
+        "elmera-intl.json",
+        JSON.stringify({
+          ...CONFIG,
+          catalogs: `${project.root}/messages/{locale}/../catalog.po`,
+          locales: ["sv", "nb"],
+        })
+      );
+      project.write("messages/sv/.keep", "");
+      project.write("messages/catalog.po", 'msgctxt "status"\nmsgid "Open"\nmsgstr "Öppen"\n');
+      const run = bin(project, ...command.split(" "));
 
-    expect({ code: run.code, problems: readReport(run.stdout).problems.map(({ code }) => code) }).toEqual({
-      code: 1,
-      problems: ["CatalogUnreadable"],
-    });
-    expect({
-      sv: project.read("messages/catalog.po"),
-      nb: existsSync(project.path("other/catalog.po")),
-    }).toEqual({ sv: `msgid "Broken\n`, nb: false });
-  });
+      expect({ code: run.code, catalog: project.read("messages/catalog.po") }).toEqual({
+        code: 1,
+        catalog: 'msgctxt "status"\nmsgid "Open"\nmsgstr "Öppen"\n',
+      });
+      expect(run.stderr).toContain(
+        '"catalogs" must not hold a ".." segment anywhere after the first segment holding {locale} (a directory the sync creates could make two locales\' paths name one catalog)'
+      );
+    }
+  );
 
   it("refuses to overwrite a PO it cannot read", async ({ project }) => {
     await cli(project, "extract");

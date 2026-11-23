@@ -50,47 +50,6 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     );
   };
 
-  // Node's catalog files, translating "Hello" in `po` right after the first read of it once `armed` is called, and
-  // recording whether any write after the save dropped it.
-  const savingAfterRead = (project: Project, po: string) => {
-    const path = project.path(po);
-    let armed = false;
-    let saved = false;
-    let overwritten = false;
-    const layer = wrapped((live) => ({
-      ...live,
-      write: (written, text, guard) =>
-        live.write(written, text, guard).pipe(
-          Effect.tap((outcome) =>
-            Effect.sync(() => {
-              overwritten ||=
-                saved && written === path && outcome === "written" && !text.includes(`msgstr "Hei"`);
-            })
-          )
-        ),
-      read: (read) =>
-        live.read(read).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              if (armed && !saved && read === path) {
-                saved = true;
-                translate(project, po, "Hei");
-              }
-            })
-          )
-        ),
-    }));
-
-    return {
-      layer,
-      arm: () => {
-        armed = true;
-      },
-      saved: () => saved,
-      overwritten: () => overwritten,
-    };
-  };
-
   // Node's catalog files, saving sv's "Hello" right after the sync writes nb with "Ready" in it.
   const savingAfterNb = (project: Project) => {
     const nb = project.path("messages/nb.po");
@@ -351,37 +310,6 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     })
   );
 
-  // Paths that name one file are read once per sync: a save after that read is seen by the check before the writes,
-  // whichever locale names the file again later, so no output merged from the earlier text is ever written over it
-  // (not even for a moment, before a later locale's output merged from the save).
-  it.effect.each([
-    {
-      alias: "a duplicate locale",
-      config: `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv", "nb"] }`,
-      po: "messages/nb.po",
-    },
-    {
-      alias: "a {locale}/.. path",
-      config: `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}/../catalog.po", "locales": ["nb", "nested/fr", "sv"] }`,
-      po: "messages/catalog.po",
-    },
-  ])("keeps a msgstr saved after the one read of a file $alias names again", ({ config, po }, { project }) =>
-    Effect.gen(function* () {
-      project.write("elmera-intl.json", config);
-      const saving = savingAfterRead(project, po);
-      yield* startWatch(project, { files: saving.layer });
-      saving.arm();
-      project.write("src/ready.tsx", component("Ready"));
-      yield* TestClock.adjust("1 second");
-
-      expect({ saved: saving.saved(), overwritten: saving.overwritten() }).toEqual({
-        saved: true,
-        overwritten: false,
-      });
-      expect(project.read(po)).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
-    })
-  );
-
   // Locales whose catalogs are links to one file write it in turn, as the layer 4 watch did (62bfdb1): every write
   // reported, and the file left with the last locale's catalog.
   it.effect("writes a catalog a symbolic link names, after the file it links to", ({ project }) =>
@@ -453,52 +381,6 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     })
   );
 
-  // A catalog path through a directory the sync creates: `messages/{locale}/../catalog.po` with `messages/sv/` present
-  // and `messages/nb/` absent reads nb as absent and sv as the shared catalog. Writing nb creates `messages/nb/`, so its
-  // path now reaches the catalog sv names, and sv's write finds the sync's own text there. Sv's write is accepted and
-  // merges over it, so the translation the file held before the watch survives, as at e5f111b.
-  it.effect(
-    "keeps a translation when creating a directory makes a second path reach its catalog",
-    ({ project }) =>
-      Effect.gen(function* () {
-        configure(project, {
-          catalogs: `${project.root}/messages/{locale}/../catalog.po`,
-          locales: ["nb", "sv"],
-        });
-        project.write("messages/sv/.keep", "");
-        project.write("messages/catalog.po", 'msgid "Hello"\nmsgstr "Hej"\n');
-
-        yield* startWatch(project);
-        yield* TestClock.adjust("1 second");
-
-        expect(project.read("messages/catalog.po")).toContain('msgid "Hello"\nmsgstr "Hej"');
-      })
-  );
-
-  // Two locales whose names a case-insensitive file system folds into one file: the second write finds the first's
-  // text, the sync's own, so both are written and reported, as at 62bfdb1, and the file holds the last locale's.
-  it.effect(
-    "writes catalogs whose names a case-insensitive file system folds, each in turn",
-    ({ project, skip }) =>
-      Effect.gen(function* () {
-        project.write("case-probe", "");
-
-        if (!existsSync(project.path("CASE-PROBE"))) {
-          skip("the file system under the test's root is case-sensitive");
-        }
-
-        project.write(
-          "elmera-intl.json",
-          `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "NB"] }`
-        );
-        const reports = recorded(project);
-        yield* startWatch(project, { report: reports.report });
-
-        expect(reports.lines).toEqual(["wrote messages/nb.po, messages/NB.po"]);
-        expect(project.read("messages/nb.po")).toContain(String.raw`"Language: NB\n"`);
-      })
-  );
-
   // An editor's atomic save (write a new file, rename it over the old) breaks a hard link: nb.po becomes a new file,
   // and da.po keeps the old one. The check before the first write reads every path, nb's included, so the sync is
   // superseded with nothing written, as at 62bfdb1, and the next sync merges the save.
@@ -545,22 +427,6 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
         lines: ["wrote messages/sv.po, messages/nb.po, messages/da.po", "Superseded"],
       });
       expect(project.read("messages/nb.po")).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
-    })
-  );
-
-  // Locales whose catalogs are one file: each locale's output is written in turn, each compared with the sync's own
-  // write before it, so the sync is not superseded by itself and the last locale's catalog is what the file holds.
-  it.effect("writes one catalog that several locales share, in turn", ({ project }) =>
-    Effect.gen(function* () {
-      project.write(
-        "elmera-intl.json",
-        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}/../catalog.po", "locales": ["nb", "sv"] }`
-      );
-      const { reports } = yield* startWatch(project);
-      yield* TestClock.adjust("1 second");
-
-      expect(reports).toEqual(["Written"]);
-      expect(project.read("messages/catalog.po")).toContain(String.raw`"Language: sv\n"`);
     })
   );
 });

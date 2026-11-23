@@ -63,20 +63,14 @@ const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (config: Project
   } satisfies CatalogText;
 });
 
-// Each locale's PO, in the config's order, each distinct path read once, keyed by the exact path the storage reads and
-// writes: a locale whose path is another locale's string (a duplicate locale, a relative `{locale}/..` pattern, which
-// `join` collapses) shares that read. Paths that differ are read each on their own, links and absolute `..` paths
-// included, since only the kernel knows where `<link>/..` leads: the write guard knows a file several paths name by its
-// content, not by asking the storage.
+// Each locale's PO, in the config's order, keyed by the exact path the storage reads and writes. Every locale's path is
+// a string of its own, which the config guarantees (`sharedCatalogPath`: unique locale identifiers, no `..` after
+// `{locale}`), so each is read once with no dedupe; paths that still name one file (a link, a hard link) are known to
+// the write guard by their content, not by asking the storage.
 const snapshotCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig) {
-  const files = yield* CatalogFiles;
-  const texts = new Map<string, string | undefined>();
   const catalogs: Array<CatalogText> = [];
   for (const locale of config.locales) {
-    const path = catalogPath(config, locale);
-    const text = texts.has(path) ? texts.get(path) : yield* files.read(path);
-    texts.set(path, text);
-    catalogs.push({ locale, path, shown: relative(config.root, path), text });
+    catalogs.push(yield* readCatalog(config, locale));
   }
 
   return catalogs;
@@ -184,11 +178,11 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
   }
 
   // A path may hold its own snapshot, a text this sync wrote to a path with the same snapshot, or a text this sync wrote
-  // to a path that was absent at the read. Through another path that names the same file (a link, a hard link, a name a
-  // case-insensitive file system folds), a text written over the same snapshot is the sync's own write, since paths that
-  // name one file read one snapshot once the check above passed. A write to an absent path may create a directory that
-  // makes it, or a later path, reach a file another path already names, and the sync cannot know which, so its text is
-  // the sync's own to every later write. Anything else, a text this sync wrote over another present snapshot included,
+  // to a path that was absent at the read. Through another path that names the same file (a link, a hard link), a text
+  // written over the same snapshot is the sync's own write, since paths that name one file read one snapshot once the
+  // check above passed. A write to an absent path may create a directory (one a `..` before the locale climbs out of)
+  // that makes it, or a later path, reach a file another path already names through a link, and the sync cannot know
+  // which, so its text is the sync's own to every later write. Anything else, a text this sync wrote over another present snapshot included,
   // is a save since, which this sync never writes over: a catalog a translator copies onto another mid-sync is kept
   // when the copied catalog existed at the read. One the sync just created there is overwritten, since a content guard
   // cannot tell that copy from a created directory's reach.
