@@ -9,6 +9,7 @@ import type { Environment, Plugin, ResolvedConfig } from "vite";
 
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
+import type { CatalogFiles } from "./catalog-files";
 import { catalogModule } from "./catalog-module";
 import { oneShot } from "./command-run";
 import { compileCatalog } from "./compile";
@@ -34,6 +35,9 @@ export type IntlPluginOptions = {
 
 const NAME = "elmera-intl";
 
+// What each session's runtime provides: the watch's services, and the catalog files the build's check reads.
+type PluginServices = WatchServices | CatalogFiles;
+
 /**
  * The `intl()` plugins, each session's runtime built from `services`: the catalog plugin, the dev server's watch and
  * the build's check.
@@ -42,7 +46,10 @@ const NAME = "elmera-intl";
  * @param services - The services each session's runtime provides.
  * @returns The catalog, dev and build plugins.
  */
-export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<WatchServices>): Array<Plugin> {
+export function intlPlugins(
+  options: IntlPluginOptions,
+  services: Layer.Layer<PluginServices>
+): Array<Plugin> {
   const configPath = (root: string) => resolve(root, options.config ?? CONFIG_FILE);
   // Each session runs on its own runtime, so one session's end or failure never touches another's. Each dev server's
   // close (its watch, then its runtime), keyed by its resolved config (a restart's replacement has its own) and stored
@@ -50,7 +57,7 @@ export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<Wa
   const servers = new WeakMap<ResolvedConfig, () => Promise<void>>();
   // Each build's runtime, keyed by the environment that builds: a builder with `sharedConfigBuild` shares one
   // top-level config between its environments.
-  const buildSessions = hostSessions<Environment, WatchServices>(services);
+  const buildSessions = hostSessions<Environment, PluginServices>(services);
 
   return [
     intlCatalogs(options),
@@ -174,7 +181,7 @@ export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<Wa
 // The CLI's own check, so the build fails with exactly what `elmera-intl check` prints.
 // Its output collected per call, so environments checking in parallel each fail with their own.
 async function check(
-  sessions: HostSessions<Environment, WatchServices>,
+  sessions: HostSessions<Environment, PluginServices>,
   session: Environment,
   config: string
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly output: string }> {

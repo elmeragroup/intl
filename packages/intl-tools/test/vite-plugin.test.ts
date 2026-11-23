@@ -12,6 +12,7 @@ import { describe, expect, test } from "vitest";
 import type { Catalog } from "@elmeragroup/intl/core";
 import { createIntl } from "@elmeragroup/intl/core";
 
+import { CatalogFiles } from "../src/catalog-files";
 import type { OneShotOutcome } from "../src/command-run";
 import { runOnceInProcess } from "../src/command-run";
 import { intl, intlCatalogs } from "../src/vite";
@@ -210,7 +211,7 @@ async function devServer(project: Project, config: InlineConfig): Promise<ViteDe
 function countedServices() {
   const counts = { built: 0, disposed: 0 };
   const layer = Layer.mergeAll(
-    CatalogSync.layer(),
+    Layer.provideMerge(CatalogSync.layer(), CatalogFiles.layer()),
     FileEvents.layer(),
     Layer.effectDiscard(
       Effect.acquireRelease(

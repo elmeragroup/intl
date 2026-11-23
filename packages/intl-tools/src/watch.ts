@@ -20,7 +20,7 @@ import * as Semaphore from "effect/Semaphore";
 import { readFileSync } from "node:fs";
 import { sep } from "node:path";
 
-import { ioFailureReason } from "./catalog-files";
+import { CatalogFiles, ioFailureReason } from "./catalog-files";
 import type { ExtractOptions, ExtractResult } from "./commands";
 import { extractCatalogs } from "./commands";
 import type { Problem } from "./problem";
@@ -35,7 +35,7 @@ import { includePrefixes, listenNative, movesTree, startPolling, watchRoots } fr
 export type SyncResult =
   | { readonly _tag: "Written"; readonly files: ReadonlyArray<string> }
   | { readonly _tag: "Unchanged" }
-  /** A catalog was saved during the sync, so it wrote nothing more; another sync follows. */
+  /** A catalog was saved during the sync before it wrote anything, so it wrote nothing; another sync follows. */
   | { readonly _tag: "Superseded" }
   | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> };
 
@@ -139,21 +139,32 @@ export class CatalogSync
    * synchronous call whose every throw was the sync's failure, any defect of the step (the merge's included). The watch
    * reports it and retries on the next change.
    *
-   * @returns A layer whose extract runs `extractCatalogs`.
+   * @returns A layer whose extract runs `extractCatalogs` on the host's `CatalogFiles`.
    */
-  static layer(): Layer.Layer<CatalogSync> {
-    return Layer.succeed(CatalogSync, {
-      extract: Effect.fn("CatalogSync.extract")(function* (config: ProjectConfig, options: ExtractOptions) {
-        return yield* extractCatalogs(config, options).pipe(
-          Effect.mapError((failure) => new SyncFailed({ message: ioFailureReason(failure) })),
-          Effect.catchDefect((defect) =>
-            Effect.fail(
-              new SyncFailed({ message: defect instanceof Error ? defect.message : String(defect) })
-            )
-          )
-        );
-      }),
-    });
+  static layer(): Layer.Layer<CatalogSync, never, CatalogFiles> {
+    return Layer.effect(
+      CatalogSync,
+      Effect.gen(function* () {
+        const files = yield* CatalogFiles;
+
+        return {
+          extract: Effect.fn("CatalogSync.extract")(function* (
+            config: ProjectConfig,
+            options: ExtractOptions
+          ) {
+            return yield* extractCatalogs(config, options).pipe(
+              Effect.provideService(CatalogFiles, files),
+              Effect.mapError((failure) => new SyncFailed({ message: ioFailureReason(failure) })),
+              Effect.catchDefect((defect) =>
+                Effect.fail(
+                  new SyncFailed({ message: defect instanceof Error ? defect.message : String(defect) })
+                )
+              )
+            );
+          }),
+        };
+      })
+    );
   }
 }
 
@@ -192,13 +203,14 @@ const failed = (problem: Problem): Output => ({
   result: { _tag: "Failed", problems: [problem] },
 });
 
+// A superseded sync that wrote catalogs before it stopped reports them: they are written, and the retry follows.
 function syncResult(result: ExtractResult): SyncResult {
   return result.problems.length > 0
     ? { _tag: "Failed", problems: result.problems }
-    : result.superseded
-      ? { _tag: "Superseded" }
-      : result.written.length > 0
-        ? { _tag: "Written", files: result.written.map(({ path }) => path) }
+    : result.written.length > 0
+      ? { _tag: "Written", files: result.written.map(({ path }) => path) }
+      : result.superseded
+        ? { _tag: "Superseded" }
         : { _tag: "Unchanged" };
 }
 

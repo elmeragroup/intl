@@ -10,6 +10,7 @@ import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import { existsSync, rmSync } from "node:fs";
 
+import { CatalogFiles } from "../src/catalog-files";
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
 import type { ExtractOptions } from "../src/commands";
 import { extractCatalogs } from "../src/commands";
@@ -21,6 +22,7 @@ import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import {
   asSyncFailed,
+  catalogServices,
   component,
   CONFIG,
   deliveredEvents,
@@ -30,6 +32,7 @@ import {
   POLL_MS,
   POLLING,
   projectConfig,
+  syncing,
   watches,
 } from "./watch-project";
 
@@ -39,7 +42,7 @@ import {
 // The executable's watch run in this process, reporting through `reporter`, as a host runtime runs the program.
 function watchInProcess(project: Project, reporter: Layer.Layer<Reporter>) {
   return cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: project.root }).pipe(
-    Effect.provide([CliPlatform, reporter, CatalogSync.layer(), FileEvents.layer()])
+    Effect.provide([CliPlatform, reporter, catalogServices(), FileEvents.layer()])
   );
 }
 
@@ -285,7 +288,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const running = inProcess(
       project,
       cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, reporter, CatalogSync.layer(), FileEvents.layer()])
+        Effect.provide([CliPlatform, reporter, catalogServices(), FileEvents.layer()])
       ),
       [gate]
     );
@@ -346,8 +349,8 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       const held = Promise.withResolvers<void>();
       const gate = Promise.withResolvers<void>();
       let calls = 0;
-      const holding = Layer.succeed(CatalogSync, {
-        extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+      const holding = syncing(
+        Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
           calls += 1;
 
           if (calls === 2) {
@@ -355,9 +358,9 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
             yield* Effect.promise(() => gate.promise);
           }
 
-          return yield* extractCatalogs(config, options).pipe(Effect.mapError(asSyncFailed));
-        }),
-      });
+          return yield* extractCatalogs(config, options);
+        })
+      );
       let stdout = "";
       let stderr = "";
       const reporter = Reporter.layer({
@@ -372,7 +375,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       const running = inProcess(
         project,
         cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-          Effect.provide([CliPlatform, reporter, holding, events.layer])
+          Effect.provide([CliPlatform, reporter, catalogServices(holding), events.layer])
         ),
         [gate]
       );
@@ -504,24 +507,29 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     let calls = 0;
     const recording = Layer.effect(
       CatalogSync,
-      Effect.acquireRelease(
-        Effect.succeed({
-          extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-            calls += 1;
+      CatalogFiles.use((files) =>
+        Effect.acquireRelease(
+          Effect.succeed({
+            extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+              calls += 1;
 
-            if (calls === 2) {
-              held.resolve();
-              yield* Effect.promise(() => gate.promise);
-              log.push("sync resumed");
-            }
+              if (calls === 2) {
+                held.resolve();
+                yield* Effect.promise(() => gate.promise);
+                log.push("sync resumed");
+              }
 
-            return yield* extractCatalogs(config, options).pipe(Effect.mapError(asSyncFailed));
+              return yield* extractCatalogs(config, options).pipe(
+                Effect.provideService(CatalogFiles, files),
+                Effect.mapError(asSyncFailed)
+              );
+            }),
           }),
-        }),
-        () =>
-          Effect.sync(() => {
-            log.push("layer released");
-          })
+          () =>
+            Effect.sync(() => {
+              log.push("layer released");
+            })
+        )
       )
     );
     let stdout = "";
@@ -534,7 +542,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const { fiber } = inProcess(
       project,
       cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, reporter, recording, FileEvents.layer()])
+        Effect.provide([CliPlatform, reporter, catalogServices(recording), FileEvents.layer()])
       ),
       [gate]
     );
@@ -556,14 +564,14 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const events = deliveredEvents();
     const held = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
-    const holding = Layer.succeed(CatalogSync, {
-      extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+    const holding = syncing(
+      Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
         held.resolve();
         yield* Effect.promise(() => gate.promise);
 
-        return yield* extractCatalogs(config, options).pipe(Effect.mapError(asSyncFailed));
-      }),
-    });
+        return yield* extractCatalogs(config, options);
+      })
+    );
     const runtime = hostRuntime(project, events.layer, holding);
     const watcher = watchProject(runtime, projectConfig(project), () => undefined);
     project.defer(() => watcher.close());
@@ -662,7 +670,11 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     project,
   }) => {
     const runtime = ManagedRuntime.make(
-      Layer.mergeAll(CatalogSync.layer(), FileEvents.layer(), Layer.succeed(References.MaxOpsBeforeYield, 1))
+      Layer.mergeAll(
+        Layer.provide(CatalogSync.layer(), CatalogFiles.layer()),
+        FileEvents.layer(),
+        Layer.succeed(References.MaxOpsBeforeYield, 1)
+      )
     );
     const watcher = watchProject(runtime, projectConfig(project), () => undefined);
     project.defer(() => watcher.close());
@@ -757,7 +769,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const running = inProcess(
       project,
       cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, reporter, CatalogSync.layer(), events.layer])
+        Effect.provide([CliPlatform, reporter, catalogServices(), events.layer])
       ),
       [opening]
     );
@@ -786,7 +798,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const running = inProcess(
       project,
       cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, reporter, CatalogSync.layer(), events.layer])
+        Effect.provide([CliPlatform, reporter, catalogServices(), events.layer])
       )
     );
     sigtermCli(before);
@@ -815,7 +827,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const running = inProcess(
       project,
       cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-        Effect.provide([CliPlatform, reporter, CatalogSync.layer(), events.layer])
+        Effect.provide([CliPlatform, reporter, catalogServices(), events.layer])
       )
     );
     await expect.poll(() => stdout, project.guard()).toContain("watching");
@@ -864,7 +876,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       return watchCatalogs(projectConfig(project), { _tag: "native" }, Deferred.makeUnsafe<void>(), {
         report: () => Effect.void,
         ready: Effect.void,
-      }).pipe(Scope.provide(scope), Effect.provide([CatalogSync.layer(), events]));
+      }).pipe(Scope.provide(scope), Effect.provide([catalogServices(), events]));
     }
 
     it("settles its start in a scope closed already, opening no tree", async ({ project }) => {
@@ -948,7 +960,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       const exit = await inProcess(
         project,
         cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
-          Effect.provide([CliPlatform, reporter, CatalogSync.layer(), FileEvents.layer()])
+          Effect.provide([CliPlatform, reporter, catalogServices(), FileEvents.layer()])
         )
       ).exit();
 

@@ -1,11 +1,12 @@
-// The CLI's two operations over a project: `extract` writes catalogs, `check` proves them in sync and compilable. Each
-// is an effect over its edges (the scan, the formats module, the catalogs' reads and writes); what it decides from what
-// it read is pure, in `catalog-plan.ts` and `catalog-check.ts`.
 import * as Effect from "effect/Effect";
 import { relative } from "node:path";
 
-import { checkCatalogs, compileCatalogs } from "./catalog-check";
-import type { CatalogStorage } from "./catalog-files";
+// The CLI's two operations over a project: `extract` writes catalogs, `check` proves them in sync and compilable. Each
+// is an effect over its edges (the scan, the formats module, the catalogs' reads and writes); what it decides from what
+// it read is pure, in `catalog-plan.ts` and `catalog-check.ts`.
+import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
+
+import { checkCatalogs, compileLocale } from "./catalog-check";
 import { CatalogFiles, ioEdge } from "./catalog-files";
 import type { CatalogPlan, CatalogText, WrittenCatalog } from "./catalog-plan";
 import { mergeCatalogs } from "./catalog-plan";
@@ -137,38 +138,10 @@ export const planCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.planCatalogs"
   return mergeCatalogs(yield* readCatalogs(config), scanned.messages, options.unused);
 });
 
-// What one catalog's write did.
-type WriteOutcome = "written" | "unchanged" | "superseded";
-
-// One catalog's read, decision and write, in a section an interruption cannot split: under `yield`, the target is read
-// again right before its write, so a save that landed since the plan read it (while an earlier catalog was written)
-// is never written over.
-const writeCatalog = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog")(function* (
-  files: CatalogStorage,
-  plan: CatalogPlan,
-  output: WrittenCatalog,
-  options: ExtractOptions
-) {
-  const current = yield* files.read(output.path);
-
-  if (options.concurrentSave === "yield" && current !== plan.read.get(output.path)) {
-    return "superseded" satisfies WriteOutcome;
-  }
-
-  // An unchanged catalog is not written: its mtime stays, so no build or editor sees a change.
-  if (current === output.text) {
-    return "unchanged" satisfies WriteOutcome;
-  }
-
-  yield* files.write(output.path, output.text);
-
-  return "written" satisfies WriteOutcome;
-}, Effect.uninterruptible);
-
 /**
  * Write a plan's catalogs, skipping each whose text is unchanged. Writes nothing when the plan has problems. Under
  * `yield`, writes nothing when a PO changed after the plan read it, and stops before a target that changed since (one
- * saved while an earlier catalog was written).
+ * saved while an earlier catalog was written): each write checks its target in the same storage operation.
  *
  * @param plan - What `planCatalogs` read and would write.
  * @param options - What a concurrent save does.
@@ -194,17 +167,28 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
     }
   }
 
+  // What each catalog holds, as this sync last saw or wrote it: a later output to a path several locales share is
+  // compared with this sync's own write, not taken for a save.
+  const expected = new Map(plan.read);
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
-    const outcome = yield* writeCatalog(files, plan, output, options);
+    const outcome = yield* files.write(
+      output.path,
+      output.text,
+      options.concurrentSave === "yield"
+        ? { _tag: "IfUnchangedFrom", text: expected.get(output.path) }
+        : { _tag: "Overwrite" }
+    );
 
-    if (outcome === "superseded") {
+    if (outcome === "changed") {
       return { problems, messages, written, superseded: true } satisfies ExtractResult;
     }
 
     if (outcome === "written") {
       written.push(output);
     }
+
+    expected.set(output.path, output.text);
   }
 
   return { problems, messages, written, superseded: false } satisfies ExtractResult;
@@ -234,21 +218,33 @@ export const runCheck = /* @__PURE__ */ Effect.fn("elmera-intl.check")(function*
   }
 
   const messages = scanned.messages.length;
-  const catalogs = yield* readCatalogs(config);
-  const problems = checkCatalogs(scanned, catalogs);
+  const problems = checkCatalogs(scanned, yield* readCatalogs(config));
 
   if (problems.length > 0) {
     return { problems, messages, written: [], unreachable: [] } satisfies CommandReport;
   }
 
   // Last, on catalogs every other rule passed: the artifact the loaders build, compiled and dry-formatted with the
-  // app's formats.
-  const compiled = compileCatalogs(catalogs, formats.formats);
+  // app's formats, each PO read again as the loaders will read it. The English catalog compiles from the same msgids.
+  const files = yield* CatalogFiles;
+  const compiled: Array<Problem> = [];
+  const unreachable: Array<UnreachableArm> = [];
+  for (const locale of [...config.locales, SOURCE_LOCALE]) {
+    // `en` compiles from the first locale's PO: every PO holds the same msgids once in sync.
+    const path = catalogPath(config, locale === SOURCE_LOCALE ? (config.locales[0] ?? locale) : locale);
+    const result = compileLocale(yield* files.readExisting(path), {
+      file: relative(config.root, path),
+      locale,
+      formats: formats.formats,
+    });
+    compiled.push(...result.problems);
+    unreachable.push(...result.unreachable);
+  }
 
   return {
-    problems: compiled.problems,
+    problems: compiled,
     messages,
     written: [],
-    unreachable: compiled.unreachable,
+    unreachable,
   } satisfies CommandReport;
 });

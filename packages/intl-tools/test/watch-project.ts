@@ -1,23 +1,29 @@
 import { makeMethods, test } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import { mkdirSync } from "node:fs";
 
 import type { ProjectIoFailed } from "../src/catalog-files";
-import { ioFailureReason } from "../src/catalog-files";
+import { CatalogFiles, ioFailureReason } from "../src/catalog-files";
 import type { ExtractOptions, ExtractResult } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
-import type { WatchMode, WatchServices } from "../src/watch";
-import { CatalogSync, SyncFailed } from "../src/watch";
+import type { SyncResult, Watching, WatchMode, WatchOutput, WatchServices } from "../src/watch";
+import { CatalogSync, SyncFailed, watchCatalogs } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 
-// The watch tests' shared project and helpers: the executable's and in-process watches (`watch.test.ts`) and the
-// watch's timing on the test clock (`watch-clock.test.ts`).
+// The watch tests' shared project and helpers: the executable's and in-process watches (`watch.test.ts`,
+// `watch-lifecycle.test.ts`), and the watch on the test clock: its timing (`watch-clock.test.ts`) and the saves it keeps
+// (`watch-saves.test.ts`).
 
 /** The watched project's config: every source under `src`, one Norwegian catalog. */
 export const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
@@ -78,8 +84,8 @@ export function projectConfig(project: Project): ProjectConfig {
 }
 
 /**
- * A host's runtime for `watchProject`, as the Vite plugin makes one: `extractCatalogs` and Node's file events,
- * disposed when the test ends (after every cleanup registered later, such as a watch's close).
+ * A host's runtime for `watchProject`, as the Vite plugin makes one: `extractCatalogs` on Node's catalog files and
+ * Node's file events, disposed when the test ends (after every cleanup registered later, such as a watch's close).
  *
  * @param project - The project whose teardown disposes it.
  * @param events - The file events it provides; Node's unless a test delivers its own.
@@ -89,12 +95,24 @@ export function projectConfig(project: Project): ProjectConfig {
 export function hostRuntime(
   project: Project,
   events: Layer.Layer<FileEvents> = FileEvents.layer(),
-  sync: Layer.Layer<CatalogSync> = CatalogSync.layer()
+  sync: Layer.Layer<CatalogSync, never, CatalogFiles> = CatalogSync.layer()
 ): ManagedRuntime.ManagedRuntime<WatchServices, never> {
-  const runtime = ManagedRuntime.make(Layer.mergeAll(sync, events));
+  const runtime = ManagedRuntime.make(Layer.mergeAll(Layer.provide(sync, CatalogFiles.layer()), events));
   project.defer(() => runtime.dispose());
 
   return runtime;
+}
+
+/**
+ * The services a host provides a CLI program: Node's catalog files, and the sync's extract on them.
+ *
+ * @param sync - The sync's extract; `extractCatalogs` unless a test holds it.
+ * @returns A layer providing both.
+ */
+export function catalogServices(
+  sync: Layer.Layer<CatalogSync, never, CatalogFiles> = CatalogSync.layer()
+): Layer.Layer<CatalogSync | CatalogFiles> {
+  return Layer.provideMerge(sync, CatalogFiles.layer());
 }
 
 /**
@@ -108,20 +126,150 @@ export function asSyncFailed(failure: ProjectIoFailed): SyncFailed {
 }
 
 /**
- * The watch's sync step as `extract`, an effect a test can save in between a sync's read and its writes, or hold.
+ * The watch's sync step as `extract`, an effect a test can save in between a sync's read and its writes, or hold. It
+ * runs on the host's catalog files, as `CatalogSync.layer()` does.
  *
  * @param extract - The sync step.
  * @returns A `CatalogSync` layer running it.
  */
 export function syncing(
-  extract: (config: ProjectConfig, options: ExtractOptions) => Effect.Effect<ExtractResult, ProjectIoFailed>
-): Layer.Layer<CatalogSync> {
-  return Layer.succeed(CatalogSync, {
-    extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-      return yield* extract(config, options).pipe(Effect.mapError(asSyncFailed));
-    }),
-  });
+  extract: (
+    config: ProjectConfig,
+    options: ExtractOptions
+  ) => Effect.Effect<ExtractResult, ProjectIoFailed, CatalogFiles>
+): Layer.Layer<CatalogSync, never, CatalogFiles> {
+  return Layer.effect(
+    CatalogSync,
+    Effect.gen(function* () {
+      const files = yield* CatalogFiles;
+
+      return {
+        extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+          return yield* extract(config, options).pipe(
+            Effect.provideService(CatalogFiles, files),
+            Effect.mapError(asSyncFailed)
+          );
+        }),
+      };
+    })
+  );
 }
+
+/** A watch a test started on the test clock (see `launchWatch`). */
+export type ClockedWatch = {
+  /** The tag of each result the watch reported, in order, unless the test writes them itself. */
+  readonly reports: Array<SyncResult["_tag"]>;
+  readonly stop: Deferred.Deferred<void>;
+  /** The watch's own scope, inside the test's. */
+  readonly scope: Scope.Closeable;
+  readonly watching: Watching;
+};
+
+/**
+ * Start `effect` from a sleep the test clock wakes, so the clock waits until everything it sets off (the classifying of
+ * a backlog, a sync) has suspended before it moves on.
+ *
+ * @template A - What `effect` returns.
+ * @template E - How `effect` fails.
+ * @param effect - The effect to start.
+ * @returns The fiber that finishes it.
+ */
+export const wake = /* @__PURE__ */ Effect.fnUntraced(function* <A, E>(effect: Effect.Effect<A, E>) {
+  // oxlint-disable-next-line tests/no-fixed-delay -- a test-clock sleep, woken by the TestClock.adjust below: no real time passes.
+  const running = yield* Effect.sleep("1 millis").pipe(Effect.andThen(effect), Effect.forkChild);
+  yield* TestClock.adjust("1 millis");
+
+  return running;
+});
+
+/**
+ * Run `effect` from a test-clock wake (see `wake`).
+ *
+ * @template A - What `effect` returns.
+ * @param effect - The effect to run.
+ * @returns What it returns.
+ */
+export const woken = <A>(effect: Effect.Effect<A>): Effect.Effect<A> =>
+  wake(effect).pipe(Effect.flatMap((fiber) => Fiber.join(fiber)));
+
+/** How `launchWatch` starts a watch. */
+export type ClockedWatchOptions = {
+  /** The sync step; `CatalogSync.layer()` unless a test holds or changes it. */
+  readonly layer?: Layer.Layer<CatalogSync, never, CatalogFiles>;
+  /** The catalog files the sync reads and writes; Node's unless a test stands between a sync's reads and writes. */
+  readonly files?: Layer.Layer<CatalogFiles>;
+  /** Writes each result; records its tag unless a test writes it. */
+  readonly report?: (result: SyncResult) => Effect.Effect<void>;
+  /** The watch's clock; the test clock unless a test moves the wall clock alone. */
+  readonly clock?: Clock.Clock;
+  /** Where change events come from; the poll unless a test delivers native events itself. */
+  readonly mode?: WatchMode;
+  /** The native file events; Node's unless a test delivers them itself. */
+  readonly events?: Layer.Layer<FileEvents>;
+  /** How the watch's caller scope runs its finalizers; sequential unless a test closes it in parallel. */
+  readonly strategy?: "sequential" | "parallel";
+  /** The stop signal; a new one unless a test gives it before the watch starts or as its trees open. */
+  readonly stop?: Deferred.Deferred<void>;
+};
+
+/**
+ * Start the watch in a scope of its own inside the test's, with its sync step built in that scope so it lives as long
+ * as the watch. It starts from a test-clock wake, so its poll and its debounce time from 1 ms.
+ *
+ * @param project - The watched project.
+ * @param options - What the test changes about the watch.
+ * @returns Once the start has run up to its first suspension (a held first sync), the run, with the fiber that
+ *   finishes the start.
+ */
+export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
+  project: Project,
+  options: ClockedWatchOptions = {}
+) {
+  const reports: Array<SyncResult["_tag"]> = [];
+  const scope = yield* Scope.fork(yield* Effect.scope, options.strategy ?? "sequential");
+  const stop = options.stop ?? (yield* Deferred.make<void>());
+  const services = yield* Layer.buildWithScope(
+    Layer.merge(
+      Layer.provide(options.layer ?? CatalogSync.layer(), options.files ?? CatalogFiles.layer()),
+      options.events ?? FileEvents.layer()
+    ),
+    scope
+  );
+  const output: WatchOutput<never> = {
+    report:
+      options.report ??
+      ((result) =>
+        Effect.sync(() => {
+          reports.push(result._tag);
+        })),
+    ready: Effect.void,
+  };
+  const starting = watchCatalogs(projectConfig(project), options.mode ?? POLLING, stop, output).pipe(
+    Scope.provide(scope),
+    Effect.provideContext(services)
+  );
+  const clocked =
+    options.clock === undefined ? starting : starting.pipe(Effect.provideService(Clock.Clock, options.clock));
+  const watching = yield* wake(clocked);
+
+  return { reports, stop, scope, watching };
+});
+
+/**
+ * Start the watch (see `launchWatch`) and wait for its start.
+ *
+ * @param project - The watched project.
+ * @param options - What the test changes about the watch.
+ * @returns The started watch.
+ */
+export const startWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
+  project: Project,
+  options: ClockedWatchOptions = {}
+) {
+  const { watching, ...run } = yield* launchWatch(project, options);
+
+  return { ...run, watching: yield* Fiber.join(watching) } satisfies ClockedWatch;
+});
 
 /** File events a test delivers itself: the listener of each tree the watch has open. */
 export type DeliveredEvents = {

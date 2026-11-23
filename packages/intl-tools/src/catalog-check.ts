@@ -1,6 +1,5 @@
 // What `check` finds, decided from what it read: the scanned sources and each locale's PO. Pure: the reads are
 // `commands.ts`'s, so `check` judges a project the same way whatever the file system is.
-import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 import type { Formats } from "@elmeragroup/intl/internal/icu";
 import { hashKey, keyOf, SERIALIZER_VERSION } from "@elmeragroup/intl/internal/message";
 
@@ -53,26 +52,26 @@ export function checkCatalogs(
 }
 
 /**
- * Compile and dry-format each locale's catalog, and the English one from the same msgids, with the app's `formats`,
- * as the loaders will compile them. Run on catalogs every rule of `checkCatalogs` passed, each of whose problems names
- * its own fix.
+ * Compile and dry-format one locale's catalog with the app's `formats`, as the loaders will compile it. Run on
+ * catalogs every rule of `checkCatalogs` passed, each of whose problems names its own fix.
  *
- * @param catalogs - Each locale's PO as read, every one present, in the config's order.
- * @param formats - The app's formats.
+ * @param text - The PO's text, as the compile read it.
+ * @param at - The PO as problems show it, the locale it compiles for (`en` from any locale's msgids) and the formats.
  * @returns The problems the compile finds, and the arms it does not reach: information, not problems.
  */
-export function compileCatalogs(
-  catalogs: ReadonlyArray<CatalogText>,
-  formats: Formats | undefined
+export function compileLocale(
+  text: string,
+  at: { readonly file: string; readonly locale: string; readonly formats: Formats | undefined }
 ): CompiledCatalogs {
-  const compiled = [...catalogs.map(({ locale }) => locale), SOURCE_LOCALE].map((locale) =>
-    compileLocale(catalogs, locale, formats)
-  );
+  const compiled = compileCatalog(text, at.locale, { formats: at.formats });
 
-  return {
-    problems: compiled.flatMap(({ problems }) => problems),
-    unreachable: compiled.flatMap(({ unreachable }) => unreachable),
-  };
+  if (compiled._tag === "Compiled") {
+    return { problems: [], unreachable: compiled.unreachable };
+  }
+
+  const where = { file: at.file, locale: at.locale };
+
+  return { problems: compiled.problems.map((problem) => compileProblem(problem, where)), unreachable: [] };
 }
 
 // Two source keys with one wire key would render each other's text; the compiler fails on it too, but only for keys a
@@ -194,31 +193,6 @@ function checkLocale(catalog: CatalogText, sources: ReadonlyArray<CompiledSource
   }
 
   return problems;
-}
-
-// `en` compiles from the first locale's PO: every PO holds the same msgids once in sync.
-function compileLocale(
-  catalogs: ReadonlyArray<CatalogText>,
-  locale: string,
-  formats: Formats | undefined
-): CompiledCatalogs {
-  const catalog =
-    locale === SOURCE_LOCALE ? catalogs[0] : catalogs.find((candidate) => candidate.locale === locale);
-
-  // A defect: every locale's PO was read and exists, since a missing one is a CatalogMissing problem and nothing
-  // compiles then.
-  if (catalog?.text === undefined) {
-    throw new Error(`compiled the ${locale} catalog, which was not read`);
-  }
-
-  const at = { file: catalog.shown, locale };
-  const compiled = compileCatalog(catalog.text, locale, { formats });
-
-  if (compiled._tag === "Compiled") {
-    return { problems: [], unreachable: compiled.unreachable };
-  }
-
-  return { problems: compiled.problems.map((problem) => compileProblem(problem, at)), unreachable: [] };
 }
 
 function compileProblem(

@@ -7,6 +7,7 @@ import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
 import type { ProjectIoFailed } from "./catalog-files";
+import { CatalogFiles } from "./catalog-files";
 import type { CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
 import type { Problem } from "./problem";
@@ -41,7 +42,7 @@ const commandReport = /* @__PURE__ */ Effect.fn("elmera-intl.report")(function* 
     return { problems: [loaded.problem], messages: 0, written: [], unreachable: [] } satisfies CommandReport;
   }
 
-  const report: Effect.Effect<CommandReport, ProjectIoFailed> =
+  const report: Effect.Effect<CommandReport, ProjectIoFailed, CatalogFiles> =
     command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
 
   return yield* report.pipe(Effect.catchTag("ProjectIoFailed", (failure) => Effect.die(failure.cause)));
@@ -152,7 +153,7 @@ export const oneShot = /* @__PURE__ */ Effect.fn("elmera-intl.oneShot")(function
 });
 
 /**
- * Run `oneShot` outside an Effect program, on the host's output streams.
+ * Run `oneShot` outside an Effect program, on the host's output streams and Node's catalog files.
  *
  * @param command - The command to run.
  * @param options - The project's config path and how a crash is taken.
@@ -165,5 +166,7 @@ export async function runOnceInProcess(
   options: { readonly configPath: string; readonly crash: CrashHandling },
   io: ReporterIo
 ): Promise<OneShotOutcome> {
-  return Effect.runPromise(oneShot(command, options).pipe(Effect.provide(Reporter.layer(io))));
+  return Effect.runPromise(
+    oneShot(command, options).pipe(Effect.provide([Reporter.layer(io), CatalogFiles.layer()]))
+  );
 }

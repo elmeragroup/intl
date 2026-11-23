@@ -1,8 +1,9 @@
 // The commands' file-system edges: where a catalog is read and written, and the failure of any I/O the commands do not
-// classify. Still Node's synchronous fs underneath, behind a port the commands reach through the context, so the
-// effectful edges, not the commands, change when they move to `FileSystem`.
+// classify. Still Node's synchronous fs underneath, behind a service each host provides, so the effectful edges, not
+// the commands, change when they move to `FileSystem`.
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -45,28 +46,80 @@ export function ioEdge<A>(
   return Effect.try({ try: run, catch: (cause) => new ProjectIoFailed({ operation, cause }) });
 }
 
-/** Where catalogs are read and written. */
-export type CatalogStorage = {
-  /** A catalog's text; undefined when it does not exist. */
-  readonly read: (path: string) => Effect.Effect<string | undefined, ProjectIoFailed>;
-  /** Writes a catalog's text, making its directory. */
-  readonly write: (path: string, text: string) => Effect.Effect<void, ProjectIoFailed>;
-};
+/** How a catalog write treats the text it replaces. */
+export type WriteGuard =
+  /** Write over whatever the catalog holds (`extract`). */
+  | { readonly _tag: "Overwrite" }
+  /** Write only while the catalog still holds `text` (undefined: absent), so a save since is never written over. */
+  | { readonly _tag: "IfUnchangedFrom"; readonly text: string | undefined };
 
-/**
- * The catalogs on Node's file system. A reference with that default, so a host provides nothing to run a command,
- * and a test can stand between a sync's read and its writes.
- */
-export const CatalogFiles = /* @__PURE__ */ Context.Reference<CatalogStorage>(
-  "elmera-intl-tools/CatalogFiles",
-  {
-    defaultValue: () => ({
-      read: (path) => ioEdge("read", () => (existsSync(path) ? readFileSync(path, "utf8") : undefined)),
-      write: (path, text) =>
-        ioEdge("write", () => {
+/** What a guarded catalog write did. */
+export type WriteOutcome =
+  /** The catalog now holds the text. */
+  | "written"
+  /** The catalog already held the text, so it was not written: its mtime stays. */
+  | "unchanged"
+  /** The catalog no longer holds what the guard expected, so nothing was written. */
+  | "changed";
+
+/** Where catalogs are read and written. */
+export class CatalogFiles
+  extends /* @__PURE__ */ Context.Service<
+    CatalogFiles,
+    {
+      /** A catalog's text; undefined when it does not exist. */
+      readonly read: (path: string) => Effect.Effect<string | undefined, ProjectIoFailed>;
+      /** A catalog's text; a catalog that does not exist fails as its read did. */
+      readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
+      /**
+       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfUnchangedFrom`)
+       * changed. One operation: its read, its comparison and its write never yield to another fiber in between, so a
+       * save made from this process meanwhile is either seen or lands after the write.
+       */
+      readonly write: (
+        path: string,
+        text: string,
+        guard: WriteGuard
+      ) => Effect.Effect<WriteOutcome, ProjectIoFailed>;
+    }
+  >()("elmera-intl-tools/CatalogFiles")
+{
+  /**
+   * The catalogs on Node's file system, each operation one synchronous call.
+   *
+   * @returns A layer reading and writing through `node:fs`.
+   */
+  static layer(): Layer.Layer<CatalogFiles> {
+    return Layer.succeed(CatalogFiles, {
+      read: Effect.fn("CatalogFiles.read")(function* (path: string) {
+        return yield* ioEdge("read", () => textAt(path));
+      }),
+      readExisting: Effect.fn("CatalogFiles.readExisting")(function* (path: string) {
+        return yield* ioEdge("read", () => readFileSync(path, "utf8"));
+      }),
+      // The read, the comparison and the write are one synchronous call: nothing can run between them.
+      write: Effect.fn("CatalogFiles.write")(function* (path: string, text: string, guard: WriteGuard) {
+        return yield* ioEdge("write", (): WriteOutcome => {
+          const current = textAt(path);
+
+          if (guard._tag === "IfUnchangedFrom" && current !== guard.text) {
+            return "changed";
+          }
+
+          if (current === text) {
+            return "unchanged";
+          }
+
           mkdirSync(dirname(path), { recursive: true });
           writeFileSync(path, text);
-        }),
-    }),
+
+          return "written";
+        });
+      }),
+    });
   }
-);
+}
+
+function textAt(path: string): string | undefined {
+  return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+}
