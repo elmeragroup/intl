@@ -32,3 +32,55 @@ it("builds a session's services once, whatever another session's release", async
 
   expect(counts).toEqual([1, 2, 2]);
 });
+
+// Unit under test: a session's release after an earlier session on the same key failed to dispose (a build environment
+// rebuilt after its runtime's finalizer failed). Oracle: the release contract, by hand: the failure is the release's
+// that ended that session; a later release waits for its own session's runs and disposal, and settles as they did.
+it("releases a key's next session on its own, after an earlier session's disposal failed", async () => {
+  let made = 0;
+  const gate = Promise.withResolvers<void>();
+  const events: Array<string> = [];
+  const sessions = hostSessions<object, never>(
+    Layer.effectDiscard(
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          made += 1;
+
+          return made;
+        }),
+        (session) =>
+          session === 1
+            ? Effect.die(new Error("dispose 1 failed"))
+            : Effect.promise(() => gate.promise).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    events.push("disposed 2");
+                  })
+                )
+              )
+      )
+    )
+  );
+  const key = {};
+
+  await sessions.run(key, Effect.void);
+  await expect(sessions.release(key)).rejects.toThrow("dispose 1 failed");
+  await expect(sessions.release(key)).resolves.toBeUndefined();
+  const run = sessions.run(
+    key,
+    Effect.promise(() => gate.promise).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          events.push("ran 2");
+        })
+      )
+    )
+  );
+  const released = sessions.release(key);
+  gate.resolve();
+  await released;
+  events.push("released 2");
+  await run;
+
+  expect(events).toEqual(["ran 2", "disposed 2", "released 2"]);
+});

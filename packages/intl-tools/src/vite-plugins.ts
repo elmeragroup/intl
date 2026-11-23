@@ -2,6 +2,7 @@
 // real ones.
 import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { readFileSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Environment, Plugin, ResolvedConfig } from "vite";
@@ -9,7 +10,6 @@ import type { Environment, Plugin, ResolvedConfig } from "vite";
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { catalogModule } from "./catalog-module";
-import type { OneShotOutcome } from "./command-run";
 import { oneShot } from "./command-run";
 import { compileCatalog } from "./compile";
 import type { HostSessions } from "./host-sessions";
@@ -19,7 +19,7 @@ import { catalogLocale, catalogPath } from "./project-catalogs";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import { loadFormats } from "./project-formats";
 import { Reporter } from "./reporter";
-import type { ProjectWatcher, WatchMode, WatchServices } from "./watch";
+import type { WatchMode, WatchServices } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
 import { nearestExisting } from "./watch-trees";
 
@@ -44,13 +44,13 @@ const NAME = "elmera-intl";
  */
 export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<WatchServices>): Array<Plugin> {
   const configPath = (root: string) => resolve(root, options.config ?? CONFIG_FILE);
-  // What this instance runs its programs on: a runtime per host session, so one session's end or failure never touches
-  // another's. A dev server's is keyed by its resolved config (a restart's replacement has its own); a build's by the
-  // environment that builds, which a builder with `sharedConfigBuild` shares one top-level config between.
-  const serverSessions = hostSessions<ResolvedConfig, WatchServices>(services);
+  // Each session runs on its own runtime, so one session's end or failure never touches another's. Each dev server's
+  // close (its watch, then its runtime), keyed by its resolved config (a restart's replacement has its own) and stored
+  // as soon as its start begins, so a server that closes while it is still starting stops it there.
+  const servers = new WeakMap<ResolvedConfig, () => Promise<void>>();
+  // Each build's runtime, keyed by the environment that builds: a builder with `sharedConfigBuild` shares one
+  // top-level config between its environments.
   const buildSessions = hostSessions<Environment, WatchServices>(services);
-  // Each dev server's watch as soon as its start begins: a server that closes while it is still starting stops it there.
-  const watchers = new WeakMap<ResolvedConfig, ProjectWatcher>();
 
   return [
     intlCatalogs(options),
@@ -84,9 +84,9 @@ export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<Wa
             : polled._tag === "PollIntervalOutOfRange"
               ? { _tag: "poll", intervalMs: DEFAULT_POLL_MS }
               : polled;
-        const session = server.config;
+        const runtime = ManagedRuntime.make(services);
         const watcher = watchProject(
-          serverSessions.runtime(session),
+          runtime,
           loaded.config,
           (result) => {
             if (result._tag === "Written") {
@@ -99,28 +99,28 @@ export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<Wa
           },
           mode
         );
-        watchers.set(session, watcher);
+        servers.set(server.config, async () => {
+          try {
+            await watcher.close();
+          } finally {
+            await runtime.dispose();
+          }
+        });
 
         try {
           await watcher.started;
         } catch (error) {
           // The failed start fails createServer, and Vite closes no plugin of a server it never made: this server's
           // runtime goes here, its watchers already closed by the start.
-          await serverSessions.release(session);
+          await runtime.dispose();
           throw error;
         }
       },
       // Once per environment as the dev server closes, in parallel: each asks the watch to stop at once, a start still
       // pending included, and waits for its one ordered shutdown (the first close reports how it ended); then the
-      // runtime goes, with anything a stop did not reach.
+      // runtime goes (disposing it again waits for the first disposal), with anything a stop did not reach.
       async closeBundle() {
-        const session = this.environment.getTopLevelConfig();
-
-        try {
-          await watchers.get(session)?.close();
-        } finally {
-          await serverSessions.release(session);
-        }
+        await servers.get(this.environment.getTopLevelConfig())?.();
       },
     },
     {
@@ -156,9 +156,9 @@ export function intlPlugins(options: IntlPluginOptions, services: Layer.Layer<Wa
           this.error(result.output);
         }
       },
-      // Each build's end, per environment: the build's runtime goes once no other environment's check is running on it.
-      // A watch build keeps it for every rebuild, as Rolldown's closeBundle contract asks of watch-mode resources, and
-      // its watcher's close releases it.
+      // Each build's end, per environment: the environment's runtime goes once its running checks have ended. A watch
+      // build keeps it for every rebuild, as Rolldown's closeBundle contract asks of watch-mode resources, and its
+      // watcher's close releases it.
       async closeBundle() {
         if (!this.meta.watchMode) {
           await buildSessions.release(this.environment);
@@ -182,7 +182,7 @@ async function check(
   const collect = (text: string) => {
     output += text;
   };
-  const outcome: OneShotOutcome = await sessions.run(
+  const outcome = await sessions.run(
     session,
     oneShot("check", { configPath: config, crash: "reject" }).pipe(
       Effect.provide(Reporter.layer({ stdout: collect, stderr: collect }))

@@ -205,16 +205,38 @@ async function devServer(project: Project, config: InlineConfig): Promise<ViteDe
   return server;
 }
 
+// The plugins' real services, their runtimes counted: each session's runtime builds its services once and disposes them
+// once, so `[built, disposed]` counts the sessions begun and ended.
+function countedServices() {
+  const counts = { built: 0, disposed: 0 };
+  const layer = Layer.mergeAll(
+    CatalogSync.layer(),
+    FileEvents.layer(),
+    Layer.effectDiscard(
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          counts.built += 1;
+        }),
+        () =>
+          Effect.sync(() => {
+            counts.disposed += 1;
+          })
+      )
+    )
+  );
+
+  return { layer, counts: () => [counts.built, counts.disposed] };
+}
+
 // The plugin's own hooks, to call them as Vite does.
 function hooksOf(name: "elmera-intl:watch" | "elmera-intl:check") {
   const plugin = intl().find((candidate) => candidate.name === name);
-  const hooks = {
+
+  return {
     configureServer: handlerOf(plugin?.configureServer),
     buildStart: handlerOf(plugin?.buildStart),
     closeBundle: handlerOf(plugin?.closeBundle),
   };
-
-  return hooks;
 }
 
 // Writes `text` to `file` (relative to the root, under every watcher's watch), again each probe interval, until each
@@ -238,6 +260,22 @@ async function untilReported(
       { ...project.guard(), interval: PROBE_INTERVAL_MS }
     )
     .toEqual(builds.map(() => true));
+}
+
+// Writes a component declaring `message` to `file`, again each probe interval, until a sync adds the message to the PO:
+// the save lands on a live watch whatever its timing. fs.watch has no ready signal, and a recursive watch misses an edit
+// made before its stream starts (seen under load).
+async function untilSynced(project: Project, file: string, message: string): Promise<void> {
+  await expect
+    .poll(
+      () => {
+        project.write(file, component(message));
+
+        return project.read("messages/nb.po");
+      },
+      { ...project.guard(), interval: PROBE_INTERVAL_MS }
+    )
+    .toContain(`msgid ${JSON.stringify(message)}`);
 }
 
 // Unit under test: the intl() Vite plugin. Oracle: the check's problem code, the PO text, and the nb render, by hand.
@@ -398,18 +436,8 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   it("adds a message written during dev to the PO", async ({ project }) => {
     await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
-    // fs.watch has no ready signal, and a recursive watch misses an edit made before its stream starts (seen under
-    // load). A probe is rewritten until a sync shows the watch is live, so the edit under test lands on a live watch.
-    await expect
-      .poll(
-        () => {
-          project.write("src/ready.tsx", component("Ready"));
-
-          return project.read("messages/nb.po");
-        },
-        { ...project.guard(), interval: PROBE_INTERVAL_MS }
-      )
-      .toContain(`msgid "Ready"`);
+    // A probe synced first, so the edit under test lands on a live watch.
+    await untilSynced(project, "src/ready.tsx", "Ready");
     project.write("src/new.tsx", component("New"));
     await expect
       .poll(() => project.read("messages/nb.po"), project.guard())
@@ -464,13 +492,12 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     }
   );
 
-  // Unit under test: the build plugin's own hooks, called as a build of two environments calls them in parallel: both
-  // environments' `closeBundle` while a `buildStart` check is still reporting (thousands of problems, so the check
-  // yields mid-report). Oracle: the built executable, `elmera-intl check` spawned on the same project: the plugin's
+  // Unit under test: the build plugin's own hooks, called on one environment in parallel: two `closeBundle` calls
+  // while its `buildStart` check is still reporting (thousands of problems, so the check yields mid-report). Oracle: the built executable, `elmera-intl check` spawned on the same project: the plugin's
   // contract is a build that fails with `elmera-intl check failed:` and exactly what that prints (its problems on
   // stderr, then its summary on stdout), every problem and the summary; and a build after both ends checks again, with
   // the same output.
-  it("reports a check in full when its environments' closes land during it, then checks again", async ({
+  it("reports a check in full when its environment's closes land during it, then checks again", async ({
     project,
   }) => {
     project.write(
@@ -515,25 +542,17 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   // Unit under test: the build plugin's sessions, through one Vite builder whose environments share one top-level
   // config and one plugin instance (`sharedConfigBuild`): the client builds in watch mode, the SSR environment once
-  // beside it, then the client rebuilds. Oracle: the session contract, by hand: each environment's build owns its
-  // runtime, built once (the services' layer counts its builds), so the SSR build's end leaves the client's in place
-  // and the client's rebuild builds nothing.
+  // beside it, then the client rebuilds, then its watcher closes. Oracle: the session contract, by hand: each
+  // environment's build owns its runtime, built once and disposed once (the services' layer counts both), so the SSR
+  // build's end disposes only its own, the client's rebuild builds nothing, and the client's watcher's close disposes
+  // the client's.
   it("keeps a watch build's runtime when another environment of the same builder builds once", async ({
     project,
   }) => {
-    let built = 0;
-    const counted = Layer.mergeAll(
-      CatalogSync.layer(),
-      FileEvents.layer(),
-      Layer.effectDiscard(
-        Effect.sync(() => {
-          built += 1;
-        })
-      )
-    );
+    const services = countedServices();
     const builder = await createBuilder({
       ...viteConfig(project, {}, { write: true }),
-      plugins: intlPlugins({}, counted),
+      plugins: intlPlugins({}, services.layer),
       builder: { sharedConfigBuild: true },
       environments: {
         client: { build: { outDir: "dist/client", watch: BUILD_WATCH } },
@@ -560,10 +579,10 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       }
     });
     await expect.poll(() => ends, project.guard()).toEqual(["BUNDLE_END"]);
-    const counts = [built];
+    const counts = [services.counts()];
 
     await builder.build(ssr);
-    counts.push(built);
+    counts.push(services.counts());
 
     // The entry rewritten until the client's watcher rebuilds it.
     await expect
@@ -577,9 +596,16 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       )
       .toBe(true);
     expect(ends.every((end) => end === "BUNDLE_END")).toBe(true);
-    counts.push(built);
+    counts.push(services.counts());
+    await project.within(watcher.close(), "the watcher's close");
+    counts.push(services.counts());
 
-    expect(counts).toEqual([1, 2, 2]);
+    expect(counts).toEqual([
+      [1, 0],
+      [2, 1],
+      [2, 1],
+      [2, 2],
+    ]);
   });
 
   // Unit under test: one intl() instance hosting both a dev server and a build, as a config shared by `vite` and
@@ -590,17 +616,7 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await devServer(project, { server: SERVER_WATCH, plugins });
     await expect(build({ ...viteConfig(project), plugins })).resolves.toBeDefined();
 
-    // Rewritten until a sync shows it, so the save lands on a live watch whatever its timing.
-    await expect
-      .poll(
-        () => {
-          project.write("src/new.tsx", component("New"));
-
-          return project.read("messages/nb.po");
-        },
-        { ...project.guard(), interval: PROBE_INTERVAL_MS }
-      )
-      .toContain(`msgid "New"`);
+    await untilSynced(project, "src/new.tsx", "New");
   });
 
   // Unit under test: the dev plugin across `server.restart()`, which starts the replacement server (the same plugin
@@ -610,26 +626,20 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     const server = await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
     await project.within(server.restart(), "the restart");
 
-    await expect
-      .poll(
-        () => {
-          project.write("src/new.tsx", component("New"));
-
-          return project.read("messages/nb.po");
-        },
-        { ...project.guard(), interval: PROBE_INTERVAL_MS }
-      )
-      .toContain(`msgid "New"`);
+    await untilSynced(project, "src/new.tsx", "New");
   });
 
   // Unit under test: one intl() instance on two dev servers, the second of which fails to start (its logger throws on
-  // the first sync's result and on its SyncFailed). Oracle: layer 3's plugin, by hand (73cd948): the failed start ends
-  // only its own watch, so the first server's watch keeps syncing.
+  // the first sync's result and on its SyncFailed), then the first server closing. Oracle: layer 3's plugin, by hand
+  // (73cd948): the failed start ends only its own watch and runtime, so the first server's watch keeps syncing; each
+  // server's runtime is built once and disposed once (the services' layer counts both), the first server's as it closes.
   it("keeps one dev server's watch syncing when another server of the same instance fails to start", async ({
     project,
   }) => {
-    const plugins = intl();
-    await devServer(project, { server: SERVER_WATCH, plugins });
+    const services = countedServices();
+    const plugins = intlPlugins({}, services.layer);
+    const server = await devServer(project, { server: SERVER_WATCH, plugins });
+    const counts = [services.counts()];
     // A second app under the first's root, outside its include, with a message its first sync writes.
     project.write("other/elmera-intl.json", JSON.stringify(CONFIG));
     project.write("other/src/page.tsx", component("Other"));
@@ -645,17 +655,17 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
         plugins,
       })
     ).rejects.toThrow("logger gone");
+    counts.push(services.counts());
 
-    await expect
-      .poll(
-        () => {
-          project.write("src/new.tsx", component("New"));
+    await untilSynced(project, "src/new.tsx", "New");
+    await project.within(server.close(), "the close");
+    counts.push(services.counts());
 
-          return project.read("messages/nb.po");
-        },
-        { ...project.guard(), interval: PROBE_INTERVAL_MS }
-      )
-      .toContain(`msgid "New"`);
+    expect(counts).toEqual([
+      [1, 0],
+      [2, 1],
+      [2, 2],
+    ]);
   });
 
   // Oracle: the poll interval contract (10 ms to Node's timer maximum): the dev server's interval feeds the same
@@ -738,7 +748,7 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     const render = (locale: string, catalog: Catalog) => createIntl({ locale, catalog, timeZone: "UTC" });
 
     expect([render("nb", nb).t(COUNT, { n: 1234.5 }), render("nb", nb).t("Hello")]).toEqual([
-      "1 234,5 varer",
+      "1\u00A0234,5 varer",
       "Hei",
     ]);
     expect(render("en", en).t(COUNT, { n: 1234.5 })).toBe("1,234.5 items");
