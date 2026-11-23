@@ -113,21 +113,51 @@ const found = formats === undefined ? undefined : nonJson(formats, "formats");
 process.stdout.write(JSON.stringify(found === undefined ? { formats } : { nonJson: found }));
 `;
 
-/**
- * The Node arguments that evaluate a formats module and print its `formats` export as JSON.
- *
- * @param path - The module's absolute path.
- * @returns The arguments after Node's executable.
- */
-export function evaluationArgs(path: string): Array<string> {
-  return ["--input-type=module", "--eval", PRINT_FORMATS, pathToFileURL(path).href];
-}
-
 /** The last evaluation of each module path, keyed by the content it evaluated. */
 export type FormatsMemo = Map<string, { readonly content: string; readonly result: Evaluated }>;
 
-// The loaders' memo: per process, of a pure function of the content, so an edit evaluates again and an unchanged
-// module costs one read.
+/**
+ * The memo's evaluation of a module's content, if it kept one.
+ *
+ * @param memo - The memo.
+ * @param path - The module's absolute path.
+ * @param content - The module's text, as read before the evaluation.
+ * @returns The kept evaluation of exactly that text, or undefined.
+ */
+export function remembered(memo: FormatsMemo, path: string, content: string): Evaluated | undefined {
+  const hit = memo.get(path);
+
+  return hit?.content === content ? hit.result : undefined;
+}
+
+/**
+ * Keep an evaluation of a module, the one caching policy of both memos. Only a successful evaluation, and only while
+ * the module still holds the text read before it (`after`), so a save that lasts past the evaluation (an editor's
+ * truncate-then-write) is not memoized under the earlier text. An edit undone before the re-read still can be (the
+ * child imports the module itself, as 963d3e4's did): this narrows that race, it does not close it (#17). A failed
+ * evaluation is never kept: its cause may lie outside the module's text (a module it imports, not there yet), so it
+ * runs again on every load while the module is broken.
+ *
+ * @param memo - The memo.
+ * @param path - The module's absolute path.
+ * @param content - The module's text, as read before the evaluation.
+ * @param after - The module's text, as read after it (undefined: unreadable).
+ * @param result - What the evaluation gave.
+ */
+export function remember(
+  memo: FormatsMemo,
+  path: string,
+  content: string,
+  after: string | undefined,
+  result: Evaluated
+): void {
+  if (after === content && result._tag === "Evaluated") {
+    memo.set(path, { content, result });
+  }
+}
+
+// The loaders' memo: per process, keyed by the content, so an edit evaluates again and an unchanged module that
+// evaluated costs one read.
 const EVALUATED: FormatsMemo = new Map();
 
 /** What evaluating a formats module gave: its export and the first value JSON would not carry, or why it failed. */
@@ -135,10 +165,7 @@ export type Evaluated =
   | { readonly _tag: "Evaluated"; readonly exported: unknown; readonly nonJson: string | undefined }
   | { readonly _tag: "FormatsUnloadable"; readonly reason: string };
 
-// The loaders' evaluation: synchronous, its memo the process's. An evaluation is kept only when the module still
-// holds the text read before it, so a save that lasts past the evaluation is not memoized under the earlier text. An
-// edit undone before the re-read still can be (the child imports the module itself, as 963d3e4's did): this narrows
-// that race, it does not close it.
+// The loaders' evaluation: synchronous, its memo the process's (see `remember` for what it keeps).
 function evaluateFormats(path: string): Evaluated {
   const content = readContent(path);
 
@@ -146,18 +173,15 @@ function evaluateFormats(path: string): Evaluated {
     return content;
   }
 
-  const hit = EVALUATED.get(path);
+  const hit = remembered(EVALUATED, path, content.text);
 
-  if (hit?.content === content.text) {
-    return hit.result;
+  if (hit !== undefined) {
+    return hit;
   }
 
   const result = evaluateModule(path);
   const after = readContent(path);
-
-  if (after._tag === "Content" && after.text === content.text) {
-    EVALUATED.set(path, { content: content.text, result });
-  }
+  remember(EVALUATED, path, content.text, after._tag === "Content" ? after.text : undefined, result);
 
   return result;
 }
@@ -190,7 +214,7 @@ function readContent(
 export function evaluateModule(path: string): Evaluated {
   const child = spawnSync(
     process.execPath,
-    evaluationArgs(path),
+    ["--input-type=module", "--eval", PRINT_FORMATS, pathToFileURL(path).href],
     // The host's NODE_OPTIONS (an inspector port, a loader) belong to the host, not to this evaluation.
     { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } }
   );
@@ -208,7 +232,7 @@ export function evaluateModule(path: string): Evaluated {
  * @param stderr - What it printed on stderr.
  * @returns The evaluation.
  */
-export function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
+function parseEvaluation(status: number | null, stdout: string, stderr: string): Evaluated {
   if (status !== 0) {
     // The error line, not Node's stack and source excerpt around it.
     const reason = stderr.split("\n").find((line) => /^\w*Error\b/u.test(line)) ?? stderr.trim();

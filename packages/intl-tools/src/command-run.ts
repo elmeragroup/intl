@@ -7,11 +7,12 @@ import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
 import type { ProjectIoFailed } from "./catalog-files";
-import type { CommandReport, CommandServices } from "./commands";
+import type { CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
 import type { Problem } from "./problem";
 import { describeProblem } from "./problem";
 import { readConfig } from "./project-config-read";
+import type { ProjectServices } from "./project-services";
 import { projectServices } from "./project-services";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
@@ -41,7 +42,7 @@ const commandReport = /* @__PURE__ */ Effect.fn("elmera-intl.report")(function* 
     return { problems: [loaded.problem], messages: 0, written: [], unreachable: [] } satisfies CommandReport;
   }
 
-  const report: Effect.Effect<CommandReport, ProjectIoFailed, CommandServices> =
+  const report: Effect.Effect<CommandReport, ProjectIoFailed, ProjectServices> =
     command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
 
   return yield* report.pipe(Effect.catchTag("ProjectIoFailed", (failure) => Effect.die(failure.cause)));

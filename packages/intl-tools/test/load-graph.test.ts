@@ -280,9 +280,8 @@ it(
 // Unit under test: the public `./vitest` entry, as a Vitest global setup imports and runs it. Oracle: the setup runs
 // `check` once per test run, so it pays for no argument parser: it loads neither effect/cli, nor the Node platform
 // services only the executable uses (@effect/platform-node-shared's Stdio and Terminal), nor the CLI's parsing and
-// watch modules. Importing it loads no platform module at all: check imports Node's file system and paths as it runs,
-// and its child processes (with the formats evaluation) only for a formats module, which the fixture's config names
-// none of. The fixture's catalog holds "Hello", which no source declares, so check finds it stale.
+// watch modules. Importing it loads no platform module at all: check imports Node's file system and paths as it runs.
+// The fixture's catalog holds "Hello", which no source declares, so check finds it stale.
 it(
   "keeps effect/cli, the platform until check runs, and the watcher out of the Vitest setup",
   PROBES,
@@ -299,7 +298,7 @@ it(
     expect(
       vitest.modules.filter(
         (module) =>
-          /(?:^|\/)src\/(?:cli-run|watch|formats-evaluation)\.ts$/u.test(module) ||
+          /(?:^|\/)src\/(?:cli-run|watch)\.ts$/u.test(module) ||
           /\/effect\/dist\/cli\/|\/@effect\/platform-node-shared\/dist\/Node(?:Stdio|Terminal|ChildProcessSpawner)\.js$/u.test(
             module
           )

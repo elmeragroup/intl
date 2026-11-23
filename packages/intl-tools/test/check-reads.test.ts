@@ -3,7 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
+import type * as Layer from "effect/Layer";
 import { rmSync } from "node:fs";
 
 import { CatalogFiles } from "../src/catalog-files";
@@ -12,7 +12,7 @@ import { oneShot } from "../src/command-run";
 import { projectServices } from "../src/project-services";
 import { Reporter } from "../src/reporter";
 import type { Project } from "./project-fixture";
-import { it } from "./watch-project";
+import { it, wrapped } from "./watch-project";
 
 // `check` reads each PO where its rules read it and again for each compile (its locale's, and the English pass from
 // the first locale's), as the loaders will read it: a PO removed or replaced in between is judged as it is at the
@@ -82,19 +82,14 @@ describe("check reads each catalog again to compile it", () => {
         }
       });
 
-    return Layer.effect(
-      CatalogFiles,
-      CatalogFiles.use((live) =>
-        Effect.succeed(
-          operation === "read"
-            ? { ...live, read: (path: string) => live.read(path).pipe(Effect.tap(() => hook(path))) }
-            : {
-                ...live,
-                readExisting: (path: string) => live.readExisting(path).pipe(Effect.tap(() => hook(path))),
-              }
-        )
-      )
-    ).pipe(Layer.provide(CatalogFiles.layer()));
+    return wrapped((live) =>
+      operation === "read"
+        ? { ...live, read: (path: string) => live.read(path).pipe(Effect.tap(() => hook(path))) }
+        : {
+            ...live,
+            readExisting: (path: string) => live.readExisting(path).pipe(Effect.tap(() => hook(path))),
+          }
+    );
   };
 
   it.effect.each(MOMENTS)("crashes on a PO removed after $when", ({ operation }, { project }) =>

@@ -19,10 +19,15 @@ import { ProjectFormats } from "./project-formats-service";
 /** Node's platform services: its file system and paths. */
 export type NodePlatformServices = FileSystem.FileSystem | Path.Path;
 
-// Whether a path exists, as Node's `existsSync` says, which the CLI has always asked: any failure to reach the path (a
-// self-looping link, a file where a directory goes) is absent, while a read the permission model denies
-// (`ERR_ACCESS_DENIED`) is thrown, so it fails where it did. `FileSystem.exists` swallows only "not found".
-const nodeExists = (path: string): Effect.Effect<boolean, PlatformError.PlatformError> =>
+/**
+ * Whether a path exists, as Node's `existsSync` says, which the CLI has always asked: any failure to reach the path (a
+ * self-looping link, a file where a directory goes) is absent, while a read the permission model denies
+ * (`ERR_ACCESS_DENIED`) is thrown, so it fails where it did. `FileSystem.exists` swallows only "not found".
+ *
+ * @param path - The path.
+ * @returns Whether it exists; fails when Node's check throws.
+ */
+export const nodeExists = (path: string): Effect.Effect<boolean, PlatformError.PlatformError> =>
   Effect.try({
     try: () => existsSync(path),
     catch: (cause) =>
@@ -69,12 +74,14 @@ export type ProjectServices =
  * The commands' services on Node, each memo fresh: one per runtime.
  *
  * @param files - The catalogs' storage; `CatalogFiles.layer()` unless a test stands between its operations.
+ * @param platform - The file system and paths under them; Node's unless a test reads synchronously.
  * @returns The layer.
  */
 export function projectServices(
-  files: Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> = CatalogFiles.layer()
+  files: Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> = CatalogFiles.layer(),
+  platform: Layer.Layer<NodePlatformServices> = NodePlatform
 ): Layer.Layer<ProjectServices> {
   return Layer.mergeAll(files, SourceDiscovery.node, SourceCaches.layer, ProjectFormats.layer).pipe(
-    Layer.provideMerge(NodePlatform)
+    Layer.provideMerge(platform)
   );
 }

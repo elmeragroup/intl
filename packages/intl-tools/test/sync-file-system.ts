@@ -5,7 +5,9 @@ import type * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import type { Stats } from "node:fs";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+
+import { nodeExists } from "../src/project-services";
 
 // Node's file system, the operations the project reads through run synchronously: each completes inside the fiber that
 // asks, so a watch on the test clock syncs entirely within a `TestClock.adjust`, as it did when every read was sync.
@@ -61,9 +63,12 @@ const info = (stats: Stats): FileSystem.File.Info => ({
   blocks: Option.some(BigInt(stats.blocks)),
 });
 
-/** A `FileSystem` whose `exists`, `readFile` and `stat` are Node's synchronous calls; every other operation a no-op. */
+/**
+ * A `FileSystem` whose `exists` (the hosts' own), `readFile` and `stat` are Node's synchronous calls; every other
+ * operation a no-op.
+ */
 export const SYNC_FILE_SYSTEM: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
-  exists: (path) => Effect.sync(() => existsSync(path)),
+  exists: nodeExists,
   readFile: (path) =>
     Effect.try({ try: () => new Uint8Array(readFileSync(path)), catch: failed("readFile", path) }),
   stat: (path) => Effect.try({ try: () => info(statSync(path)), catch: failed("stat", path) }),

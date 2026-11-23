@@ -29,6 +29,8 @@ import type { Problem } from "./problem";
 import { isExcludedDirectory, isProjectSource, SourceCaches, SourceDiscovery } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
+import type { ProjectFormats } from "./project-formats-service";
+import type { ProjectServices } from "./project-services";
 import type { Change, FileEvents, Intake } from "./watch-trees";
 import { includePrefixes, listenNative, movesTree, startPolling, watchRoots } from "./watch-trees";
 
@@ -119,11 +121,8 @@ export class SyncFailed
     message: Schema.String,
   }) {}
 
-/**
- * What a sync's extract runs on: the catalogs' storage, the sources' file system, paths and discovery, and the
- * runtime's parse cache.
- */
-export type SyncServices = CatalogFiles | FileSystem.FileSystem | Path.Path | SourceDiscovery | SourceCaches;
+/** What a sync's extract runs on: the commands' services but the formats, which only `check` loads. */
+export type SyncServices = Exclude<ProjectServices, ProjectFormats>;
 
 /**
  * One sync's extract: what the watch runs per burst of changes. A service so a test can act between a sync's read and

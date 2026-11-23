@@ -103,45 +103,22 @@ export function platformFailed(
 }
 
 /**
- * A read failure as the commands' failure.
- *
- * @param operation - What the commands were doing.
- * @returns The failure for one `ReadFailed`.
- */
-export function readFailed(operation: ProjectIoFailed["operation"]): (error: ReadFailed) => ProjectIoFailed {
-  return (error) => new ProjectIoFailed({ operation, cause: error.cause });
-}
-
-/** A file could not be read: the error Node's synchronous read throws for it (`nodeSyncError`). */
-export class ReadFailed
-  extends /* @__PURE__ */ Schema.TaggedError<ReadFailed>()("ReadFailed", {
-    /** The error, as `readFileSync` throws it. */
-    cause: /* @__PURE__ */ Schema.Defect(),
-  })
-{
-  /**
-   * What the read failure says, as `readFileSync`'s error says it.
-   *
-   * @returns The error's message.
-   */
-  reason(): string {
-    return this.cause instanceof Error ? this.cause.message : String(this.cause);
-  }
-}
-
-/**
  * A file's text as `readFileSync(path, "utf8")` decodes it, a byte order mark kept: the guarded write compares against
  * that decoding, and `withIntl` parses the config with it. (`FileSystem.readFileString`'s TextDecoder drops the mark.)
  *
  * @param files - The file system.
  * @param path - The file.
- * @returns Its text; fails with the error Node's synchronous read throws.
+ * @returns Its text; fails with the file system's error, which `nodeSyncError` words as Node's synchronous read.
  */
-export const readText = (files: FileSystem.FileSystem, path: string): Effect.Effect<string, ReadFailed> =>
-  files.readFile(path).pipe(
-    Effect.map((bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8")),
-    Effect.mapError((error) => new ReadFailed({ cause: nodeSyncError(error) }))
-  );
+export const readText = (
+  files: FileSystem.FileSystem,
+  path: string
+): Effect.Effect<string, PlatformError.PlatformError> =>
+  files
+    .readFile(path)
+    .pipe(
+      Effect.map((bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8"))
+    );
 
 /**
  * A file's text, or undefined when the file system says it does not exist. On Node that is `existsSync`
@@ -156,9 +133,7 @@ export const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
   files: FileSystem.FileSystem,
   path: string
 ) {
-  const exists = yield* files
-    .exists(path)
-    .pipe(Effect.mapError((error) => new ReadFailed({ cause: nodeSyncError(error) })));
+  const exists = yield* files.exists(path);
 
   return exists ? yield* readText(files, path) : undefined;
 });
@@ -243,10 +218,10 @@ export class CatalogFiles
       CatalogFiles,
       FileSystem.FileSystem.useSync((files) => ({
         read: Effect.fn("CatalogFiles.read")(function* (path: string) {
-          return yield* readTextIfExists(files, path).pipe(Effect.mapError(readFailed("read")));
+          return yield* readTextIfExists(files, path).pipe(Effect.mapError(platformFailed("read")));
         }),
         readExisting: Effect.fn("CatalogFiles.readExisting")(function* (path: string) {
-          return yield* readText(files, path).pipe(Effect.mapError(readFailed("read")));
+          return yield* readText(files, path).pipe(Effect.mapError(platformFailed("read")));
         }),
         // The read, the comparison and the write are one synchronous call: nothing can run between them.
         write: Effect.fn("CatalogFiles.write")(function* (path: string, text: string, guard: WriteGuard) {

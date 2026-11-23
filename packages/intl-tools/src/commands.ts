@@ -2,8 +2,6 @@
 // is an effect over its edges (the scan, the formats module, the catalogs' reads and writes); what it decides from what
 // it read is pure, in `catalog-plan.ts` and `catalog-check.ts`.
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
-import type * as Path from "effect/Path";
 import { relative } from "node:path";
 
 import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
@@ -15,23 +13,10 @@ import { mergeCatalogs } from "./catalog-plan";
 import type { UnreachableArm } from "./compile";
 import type { UnusedEntries } from "./po";
 import type { Problem } from "./problem";
-import type { SourceCaches, SourceDiscovery } from "./project";
 import { scanProject } from "./project";
 import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import { ProjectFormats } from "./project-formats-service";
-
-/**
- * What the commands run on: the catalogs' storage, the sources' file system, paths and discovery, and the runtime's
- * memos.
- */
-export type CommandServices =
-  | CatalogFiles
-  | FileSystem.FileSystem
-  | Path.Path
-  | SourceDiscovery
-  | SourceCaches
-  | ProjectFormats;
 
 /** What one command run found. Success has no problems. */
 export type CommandReport = {

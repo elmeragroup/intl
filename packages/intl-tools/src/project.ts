@@ -11,7 +11,7 @@ import { globSync } from "node:fs";
 import { isAbsolute, matchesGlob, relative, sep } from "node:path";
 
 import type { ProjectIoFailed } from "./catalog-files";
-import { ioEdge, platformFailed, readFailed, readText } from "./catalog-files";
+import { ioEdge, platformFailed, readText } from "./catalog-files";
 import { extractMessages } from "./extract";
 import type { Problem } from "./problem";
 import type { ProjectConfig } from "./project-config";
@@ -60,8 +60,8 @@ export class SourceCaches
 }
 
 /**
- * How the scan finds the files an include pattern names: on Node, Node's glob, as the CLI always has; on any other
- * file system, that file system's own `glob`. `scanProject` then decides membership with `isProjectSource`.
+ * How the scan finds the files an include pattern names: on Node, Node's glob, as the CLI always has. `scanProject`
+ * then decides membership with `isProjectSource`.
  */
 export class SourceDiscovery
   extends /* @__PURE__ */ Context.Service<
@@ -97,21 +97,6 @@ export class SourceDiscovery
       return yield* ioEdge("scan", () => globSync(pattern, { cwd: root, exclude: [...exclude] }));
     }),
   });
-
-  /** The supplied file system's own `glob`, for a host that is not Node's disk. */
-  static readonly fileSystem: Layer.Layer<SourceDiscovery, never, FileSystem.FileSystem> =
-    /* @__PURE__ */ Layer.effect(
-      SourceDiscovery,
-      /* @__PURE__ */ FileSystem.FileSystem.useSync((files) => ({
-        find: Effect.fn("SourceDiscovery.find")(function* (
-          root: string,
-          pattern: string,
-          exclude: ReadonlyArray<string>
-        ) {
-          return yield* files.glob(pattern, { root, exclude }).pipe(Effect.mapError(platformFailed("scan")));
-        }),
-      }))
-    );
 }
 
 /** A message and every file that uses it. */
@@ -254,11 +239,10 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
   const scannedPaths = new Set<string>();
   for (const file of sources) {
     // The catalogs' reference, spelled as it always was: `/` for every backslash, on any host.
-    const path = paths.relative(config.root, paths.join(config.root, file)).split("\\").join("/");
+    const absolute = paths.join(config.root, file);
+    const path = paths.relative(config.root, absolute).split("\\").join("/");
     scannedPaths.add(path);
-    const text = yield* readText(files, paths.join(config.root, file)).pipe(
-      Effect.mapError(readFailed("scan"))
-    );
+    const text = yield* readText(files, absolute).pipe(Effect.mapError(platformFailed("scan")));
     const result = cachedExtract(cache, path, text);
 
     if (result._tag === "Failed") {

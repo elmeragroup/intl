@@ -19,10 +19,10 @@
         "namespaceImportPackages": ["effect"],
         // The unstable APIs the workspace uses (effect marks them unstable: a minor release may break them, and the
         // exact catalog pin means only a deliberate bump brings one). Each entry covers its submodules. The tools'
-        // CLI: effect/cli parses it, effect/Stdio gives the executable its arguments, and effect/Terminal builds the
-        // stand-in for the one service effect/cli requires but the CLI does not use. The tools read the project through
-        // effect/FileSystem and effect/Path, failing with effect/PlatformError, and evaluate the app's formats module
-        // through effect/process; @effect/platform-node-shared provides Node's implementation of each.
+        // CLI: effect/cli parses it, effect/Stdio gives the executable its arguments, and effect/Terminal and
+        // effect/process build the stand-ins for the services effect/cli requires but the CLI does not use. The tools
+        // read the project through effect/FileSystem and effect/Path, failing with effect/PlatformError;
+        // @effect/platform-node-shared provides Node's Stdio, FileSystem and Path.
         "allowedUnstableApis": [
           "effect/cli",
           "effect/Stdio",

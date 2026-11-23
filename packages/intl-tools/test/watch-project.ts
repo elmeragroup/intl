@@ -7,7 +7,6 @@ import * as Fiber from "effect/Fiber";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import type * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { mkdirSync } from "node:fs";
@@ -15,10 +14,8 @@ import { mkdirSync } from "node:fs";
 import type { ProjectIoFailed } from "../src/catalog-files";
 import { CatalogFiles, ioFailureReason } from "../src/catalog-files";
 import type { ExtractOptions, ExtractResult } from "../src/commands";
-import { SourceCaches, SourceDiscovery } from "../src/project";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
-import { ProjectFormats } from "../src/project-formats-service";
 import type { ProjectServices } from "../src/project-services";
 import { projectServices } from "../src/project-services";
 import type { SyncResult, SyncServices, Watching, WatchMode, WatchOutput, WatchServices } from "../src/watch";
@@ -124,6 +121,9 @@ export function catalogServices(
   return Layer.provideMerge(sync, projectServices());
 }
 
+// The synchronous file system, with Node's paths.
+const SYNC_PLATFORM = Layer.merge(SYNC_FILE_SYSTEM, NodePath.layer);
+
 /**
  * `catalogServices` built synchronously, on the synchronous file system (`SYNC_FILE_SYSTEM`) and Node's paths: a
  * program forked on it runs up to its first suspension of its own, as when every read was synchronous. Node's services
@@ -131,21 +131,23 @@ export function catalogServices(
  *
  * @returns A layer providing the sync's extract and the commands' services.
  */
-export function syncCatalogServices(): Layer.Layer<
-  | CatalogSync
-  | CatalogFiles
-  | SourceDiscovery
-  | SourceCaches
-  | ProjectFormats
-  | FileSystem.FileSystem
-  | Path.Path
-> {
-  return Layer.provideMerge(
-    CatalogSync.layer(),
-    Layer.mergeAll(CatalogFiles.layer(), SourceCaches.layer, SourceDiscovery.node, ProjectFormats.layer).pipe(
-      Layer.provideMerge(Layer.merge(SYNC_FILE_SYSTEM, NodePath.layer))
-    )
-  );
+export function syncCatalogServices(): Layer.Layer<CatalogSync | ProjectServices> {
+  return Layer.provideMerge(CatalogSync.layer(), projectServices(CatalogFiles.layer(), SYNC_PLATFORM));
+}
+
+/**
+ * Node's catalog files, each operation wrapped by `wrap`: a test's hook after one of a command's storage operations.
+ *
+ * @param wrap - The operations, given the live ones.
+ * @returns A `CatalogFiles` layer running them.
+ */
+export function wrapped(
+  wrap: (live: CatalogFiles["Service"]) => CatalogFiles["Service"]
+): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> {
+  return Layer.effect(
+    CatalogFiles,
+    CatalogFiles.use((live) => Effect.succeed(wrap(live)))
+  ).pipe(Layer.provide(CatalogFiles.layer()));
 }
 
 /**
@@ -264,12 +266,7 @@ export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
   const stop = options.stop ?? (yield* Deferred.make<void>());
   const services = yield* Layer.buildWithScope(
     Layer.merge(
-      Layer.provide(
-        options.layer ?? CatalogSync.layer(),
-        Layer.mergeAll(options.files ?? CatalogFiles.layer(), SourceDiscovery.node, SourceCaches.layer).pipe(
-          Layer.provideMerge(Layer.merge(SYNC_FILE_SYSTEM, NodePath.layer))
-        )
-      ),
+      Layer.provide(options.layer ?? CatalogSync.layer(), projectServices(options.files, SYNC_PLATFORM)),
       options.events ?? FileEvents.layer()
     ),
     scope

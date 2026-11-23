@@ -1,7 +1,5 @@
 import { describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
@@ -12,7 +10,7 @@ import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import type { SyncResult, WatchMode } from "../src/watch";
 import type { Project } from "./project-fixture";
-import { CONFIG, component, deliveredEvents, it, startWatch, syncing } from "./watch-project";
+import { CONFIG, component, deliveredEvents, it, startWatch, syncing, wrapped } from "./watch-project";
 
 // The saves the watch keeps: a translator's editor saves a catalog while a sync runs, and the sync never writes over it;
 // the next sync merges it. Unit under test: `watchCatalogs` with the real `CatalogSync`, on the test clock, its catalogs
@@ -23,15 +21,6 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   // Native file events, which a test delivers itself through `deliveredEvents`.
   const NATIVE: WatchMode = { _tag: "native" };
   const TWO_LOCALES = `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv"] }`;
-
-  // Node's catalog files, each operation wrapped by `wrap`: a test's hook after one of a sync's storage operations.
-  const wrapped = (
-    wrap: (live: CatalogFiles["Service"]) => CatalogFiles["Service"]
-  ): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> =>
-    Layer.effect(
-      CatalogFiles,
-      CatalogFiles.use((live) => Effect.succeed(wrap(live)))
-    ).pipe(Layer.provide(CatalogFiles.layer()));
 
   // Each result as the CLI's watch prints it (`wrote` and the files, relative to the root), or its tag.
   const recorded = (project: Project) => {

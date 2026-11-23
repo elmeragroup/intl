@@ -7,10 +7,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
-import { readText } from "./catalog-files";
+import { ioEdge, nodeSyncError, readText } from "./catalog-files";
+import type { ProjectIoFailed } from "./catalog-files";
 import type { ProjectConfig } from "./project-config";
 import type { Evaluated, FormatsLoaded, FormatsMemo } from "./project-formats";
-import { evaluateModule, judgeFormats } from "./project-formats";
+import { evaluateModule, judgeFormats, remember, remembered } from "./project-formats";
 
 /** The app's `formats`, loaded for a host runtime. */
 export class ProjectFormats
@@ -22,9 +23,11 @@ export class ProjectFormats
        * module's content changes.
        *
        * @param config - The project config.
-       * @returns The formats (undefined when the config names none), or why the module does not provide them.
+       * @returns The formats (undefined when the config names none), or why the module does not provide them; fails
+       *   with `ProjectIoFailed` when the evaluation cannot start (a `spawnSync` throw, such as Node's permission model
+       *   refusing a child process).
        */
-      readonly load: (config: ProjectConfig) => Effect.Effect<FormatsLoaded>;
+      readonly load: (config: ProjectConfig) => Effect.Effect<FormatsLoaded, ProjectIoFailed>;
     }
   >()("elmera-intl-tools/ProjectFormats")
 {
@@ -40,24 +43,22 @@ export class ProjectFormats
           const content = yield* readText(files, path).pipe(Effect.result);
 
           if (content._tag === "Failure") {
-            return { _tag: "FormatsUnloadable", reason: content.failure.reason() } satisfies Evaluated;
+            return {
+              _tag: "FormatsUnloadable",
+              reason: nodeSyncError(content.failure).message,
+            } satisfies Evaluated;
           }
 
-          const hit = memo.get(path);
+          const hit = remembered(memo, path, content.success);
 
-          if (hit?.content === content.success) {
-            return hit.result;
+          if (hit !== undefined) {
+            return hit;
           }
 
-          const result = yield* Effect.sync(() => evaluateModule(path));
-          // Kept only while the module still holds the text read before the evaluation, so a save that lasts past it (an
-          // editor's truncate-then-write) is not memoized under the earlier text. An edit undone before this re-read
-          // still can be: the child imports the module itself, as 963d3e4's did, a race this narrows but does not close.
-          const after = yield* readText(files, path).pipe(Effect.result);
-
-          if (after._tag === "Success" && after.success === content.success) {
-            memo.set(path, { content: content.success, result });
-          }
+          const result = yield* ioEdge("formats", () => evaluateModule(path));
+          // Kept as `remember` decides: a success, while the module still holds the text read before it.
+          const after = yield* readText(files, path).pipe(Effect.orElseSucceed(() => undefined));
+          remember(memo, path, content.success, after, result);
 
           return result;
         });

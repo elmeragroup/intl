@@ -8,8 +8,9 @@ import * as PlatformError from "effect/PlatformError";
 import { writeFileSync } from "node:fs";
 import { expect, test } from "vitest";
 
-import { nodeSyncError } from "../src/catalog-files";
+import { nodeSyncError, platformFailed } from "../src/catalog-files";
 import { scanProject, SourceCaches, SourceDiscovery } from "../src/project";
+import { loadFormats } from "../src/project-formats";
 import { ProjectFormats } from "../src/project-formats-service";
 import { NodePlatform } from "../src/project-services";
 import { openProject } from "./project-fixture";
@@ -122,6 +123,52 @@ it("keeps no evaluation of a module saved between its read and its import", asyn
   ]);
 });
 
+// Unit under test: both formats memos, `ProjectFormats.load` (through Node's file system) and the loaders' `loadFormats`,
+// on a module whose evaluation fails for a cause outside its own text: it imports a module not there yet. Oracle: the
+// settled contract by hand: a failed evaluation is re-run on every load, but only while the module is broken, so once
+// the import exists the next load of the same, unedited module returns its formats.
+it("keeps no failed evaluation, so a module whose import appears loads unedited", async ({ project }) => {
+  const formats = { number: { money: { style: "currency", currency: "NOK" } } };
+  const config = (name: string) => {
+    project.write(
+      `${name}/intl-formats.ts`,
+      `import { currency } from "./dep.ts";\nexport const formats = { number: { money: { style: "currency", currency } } };\n`
+    );
+
+    return {
+      root: project.root,
+      include: ["src/**"],
+      exclude: [],
+      catalogs: "messages/{locale}.po",
+      locales: ["nb"],
+      formats: project.path(`${name}/intl-formats.ts`),
+    };
+  };
+  const dep = (name: string) => {
+    project.write(`${name}/dep.ts`, `export const currency = "NOK";\n`);
+  };
+  const service = config("service");
+  const loader = config("loader");
+
+  const viaService = await Effect.runPromise(
+    Effect.gen(function* () {
+      const loaded = yield* ProjectFormats;
+      const before = yield* loaded.load(service);
+      dep("service");
+
+      return [before, yield* loaded.load(service)] as const;
+    }).pipe(Effect.provide(ProjectFormats.layer.pipe(Layer.provide(NodePlatform))))
+  );
+  const before = loadFormats(loader);
+  dep("loader");
+  const viaLoader = [before, loadFormats(loader)] as const;
+
+  expect([viaService, viaLoader].map(([first, second]) => [first._tag, second])).toEqual([
+    ["ConfigInvalid", { _tag: "Formats", formats }],
+    ["ConfigInvalid", { _tag: "Formats", formats }],
+  ]);
+});
+
 // An in-memory file system holding one source, `/memory/src/example.ts`.
 const SOURCE = `import { msg } from "@elmeragroup/intl/react";\nexport const M = msg("Hello");\n`;
 const directoryInfo = (type: FileSystem.File.Type): FileSystem.File.Info => ({
@@ -174,6 +221,15 @@ const IN_MEMORY: Layer.Layer<FileSystem.FileSystem> = Layer.succeed(
   })
 );
 
+// Discovery by the supplied file system's own `glob`, for a file system that is not the host's disk.
+const GLOB_DISCOVERY: Layer.Layer<SourceDiscovery, never, FileSystem.FileSystem> = Layer.effect(
+  SourceDiscovery,
+  FileSystem.FileSystem.useSync((files) => ({
+    find: (root: string, pattern: string, exclude: ReadonlyArray<string>) =>
+      files.glob(pattern, { root, exclude }).pipe(Effect.mapError(platformFailed("scan"))),
+  }))
+);
+
 // Unit under test: `scanProject` on a file system that is not the host's disk. Oracle: the contract by hand: the scan
 // finds its sources through the supplied file system, so the one source it holds is scanned and its include pattern
 // matches; no `/memory` exists on the host's disk, so a walk of the disk would report `IncludeUnmatched`.
@@ -188,7 +244,7 @@ test("scans the sources of a file system that is not the host's disk", async () 
       formats: undefined,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(SourceDiscovery.fileSystem, SourceCaches.layer).pipe(
+        Layer.mergeAll(GLOB_DISCOVERY, SourceCaches.layer).pipe(
           Layer.provideMerge(Layer.merge(IN_MEMORY, NodePath.layerPosix))
         )
       )
@@ -242,7 +298,7 @@ test("scans a Win32 file system with Win32 paths on any host", async () => {
       formats: undefined,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(SourceDiscovery.fileSystem, SourceCaches.layer).pipe(
+        Layer.mergeAll(GLOB_DISCOVERY, SourceCaches.layer).pipe(
           Layer.provideMerge(Layer.merge(WIN32, NodePath.layerWin32))
         )
       )

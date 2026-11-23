@@ -131,13 +131,12 @@ export const readConfig = /* @__PURE__ */ Effect.fn("elmera-intl.readConfig")(fu
     return configInvalid(path, `${path} not found`);
   }
 
-  const text = yield* readText(files, path).pipe(Effect.result);
-
   // A read failure (a directory, no permission) reads as "not JSON", as it did when the read and the parse shared one
   // try: the CLI's output stays as it was.
-  if (text._tag === "Failure") {
-    return configInvalid(path, `not JSON: ${text.failure.reason()}`);
-  }
-
-  return decodeConfig(text.success, path, paths.dirname(paths.resolve(path)), paths);
+  return yield* readText(files, path).pipe(
+    Effect.match({
+      onFailure: (error) => configInvalid(path, `not JSON: ${nodeSyncError(error).message}`),
+      onSuccess: (text) => decodeConfig(text, path, paths.dirname(paths.resolve(path)), paths),
+    })
+  );
 });
