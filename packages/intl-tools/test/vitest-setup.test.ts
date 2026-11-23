@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { runCli } from "../src/cli-run";
+import { runOnceInProcess } from "../src/command-run";
 import checkIntlCatalogs from "../src/vitest";
 
 const CONFIG = { include: ["src/**/*.tsx"], catalogs: "messages/{locale}.po", locales: ["nb"] };
@@ -32,15 +32,20 @@ function write(path: string, text: string): void {
 
 // The test process runs in packages/intl-tools, so a setup that checked process.cwd() would not see this project.
 it("checks the vitest project root, not the process cwd", async () => {
-  const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-  expect(await runCli(["extract"], io)).toBe(0);
+  const extract = () =>
+    runOnceInProcess(
+      "extract",
+      { configPath: join(root, "elmera-intl.json"), crash: "reject" },
+      { stdout: () => undefined, stderr: () => undefined }
+    );
+  expect(await extract()).toBe("ok");
   // Check also flags an empty msgstr, so translate the one message.
   const po = join(root, "messages/nb.po");
   writeFileSync(
     po,
     readFileSync(po, "utf8").replace('msgid "Order"\nmsgstr ""', 'msgid "Order"\nmsgstr "Ordre"')
   );
-  expect(await runCli(["extract"], io)).toBe(0);
+  expect(await extract()).toBe("ok");
   await expect(checkIntlCatalogs({ config: { root } })).resolves.toBeUndefined();
 
   write("src/page.tsx", `${PAGE}export function Greeting() { return <T>Hello</T>; }\n`);

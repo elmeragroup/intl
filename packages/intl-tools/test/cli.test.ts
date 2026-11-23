@@ -1,23 +1,36 @@
-import { spawn, spawnSync } from "node:child_process";
+import * as Cause from "effect/Cause";
+import * as CliConfig from "effect/cli/CliConfig";
+import * as CliOutput from "effect/cli/CliOutput";
+import * as Flag from "effect/cli/Flag";
+import * as GlobalFlag from "effect/cli/GlobalFlag";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import type * as LogLevel from "effect/LogLevel";
+import * as Option from "effect/Option";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../src/cli-run";
+import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
+import { Reporter } from "../src/reporter";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 const PAGE = `import { T, Val, useT, msg } from "@elmeragroup/intl/react";
@@ -67,18 +80,25 @@ type CliRun = { readonly code: number; readonly stdout: string; readonly stderr:
 // code are the CLI's contract, whatever runs behind them.
 const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
 
+// The hang guard of every spawned executable: a CLI that starts watching never exits on its own, and one that outlives
+// a signal is still blocked. A test that spawns one waits longer than its guard, so the guard decides and only a hang
+// outside a spawn fails on the test's own timeout.
+const SPAWN_GUARD_MS = 10_000;
+const BIN_TEST = { timeout: 2 * SPAWN_GUARD_MS };
+
 function bin(...args: Array<string>): CliRun {
-  // The timeout is a hang guard: a CLI that starts watching never exits on its own.
-  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8", timeout: 10_000 });
+  const run = spawnSync(execPath, [BIN, ...args], { cwd: root, encoding: "utf8", timeout: SPAWN_GUARD_MS });
 
   return { code: run.status ?? Number.NaN, stdout: run.stdout, stderr: run.stderr };
 }
 
-async function cli(...args: Array<string>): Promise<CliRun> {
+// `cliProgram` in-process, under `settings` (a host's own effect/cli settings, as a host runtime that provides Node's
+// services may), its exit read as the executable reads it. A crash rejects with the thrown Error, so a test fails on
+// the crash itself, not on what a later step finds missing; the bin tests own a crash's exit 2.
+async function inProcess<ROut>(args: ReadonlyArray<string>, settings: Layer.Layer<ROut>): Promise<CliRun> {
   let stdout = "";
   let stderr = "";
-  const code = await runCli(args, {
-    cwd: root,
+  const io = Reporter.layer({
     stdout: (text) => {
       stdout += text;
     },
@@ -86,8 +106,19 @@ async function cli(...args: Array<string>): Promise<CliRun> {
       stderr += text;
     },
   });
+  const exit = await Effect.runPromiseExit(
+    cliProgram(args, { cwd: root }).pipe(Effect.provide([CliPlatform, settings, io]))
+  );
 
-  return { code, stdout, stderr };
+  if (Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
+    throw Cause.squash(exit.cause);
+  }
+
+  return { code: exitCodeOf(exit), stdout, stderr };
+}
+
+async function cli(...args: Array<string>): Promise<CliRun> {
+  return inProcess(args, Layer.empty);
 }
 
 type CheckReport = {
@@ -652,7 +683,7 @@ describe("check", () => {
 
   // Oracle: the report tooling parses, written out by hand: two-space indentation, keys in the order ok, problems,
   // messages, written, unreachable, and a trailing newline.
-  it("writes only the JSON report to stdout", async () => {
+  it("writes only the JSON report to stdout", BIN_TEST, async () => {
     await cli("extract");
     const untranslated = (key: string) => `    {
       "code": "TranslationMissing",
@@ -677,7 +708,7 @@ ${[untranslated('"Hello {name}, read the <x0>terms</x0>."'), untranslated('"stat
   });
 });
 
-describe("usage", () => {
+describe("usage", BIN_TEST, () => {
   // Oracle: the usage text, written out by hand.
   const USAGE = `usage: elmera-intl <extract|check> [--json] [--config <path to elmera-intl.json>]
        elmera-intl extract --watch [--poll <ms>] [--config <path to elmera-intl.json>]
@@ -694,6 +725,46 @@ describe("usage", () => {
     // Flag values only as separate arguments, and no `--` terminator: both are arguments the parser rejects.
     ["a flag with an inline value", ["check", "--json=yes"], "unexpected argument: --json=yes"],
     ["an argument terminator", ["check", "--"], "unexpected argument: --"],
+    // effect/cli's lexer would read each of these differently: a flag given its value, `--` as the end of the flags
+    // (leaving `--json` an argument), and `-hj` as two short flags. Bytes from the layer 1 parser.
+    [
+      "a value flag with an inline value",
+      ["check", "--config=x.json"],
+      "unexpected argument: --config=x.json",
+    ],
+    ["a boolean flag with an inline false", ["check", "--json=false"], "unexpected argument: --json=false"],
+    ["an argument terminator before a flag", ["check", "--", "--json"], "unexpected argument: --"],
+    ["a cluster of short flags", ["check", "-hj"], "unexpected argument: -hj"],
+    ["an inline value in the command's place", ["--json=1", "check"], "unknown command: --json=1"],
+    // The first failing argument, reading left to right, where effect/cli reports flags before arguments.
+    ["a stray argument before an unknown flag", ["check", "extra", "--jsn"], "unexpected argument: extra"],
+    [
+      "a repeated --config with no value",
+      ["check", "--config", "a", "--config"],
+      "unexpected argument: --config",
+    ],
+    [
+      "an out-of-range --poll before its repeat",
+      ["extract", "--watch", "--poll", "5", "--poll", "9"],
+      "--poll 5: the interval must be between 10 and 2147483647 milliseconds",
+    ],
+    // effect/cli's lexer reads `-5` as a value, which a numeric flag would parse; the contract takes digits only.
+    // The booleans are presence-only: no negated form, and a value never attaches to one. Bytes from layer 1.
+    ["a negated --json", ["extract", "--no-json"], "unexpected argument: --no-json"],
+    ["a value after --json", ["extract", "--json", "false"], "unexpected argument: false"],
+    ["a value after --watch", ["extract", "--watch", "false"], "unexpected argument: false"],
+    ["a negated --watch", ["extract", "--no-watch"], "unexpected argument: --no-watch"],
+    // A --poll value is judged as an interval, whatever it reads like.
+    [
+      "--poll with words for an interval",
+      ["extract", "--watch", "--poll", "2 occurrences"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
+    [
+      "--poll with a negative interval",
+      ["extract", "--watch", "--poll", "-5"],
+      "--poll needs an interval in milliseconds, such as --poll 200",
+    ],
     // --watch runs instead of exiting; with check or --json it is refused before anything starts.
     ["--watch with check", ["check", "--watch"], "--watch goes with extract only, without --json"],
     [
@@ -733,6 +804,54 @@ describe("usage", () => {
     const { code, stdout, stderr } = bin(...args);
     expect([code, stdout]).toEqual([2, ""]);
     expect(stderr).toBe(`${reason}\n${USAGE}`);
+    // Refused before anything runs: no catalog is written.
+    expect(existsSync(join(root, "messages"))).toBe(false);
+  });
+
+  // `--config` takes the next argument as its path unless it starts with `--`, so `-x` is a path (one that does not
+  // exist), where effect/cli's lexer would read a short flag and report the path missing.
+  it("takes an argument that looks like a short flag as the --config path", () => {
+    const { code, stdout, stderr } = bin("check", "--config", "-x");
+    const path = join(realpathSync(root), "-x");
+    expect([code, stdout]).toEqual([1, "0 messages; 1 problem(s)\n"]);
+    expect(stderr.split("\n")[0]).toBe(`${path}: ConfigInvalid: ${path} not found`);
+  });
+
+  // Unit under test: `cliProgram` under a host's own effect/cli settings, as a host runtime that provides Node's
+  // services may (layer 4). Oracle: the usage row for `--poll abc` above. The host's built-in flags and presenter must
+  // change neither the grammar nor where the output goes: its presenter is never called.
+  it("keeps its usage errors to the Reporter under a host's effect/cli settings", async () => {
+    const presented: Array<string> = [];
+    const settings = Layer.merge(
+      CliConfig.layer(),
+      CliOutput.layerPresenter({
+        present: (event) =>
+          Effect.sync(() => {
+            presented.push(event._tag);
+          }),
+      })
+    );
+    const { code, stdout, stderr } = await inProcess(["extract", "--watch", "--poll", "abc"], settings);
+
+    expect([code, presented, stdout]).toEqual([2, [], ""]);
+    expect(stderr).toBe(`--poll needs an interval in milliseconds, such as --poll 200\n${USAGE}`);
+  });
+
+  // Unit under test: `cliProgram` under a host runtime whose effect/cli settings carry a global setting of its own, one
+  // whose flag is required. Oracle: the usage row for `check --watch` above: no setting a host provides is part of the
+  // CLI's grammar.
+  it("keeps its grammar under a host's own global setting", async () => {
+    // A setting in the place of effect/cli's `--log-level`, with a flag of its own that every invocation would need.
+    const hostSetting = GlobalFlag.Setting("log-level")({
+      flag: Flag.String("region").pipe(Flag.map(() => Option.none<LogLevel.LogLevel>())),
+    });
+    const { code, stdout, stderr } = await inProcess(
+      ["check", "--watch"],
+      CliConfig.layer({ builtIns: [hostSetting] })
+    );
+
+    expect([code, stdout]).toEqual([2, ""]);
+    expect(stderr).toBe(`--watch goes with extract only, without --json\n${USAGE}`);
   });
 
   it("names the fix for a missing config", async () => {
@@ -755,7 +874,7 @@ describe("usage", () => {
   });
 });
 
-describe("bin", () => {
+describe("bin", BIN_TEST, () => {
   it("writes a JSON report larger than a pipe buffer in full", async () => {
     write(
       "src/many.ts",
@@ -766,6 +885,7 @@ describe("bin", () => {
     const run = spawnSync(execPath, [BIN, "check", "--json"], {
       cwd: root,
       encoding: "utf8",
+      timeout: SPAWN_GUARD_MS,
       maxBuffer: 64 * 1024 * 1024,
     });
     expect(run.stdout.length).toBeGreaterThan(65536);
@@ -780,13 +900,51 @@ describe("bin", () => {
     expect(run.stderr).toMatch(/^elmera-intl failed: Error:/u);
   });
 
+  // Only a running watch takes SIGINT and SIGTERM: a one-shot command, and a watch still reading its config, keep Node's
+  // default, so a signal ends the process at once, with no output. Oracle: the layer 1 executable, which installed its
+  // handlers only once a watch's config had loaded: killed by the signal, no exit code, nothing written. The config is
+  // a FIFO the test opens and never writes, so the CLI is blocked reading it when the signal lands (the writer's open
+  // resolves once the CLI opens it to read), and stays blocked unless the signal ends it.
+  it.each([
+    ["a check", "SIGINT", ["check"]],
+    ["a check", "SIGTERM", ["check"]],
+    ["a watch reading its config", "SIGINT", ["extract", "--watch"]],
+    ["a watch reading its config", "SIGTERM", ["extract", "--watch"]],
+  ] as const)("ends %s at once on %s", async (_label, signal, args) => {
+    execFileSync("mkfifo", [join(root, "fifo.json")]);
+    // A hang guard: a CLI that outlived the signal is still blocked on the config, and ends by SIGKILL instead.
+    const child = spawn(execPath, [BIN, ...args, "--config", "fifo.json"], {
+      cwd: root,
+      timeout: SPAWN_GUARD_MS,
+      killSignal: "SIGKILL",
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8").on("data", (text: string) => {
+      output += text;
+    });
+    child.stderr.setEncoding("utf8").on("data", (text: string) => {
+      output += text;
+    });
+    const closed = new Promise<readonly [number | null, NodeJS.Signals | null]>((done) => {
+      child.on("close", (code, killedBy) => {
+        done([code, killedBy]);
+      });
+    });
+    const config = await open(join(root, "fifo.json"), "w");
+    child.kill(signal);
+    const ended = await closed;
+    await config.close();
+
+    expect([...ended, output]).toEqual([null, signal, ""]);
+  });
+
   it("exits quietly when the reader closes the pipe early", async () => {
     write(
       "src/many.ts",
       `import { msg } from "@elmeragroup/intl/react";\n${Array.from({ length: 1500 }, (_, i) => `msg("Message number ${i} with some padding text");`).join("\n")}\n`
     );
     expect((await cli("extract")).code).toBe(0);
-    const child = spawn(execPath, [BIN, "check", "--json"], { cwd: root });
+    const child = spawn(execPath, [BIN, "check", "--json"], { cwd: root, timeout: SPAWN_GUARD_MS });
     let stderr = "";
     child.stderr.setEncoding("utf8").on("data", (text: string) => {
       stderr += text;

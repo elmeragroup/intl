@@ -10,7 +10,7 @@ import { formatPo } from "../src/po";
 
 const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
 
-// Both probes run in a fresh Node that records every module it loads (import or require, at startup or on first
+// Each probe runs in a fresh Node that records every module it loads (import or require, at startup or on first
 // use) until the probe stops recording, then prints the recording and what the probe observed.
 const RECORDER = `
 import { registerHooks } from "node:module";
@@ -74,6 +74,22 @@ if (compiled.code !== undefined) {
 }
 // The problem's location and code; the parser's own message after "not JSON: " varies by Node version.
 process.stdout.write(JSON.stringify({ loaded, result: { hello, invalid: (invalid.error ?? "compiled").split(": not JSON: ")[0] } }));
+`;
+
+// The Vitest global setup's view: `@elmeragroup/intl-tools/vitest` resolved through the package's export map, as an
+// app's vitest config names it, run once on the project. Prints how it ended. argv: project root.
+const VITEST_PROBE = `${RECORDER}
+const [root] = process.argv.slice(1);
+const { default: checkIntlCatalogs } = await import("@elmeragroup/intl-tools/vitest");
+process.stderr.write = () => true;
+let outcome = "passed";
+try {
+  await checkIntlCatalogs({ config: { root } });
+} catch (error) {
+  outcome = error.message;
+}
+stop();
+process.stdout.write(JSON.stringify({ loaded, result: { outcome } }));
 `;
 
 /**
@@ -188,7 +204,7 @@ function probe<T>(script: string, args: ReadonlyArray<string>): ProbeRun<T> {
     cwd: PACKAGE,
     encoding: "utf8",
   });
-  // SAFETY: both probes print this shape, and each caller names the result its probe prints; the test's assertions on
+  // SAFETY: each probe prints this shape, and each caller names the result its probe prints; the test's assertions on
   // the result fail on any other.
   const { loaded, result } = JSON.parse(output) as {
     readonly loaded: ReadonlyArray<string>;
@@ -243,5 +259,25 @@ it("keeps the extractor, oxc and Effect out of withIntl, and the CLI out of the 
   expect(loader.inspected).toBeGreaterThan(0);
   expect(
     loader.modules.filter((module) => /(?:^|\/)src\/(?:cli-run|commands|watch)\.ts$/u.test(module))
+  ).toEqual([]);
+});
+
+// Unit under test: the public `./vitest` entry, as a Vitest global setup imports and runs it. Oracle: the setup runs
+// `check` once per test run, so it pays for no argument parser: it loads neither effect/cli, nor the Node platform
+// services only the executable uses (@effect/platform-node-shared), nor the CLI's parsing and watch modules. The
+// fixture's catalog holds "Hello", which no source declares, so check finds it stale.
+it("keeps effect/cli, the Node platform and the watcher out of the Vitest setup", () => {
+  const vitest = probe<{ readonly outcome: string }>(VITEST_PROBE, [root]);
+
+  expect(vitest.result.outcome).toMatch(/^elmera-intl check found problems in /u);
+  expect(vitest.inspected).toBeGreaterThan(0);
+  expect(
+    vitest.modules.filter(
+      (module) =>
+        /(?:^|\/)src\/(?:cli-run|watch)\.ts$/u.test(module) ||
+        /\/effect\/dist\/cli\/|\/@effect\/platform-node-shared\/|\/@effect\+platform-node-shared@/u.test(
+          module
+        )
+    )
   ).toEqual([]);
 });

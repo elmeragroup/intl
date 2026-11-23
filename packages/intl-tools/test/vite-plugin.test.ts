@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Catalog } from "@elmeragroup/intl/core";
 import { createIntl } from "@elmeragroup/intl/core";
 
-import { runCli } from "../src/cli-run";
+import type { OneShotOutcome } from "../src/command-run";
+import { runOnceInProcess } from "../src/command-run";
 import { intl, intlCatalogs } from "../src/vite";
 
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
@@ -110,8 +111,17 @@ async function watchBuild(extra: InlineConfig = {}): Promise<Array<Array<string>
   );
 }
 
+// `elmera-intl extract` or `check` on the project, silent; how it ended.
+async function run(command: "extract" | "check"): Promise<OneShotOutcome> {
+  return runOnceInProcess(
+    command,
+    { configPath: join(root, "elmera-intl.json"), crash: "reject" },
+    { stdout: () => undefined, stderr: () => undefined }
+  );
+}
+
 async function extract(): Promise<void> {
-  expect(await runCli(["extract"], { cwd: root, stdout: () => undefined, stderr: () => undefined })).toBe(0);
+  expect(await run("extract")).toBe("ok");
 }
 
 // Syncs the catalogs and translates them: "Hello" is "Hei", and any other message gets `msgstr`.
@@ -445,8 +455,7 @@ describe("./-prefixed patterns", { timeout: 15_000 }, () => {
   });
 
   it("extracts and checks the included files, skipping the excluded ones", async () => {
-    const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-    expect([await runCli(["extract"], io), await runCli(["check"], io)]).toEqual([0, 0]);
+    expect([await run("extract"), await run("check")]).toEqual(["ok", "ok"]);
     expect(read("messages/nb.po")).not.toContain("Draft");
   });
 });
@@ -463,8 +472,7 @@ describe.each([
   });
 
   it("extracts and checks without the directory's files", async () => {
-    const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-    expect([await runCli(["extract"], io), await runCli(["check"], io)]).toEqual([0, 0]);
+    expect([await run("extract"), await run("check")]).toEqual(["ok", "ok"]);
     expect(read("messages/nb.po")).not.toContain("Draft");
   });
 });

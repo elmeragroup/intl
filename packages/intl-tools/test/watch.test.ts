@@ -1,28 +1,39 @@
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runCli } from "../src/cli-run";
+import { CliPlatform, cliProgram } from "../src/cli-run";
+import { runOnceInProcess } from "../src/command-run";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import { parsePo } from "../src/po";
 import { loadConfig } from "../src/project-config";
+import { Reporter } from "../src/reporter";
 import type { ProjectWatcher, WatchMode } from "../src/watch";
 import { watchProject } from "../src/watch";
-import { cliFromSource } from "./cli-source";
 
+// The built executable, as the CLI ships: the watch's output and signal handling are the bin's.
+const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
 const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 const IMPORT = `import { T } from "@elmeragroup/intl/react";\n`;
 const HEADER = `msgid ""
@@ -83,8 +94,13 @@ function component(text: string): string {
 
 // One-shot extract, then a msgstr for each pair.
 async function extractTranslated(pairs: ReadonlyArray<readonly [string, string]>): Promise<void> {
-  const io = { cwd: root, stdout: () => undefined, stderr: () => undefined };
-  expect(await runCli(["extract"], io)).toBe(0);
+  expect(
+    await runOnceInProcess(
+      "extract",
+      { configPath: join(root, "elmera-intl.json"), crash: "reject" },
+      { stdout: () => undefined, stderr: () => undefined }
+    )
+  ).toBe("ok");
   let po = read("messages/nb.po");
   for (const [source, translation] of pairs) {
     po = po.replace(`msgid "${source}"\nmsgstr ""`, `msgid "${source}"\nmsgstr "${translation}"`);
@@ -101,6 +117,8 @@ function translations(): ReadonlyMap<string, string> {
 }
 
 type Watcher = {
+  /** stdout from the start until the watch was live: the first sync's report and the ready line. */
+  readonly startup: () => string;
   readonly output: () => { readonly stdout: string; readonly stderr: string };
   readonly kill: (signal: NodeJS.Signals) => Promise<number | null>;
 };
@@ -109,7 +127,7 @@ type Watcher = {
 // fs.watch returns, but a recursive watch misses an edit made before its stream starts (seen under load: an edit right
 // after it never synced). The probe is a syntax error, so its syncs write nothing; `output()` starts after them.
 async function startWatch(): Promise<Watcher> {
-  const child: ChildProcess = spawn(execPath, cliFromSource("extract", "--watch", "--poll", POLL_MS), {
+  const child: ChildProcess = spawn(execPath, [BIN, "extract", "--watch", "--poll", POLL_MS], {
     cwd: root,
   });
   let stdout = "";
@@ -127,6 +145,7 @@ async function startWatch(): Promise<Watcher> {
   });
   let live = { stdout: 0, stderr: 0 };
   watcher = {
+    startup: () => stdout.slice(0, live.stdout),
     output: () => ({ stdout: stdout.slice(live.stdout), stderr: stderr.slice(live.stderr) }),
     kill: (signal) => {
       child.kill(signal);
@@ -149,6 +168,13 @@ async function startWatch(): Promise<Watcher> {
   live = { stdout: stdout.length, stderr: stderr.length };
 
   return watcher;
+}
+
+// The executable's watch run in this process, reporting through `reporter`, as a host runtime runs the program.
+function watchInProcess(reporter: Layer.Layer<Reporter>) {
+  return cliProgram(["extract", "--watch", "--poll", POLL_MS], { cwd: root }).pipe(
+    Effect.provide(Layer.merge(CliPlatform, reporter))
+  );
 }
 
 // Unit under test: `elmera-intl extract --watch`. Oracle: the PO text written per case, by hand.
@@ -418,6 +444,188 @@ msgstr ""
     rmSync(join(root, "messages/nb.po"), { recursive: true });
     write("src/second.tsx", component("Second"));
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "Second"`);
+  });
+
+  // Oracle: the report lines, written out by hand: the first sync's catalogs, then the ready line naming the project
+  // root, then each later sync's catalogs, relative to the root.
+  it("prints what each sync writes, and the ready line after the first", async () => {
+    const running = await startWatch();
+    write("src/new.tsx", component("New"));
+    await expect.poll(() => running.output().stdout, HANG_GUARD).toBe("wrote messages/nb.po\n");
+
+    expect(running.startup()).toBe(
+      `wrote messages/nb.po\nwatching ${realpathSync(root)} for message changes; Ctrl-C stops\n`
+    );
+  });
+
+  // Unit under test: the watch reporting through a Reporter whose writes complete later, as a host's may (layer 4's
+  // Vite logger). Oracle: the executable's lines, written out by hand: the first sync's catalogs, the ready line, then
+  // each later sync's catalogs.
+  it("reports through an asynchronous Reporter", async () => {
+    let stdout = "";
+    let stderr = "";
+    // Each write completes on a later microtask: a write the fiber does not await is lost or fails.
+    const later = (append: (text: string) => void) => (text: string) =>
+      Effect.promise(() => Promise.resolve()).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            append(text);
+          })
+        )
+      );
+    const reporter = Layer.succeed(Reporter, {
+      stdout: later((text) => {
+        stdout += text;
+      }),
+      stderr: later((text) => {
+        stderr += text;
+      }),
+    });
+    const fiber = Effect.runFork(watchInProcess(reporter));
+    const ready = `wrote messages/nb.po\nwatching ${root} for message changes; Ctrl-C stops\n`;
+    try {
+      await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
+      expect(stdout).toBe(ready);
+      write("src/new.tsx", component("New"));
+      await expect.poll(() => stdout, HANG_GUARD).toBe(`${ready}wrote messages/nb.po\n`);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+
+    expect(stderr).toBe("");
+  });
+
+  // A signal that lands while a sync runs ends the watch after that sync, whose result is still reported. Oracle: the
+  // layer 1 executable's stderr for this case, written out by hand, and its exit 0. The catalog becomes a FIFO the next
+  // sync blocks reading (the writer's open resolves once it does), so the signal lands mid-sync without timing.
+  it.each(["SIGINT", "SIGTERM"] as const)("reports the sync a %s lands in, then exits 0", async (signal) => {
+    await extractTranslated([]);
+    const running = await startWatch();
+    const po = join(root, "messages/nb.po");
+    // Renamed into place: the watch never sees the catalog missing, which a sync would write anew.
+    execFileSync("mkfifo", [join(root, "nb.fifo")]);
+    renameSync(join(root, "nb.fifo"), po);
+    const catalog = await open(po, "w");
+    const exited = running.kill(signal);
+    await catalog.write(`# translator note\nmsgid ""\nmsgstr ""\n`);
+    await catalog.close();
+
+    expect(await exited).toBe(0);
+    expect(running.output().stderr).toBe(
+      `messages/nb.po: CatalogUnreadable: line 1: Translator comments (#) are not supported, use inline descriptions instead:
+> # translator note
+  fix: keep the PO to msgctxt/msgid/msgstr with #. #: #, comments: translator comments (# ), #| and msgid_plural are not read
+`
+    );
+  });
+
+  // Unit under test: the watch's reporting when a Reporter write throws, as a host's may (layer 4). Oracle: layer 1's
+  // handling, written out by hand: each failed write is reported as its sync's SyncFailed, before the ready line and
+  // after it, and the watch goes on.
+  it("reports a write that throws as SyncFailed, and keeps watching", async () => {
+    let stdout = "";
+    let stderr = "";
+    // The first sync's write fails, and so does the first after the ready line.
+    let failures = 2;
+    const reporter = Reporter.layer({
+      stdout: (text) => {
+        if (failures > 0 && text.startsWith("wrote")) {
+          failures -= 1;
+          throw new Error("stdout gone");
+        }
+
+        stdout += text;
+      },
+      stderr: (text) => {
+        stderr += text;
+      },
+    });
+    const fiber = Effect.runFork(watchInProcess(reporter));
+    const ready = `watching ${root} for message changes; Ctrl-C stops\n`;
+    const syncFailed =
+      "SyncFailed: stdout gone\n  fix: fix the file the error names; the next change retries\n";
+    try {
+      await expect.poll(() => stdout, HANG_GUARD).toBe(ready);
+      expect(stderr).toBe(syncFailed);
+      write("src/new.tsx", component("New"));
+      await expect.poll(() => stderr, HANG_GUARD).toBe(`${syncFailed}${syncFailed}`);
+      write("src/newer.tsx", component("Newer"));
+      await expect.poll(() => stdout, HANG_GUARD).toBe(`${ready}wrote messages/nb.po\n`);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+  });
+
+  // When the SyncFailed report cannot be written either, nothing reports the watch any more: it must end with that
+  // failure, its watcher closed and its signal listeners gone, rather than go on writing catalogs unreported.
+  it("ends when a failed write cannot be reported either", async () => {
+    let stdout = "";
+    let broken = false;
+    const reporter = Reporter.layer({
+      stdout: (text) => {
+        if (broken) {
+          throw new Error("stdout gone");
+        }
+
+        stdout += text;
+      },
+      stderr: () => {
+        if (broken) {
+          throw new Error("stderr gone");
+        }
+      },
+    });
+    const listeners = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+    const before = listeners();
+    const fiber = Effect.runFork(watchInProcess(reporter));
+    let exit: Exit.Exit<void, unknown>;
+    try {
+      await expect.poll(() => stdout, HANG_GUARD).toContain("watching");
+      expect(listeners()).toEqual(before.map((count) => count + 1));
+      broken = true;
+      write("src/new.tsx", component("New"));
+      exit = await Effect.runPromise(Fiber.await(fiber));
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+
+    expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("stderr gone"));
+    expect(listeners()).toEqual(before);
+  });
+
+  // Linux only: there a recursive watch of an unreadable directory fails as it starts, where macOS's event daemon
+  // watches it all the same. Oracle: Node's default for a signal no listener takes, death by that signal, after the
+  // start failure printed as a crash; the watches started on the readable roots keep the process alive until then.
+  describe.skipIf(process.platform !== "linux")("a watcher that fails to start", () => {
+    it.each(["SIGINT", "SIGTERM"] as const)("leaves %s to Node's default", async (signal) => {
+      write(
+        "elmera-intl.json",
+        JSON.stringify({ ...CONFIG, include: [...CONFIG.include, "zz-locked/**/*.tsx"] })
+      );
+      // Separate roots, watched in order: `messages` and `src` start, then `zz-locked` fails.
+      mkdirSync(join(root, "messages"));
+      mkdirSync(join(root, "zz-locked"));
+      chmodSync(join(root, "zz-locked"), 0o000);
+      locked.push(join(root, "zz-locked"));
+      const child = spawn(execPath, [BIN, "extract", "--watch"], {
+        cwd: root,
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8").on("data", (text: string) => {
+        stderr += text;
+      });
+      const closed = new Promise<readonly [number | null, NodeJS.Signals | null]>((done) => {
+        child.on("close", (code, killedBy) => {
+          done([code, killedBy]);
+        });
+      });
+      await expect.poll(() => stderr, HANG_GUARD).toMatch(/^elmera-intl failed: Error: EACCES/u);
+      child.kill(signal);
+
+      expect(await closed).toEqual([null, signal]);
+    });
   });
 
   it("exits 0 on SIGINT", async () => {

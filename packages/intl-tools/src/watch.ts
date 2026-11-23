@@ -19,6 +19,26 @@ export type SyncResult =
   | { readonly _tag: "Superseded" }
   | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> };
 
+/**
+ * A sync that threw, I/O the extractor does not classify or a report that could not be written, as the result the
+ * watch reports in its place.
+ *
+ * @param message - What the sync threw, as its message.
+ * @returns A failed result with one `SyncFailed` problem naming the error.
+ */
+export function syncFailed(message: string): SyncResult {
+  return {
+    _tag: "Failed",
+    problems: [
+      {
+        code: "SyncFailed",
+        message,
+        fix: "fix the file the error names; the next change retries",
+      },
+    ],
+  };
+}
+
 /** A running watch. */
 export type ProjectWatcher = {
   /** Stop watching; a pending sync is dropped. */
@@ -111,16 +131,7 @@ export function watchProject(
               : { _tag: "Unchanged" }
       );
     } catch (error) {
-      report({
-        _tag: "Failed",
-        problems: [
-          {
-            code: "SyncFailed",
-            message: error instanceof Error ? error.message : String(error),
-            fix: "fix the file the error names; the next change retries",
-          },
-        ],
-      });
+      report(syncFailed(error instanceof Error ? error.message : String(error)));
     }
   };
 
