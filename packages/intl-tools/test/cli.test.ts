@@ -251,6 +251,35 @@ msgstr ""
     expect(project.read(nb)).toBe(`msgid "Broken\n`);
   });
 
+  // An absolute catalog path through a linked directory: `messages/{locale}/../catalog.po` with `nb -> ../other/sub`
+  // names `other/catalog.po` for nb and `messages/catalog.po` for sv, two files one lexical path. Each is read on its
+  // own, as the layer below read them (e5f111b): sv's malformed catalog is the one problem, exit 1, and nothing is
+  // written.
+  it("reads each catalog an absolute path through a linked directory names", BIN_TEST, ({ project }) => {
+    project.write(
+      "elmera-intl.json",
+      JSON.stringify({
+        ...CONFIG,
+        catalogs: `${project.root}/messages/{locale}/../catalog.po`,
+        locales: ["nb", "sv"],
+      })
+    );
+    project.write("messages/catalog.po", `msgid "Broken\n`);
+    project.write("messages/sv/.keep", "");
+    project.write("other/sub/.keep", "");
+    symlinkSync("../other/sub", project.path("messages/nb"));
+    const run = bin(project, "extract", "--json");
+
+    expect({ code: run.code, problems: readReport(run.stdout).problems.map(({ code }) => code) }).toEqual({
+      code: 1,
+      problems: ["CatalogUnreadable"],
+    });
+    expect({
+      sv: project.read("messages/catalog.po"),
+      nb: existsSync(project.path("other/catalog.po")),
+    }).toEqual({ sv: `msgid "Broken\n`, nb: false });
+  });
+
   it("refuses to overwrite a PO it cannot read", async ({ project }) => {
     await cli(project, "extract");
     project.write("messages/nb.po", `# translator note\n${project.read("messages/nb.po")}`);

@@ -1,5 +1,3 @@
-import { resolve } from "node:path";
-
 // What `extract` would write, decided from what it read: each locale's PO, as read, merged with the scanned messages.
 // Pure: the reads and the writes are `commands.ts`'s, so this decides the same way whatever the file system is.
 import { SERIALIZER_VERSION } from "@elmeragroup/intl/internal/message";
@@ -31,8 +29,9 @@ export type CatalogPlan = {
   readonly problems: ReadonlyArray<Problem>;
   readonly messages: number;
   /**
-   * Each distinct catalog path's text as read once (undefined: absent), by its resolved path: the snapshot the outputs
-   * to that path were merged from.
+   * Each distinct catalog path's text as read once (undefined: absent), by the exact path read and written (never
+   * resolved: `<link>/..` leads where the kernel says, not where the string does): the snapshot the outputs to that
+   * path were merged from.
    */
   readonly read: ReadonlyMap<string, string | undefined>;
   /** In the config's order of locales, each at its configured path. */
@@ -119,7 +118,7 @@ export function mergeCatalogs(
       continue;
     }
 
-    read.set(resolve(catalog.path), catalog.text);
+    read.set(catalog.path, catalog.text);
     const version = existing.file?.meta[SERIALIZER_HEADER];
 
     if (version !== undefined && version !== SERIALIZER_VERSION) {
@@ -131,7 +130,5 @@ export function mergeCatalogs(
     outputs.push({ path: catalog.path, text: formatPo(catalog.locale, entries) });
   }
 
-  return problems.length > 0
-    ? { problems, messages: messages.length, read, outputs: [] }
-    : { problems, messages: messages.length, read, outputs };
+  return { problems, messages: messages.length, read, outputs: problems.length > 0 ? [] : outputs };
 }

@@ -170,12 +170,7 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
               plan.outputs.some(({ path, text }) => path === po && text.includes(`msgid "Ready"`))
             ) {
               saved = true;
-              project.write(
-                "messages/nb.po",
-                project
-                  .read("messages/nb.po")
-                  .replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hei"`)
-              );
+              translate(project, "messages/nb.po", "Hei");
             }
 
             return yield* writeCatalogs(plan, options);
@@ -204,6 +199,42 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
         saved: true,
         reports: ["Written", "Written", "Written"],
       });
+    })
+  );
+
+  // A translator seeds sv from nb, copying nb's catalog onto sv's after the sync wrote nb and before it writes sv. sv
+  // then holds a text the sync wrote, but to another file: the sync's write of sv finds it changed and stops, and the
+  // next sync merges the copy.
+  it.effect("keeps a catalog copied onto another while the sync writes the one it copies", ({ project }) =>
+    Effect.gen(function* () {
+      project.write("elmera-intl.json", TWO_LOCALES);
+      const nb = project.path("messages/nb.po");
+      let copied = false;
+      const files = wrapped((live) => ({
+        ...live,
+        write: (path, text, guard) =>
+          live.write(path, text, guard).pipe(
+            Effect.tap((outcome) =>
+              Effect.sync(() => {
+                if (!copied && outcome === "written" && path === nb && text.includes(`msgid "Ready"`)) {
+                  copied = true;
+                  project.write("messages/sv.po", project.read("messages/nb.po"));
+                }
+              })
+            )
+          ),
+      }));
+      const { reports } = yield* startWatch(project, { files });
+      translate(project, "messages/nb.po", "Hei");
+      yield* TestClock.adjust("1 second");
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+
+      expect({ copied, reports }).toEqual({
+        copied: true,
+        reports: ["Written", "Unchanged", "Written", "Written"],
+      });
+      expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
     })
   );
 
@@ -403,6 +434,30 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
 
       expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po"]);
       expect(project.read("other/nb.po")).toContain(String.raw`"Language: sv\n"`);
+    })
+  );
+
+  // An absolute catalog path through a linked directory: `messages/jump/../nb.po` with `jump -> ../other/sub` names
+  // `other/nb.po`, while the string's lexical `messages/nb.po` is another file. The sync reads, checks and writes the
+  // path as configured, so a new message reaches the file the path names, as at e5f111b.
+  it.effect("adds a message to a catalog an absolute path names through a linked directory", ({ project }) =>
+    Effect.gen(function* () {
+      project.write(
+        "elmera-intl.json",
+        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "${project.root}/messages/jump/../{locale}.po", "locales": ["nb"] }`
+      );
+      mkdirSync(project.path("messages"));
+      mkdirSync(project.path("other/sub"), { recursive: true });
+      symlinkSync("../other/sub", project.path("messages/jump"));
+      const { reports } = yield* startWatch(project);
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+
+      expect({ reports, nb: existsSync(project.path("messages/nb.po")) }).toEqual({
+        reports: ["Written", "Written"],
+        nb: false,
+      });
+      expect(project.read("other/nb.po")).toContain(`msgid "Ready"`);
     })
   );
 

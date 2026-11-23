@@ -98,9 +98,9 @@ export class CatalogFiles
       /** A catalog's text; a catalog that does not exist fails as its read did. */
       readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
       /**
-       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfUnchangedFrom`)
-       * changed. One operation: its read, its comparison and its write never yield to another fiber in between, so a
-       * save made from this process meanwhile is either seen or lands after the write.
+       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfHoldsOneOf`)
+       * holds none of the texts the guard allows. One operation: its read, its comparison and its write never yield to
+       * another fiber in between, so a save made from this process meanwhile is either seen or lands after the write.
        */
       readonly write: (
         path: string,

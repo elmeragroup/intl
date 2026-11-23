@@ -21,8 +21,8 @@ type SlotsOrError = ReturnType<typeof messageSlots>;
 /** A scanned message with its source compiled once; every locale compares its translations against these slots. */
 export type CompiledSource = { readonly message: ProjectMessage; readonly slots: SlotsOrError };
 
-/** What compiling the catalogs found. */
-export type CompiledCatalogs = {
+/** What compiling one locale's catalog found. */
+export type CompiledLocale = {
   readonly problems: ReadonlyArray<Problem>;
   /** The arms the compile's branch pass does not reach: information, not problems. */
   readonly unreachable: ReadonlyArray<UnreachableArm>;
@@ -64,7 +64,7 @@ export function checkSources(scanned: {
 
 /**
  * Compile and dry-format one locale's catalog with the app's `formats`, as the loaders will compile it. Run on
- * catalogs every rule of `checkCatalogs` passed, each of whose problems names its own fix.
+ * catalogs `checkSources` and `checkLocale` passed, each of whose problems names its own fix.
  *
  * @param text - The PO's text, as the compile read it.
  * @param at - The PO as problems show it, the locale it compiles for (`en` from any locale's msgids) and the formats.
@@ -73,7 +73,7 @@ export function checkSources(scanned: {
 export function compileLocale(
   text: string,
   at: { readonly file: string; readonly locale: string; readonly formats: Formats | undefined }
-): CompiledCatalogs {
+): CompiledLocale {
   const compiled = compileCatalog(text, at.locale, { formats: at.formats });
 
   if (compiled._tag === "Compiled") {

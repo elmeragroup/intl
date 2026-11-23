@@ -1,9 +1,9 @@
-import * as Effect from "effect/Effect";
-import { relative, resolve } from "node:path";
-
 // The CLI's two operations over a project: `extract` writes catalogs, `check` proves them in sync and compilable. Each
 // is an effect over its edges (the scan, the formats module, the catalogs' reads and writes); what it decides from what
 // it read is pure, in `catalog-plan.ts` and `catalog-check.ts`.
+import * as Effect from "effect/Effect";
+import { relative } from "node:path";
+
 import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { checkLocale, checkSources, compileLocale } from "./catalog-check";
@@ -68,18 +68,19 @@ const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (config: Project
   } satisfies CatalogText;
 });
 
-// Each locale's PO, in the config's order, each distinct path read once: a locale whose path resolves to one another
-// locale's already did (a duplicate locale, a `{locale}/..` path) shares that read. Paths that differ are read each on
-// its own, links included: the write guard knows a file several paths name by its content, not by asking the storage.
+// Each locale's PO, in the config's order, each distinct path read once, keyed by the exact path the storage reads and
+// writes: a locale whose path is another locale's string (a duplicate locale, a relative `{locale}/..` pattern, which
+// `join` collapses) shares that read. Paths that differ are read each on their own, links and absolute `..` paths
+// included, since only the kernel knows where `<link>/..` leads: the write guard knows a file several paths name by its
+// content, not by asking the storage.
 const snapshotCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig) {
   const files = yield* CatalogFiles;
   const texts = new Map<string, string | undefined>();
   const catalogs: Array<CatalogText> = [];
   for (const locale of config.locales) {
     const path = catalogPath(config, locale);
-    const key = resolve(path);
-    const text = texts.has(key) ? texts.get(key) : yield* files.read(path);
-    texts.set(key, text);
+    const text = texts.has(path) ? texts.get(path) : yield* files.read(path);
+    texts.set(path, text);
     catalogs.push({ locale, path, shown: relative(config.root, path), text });
   }
 
@@ -187,17 +188,21 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
     }
   }
 
-  // A path may hold its own snapshot, or a text this sync wrote: through another path that names the same file (a
-  // link, a hard link, a name a case-insensitive file system folds), it is the sync's own write. Anything else is a
-  // save since, which this sync never writes over.
-  const ownTexts = new Set<string>();
+  // A path may hold its own snapshot, or a text this sync wrote to a path with the same snapshot: through another path
+  // that names the same file (a link, a hard link, a name a case-insensitive file system folds), it is the sync's own
+  // write, and paths that name one file read one snapshot once the check above passed. Anything else, a text this sync
+  // wrote to a file with another snapshot included (a catalog copied onto another), is a save since, which this sync
+  // never writes over.
+  const ownTexts = new Map<string | undefined, Set<string>>();
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
+    const snapshot = plan.read.get(output.path);
+    const own = ownTexts.get(snapshot) ?? new Set<string>();
     const outcome = yield* files.write(
       output.path,
       output.text,
       options.concurrentSave === "yield"
-        ? { _tag: "IfHoldsOneOf", texts: new Set([plan.read.get(resolve(output.path)), ...ownTexts]) }
+        ? { _tag: "IfHoldsOneOf", texts: new Set([snapshot, ...own]) }
         : { _tag: "Overwrite" }
     );
 
@@ -207,7 +212,7 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
 
     if (outcome === "written") {
       written.push(output);
-      ownTexts.add(output.text);
+      ownTexts.set(snapshot, own.add(output.text));
     }
   }
 

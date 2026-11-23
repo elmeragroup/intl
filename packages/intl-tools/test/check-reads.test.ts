@@ -52,7 +52,6 @@ describe("check reads each catalog again to compile it", () => {
     );
   };
 
-  // Node's catalog files, running `after` once, right after the first read of nb.
   // A moment in check's reads of nb: its first read (the rules'), or its read for the Norwegian compile, after which
   // only the English pass reads it again.
   type Moment = { readonly when: string; readonly operation: "read" | "readExisting" };
