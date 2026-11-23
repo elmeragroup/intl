@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import type * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -23,17 +24,11 @@ import type { ExtractOptions, ExtractResult } from "./commands";
 import { extractCatalogs } from "./commands";
 import type { Problem } from "./problem";
 import type { ParseCache } from "./project";
-import { catalogPath, isExcludedDirectory, isProjectSource } from "./project";
+import { isExcludedDirectory, isProjectSource } from "./project";
+import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
-import type { Change, Intake } from "./watch-trees";
-import {
-  FileEvents,
-  includePrefixes,
-  listenNative,
-  movesTree,
-  startPolling,
-  watchRoots,
-} from "./watch-trees";
+import type { Change, FileEvents, Intake } from "./watch-trees";
+import { includePrefixes, listenNative, movesTree, startPolling, watchRoots } from "./watch-trees";
 
 /** What one sync did. */
 export type SyncResult =
@@ -566,58 +561,79 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
   } satisfies Watching;
 });
 
+/** The services a host's runtime provides a watch: the sync's extract and the file events. */
+export type WatchServices = CatalogSync | FileEvents;
+
 /**
- * Start a watch outside an Effect program: `watchCatalogs` on its own scope, with the synchronous extract.
+ * Start a watch outside an Effect program, on a runtime the host owns: `watchCatalogs` in a scope of its own, on one
+ * fiber of `runtime`, which provides the sync's extract and the file events. Closing the watch is the ordered stop; the
+ * runtime's disposal is the backstop, which interrupts that fiber and so closes the watch's scope, a start still
+ * pending included.
  *
+ * @param runtime - The host's runtime.
  * @param config - The project config.
  * @param report - Called with each result, in order; one that throws is called again with that sync's `SyncFailed`.
  *   When that throws too, the watch ends: on the first sync's result, by rejecting the start; later, by throwing the
  *   error on the host's event loop.
  * @param mode - Where change events come from; native file events unless the caller polls.
- * @returns The running watch, once the first sync's result is reported. Rejects with the watch's start failure, or
- *   the first result's report failure, after the watch has stopped and closed every watcher it started.
+ * @returns The running watch, once the first sync's result is reported. Rejects with the watch's start failure, the
+ *   first result's report failure, or an Error saying the runtime was disposed during the start, after the watch has
+ *   stopped and closed every watcher it started.
  */
 export async function watchProject(
+  runtime: ManagedRuntime.ManagedRuntime<WatchServices, never>,
   config: ProjectConfig,
   report: (result: SyncResult) => void,
   mode: WatchMode = NATIVE
 ): Promise<ProjectWatcher> {
-  const scope = Scope.makeUnsafe();
   const stop = Deferred.makeUnsafe<void>();
-  // The extract's and the file events' layers live in the watch's scope, for the whole watch.
-  const start = await Effect.runPromiseExit(
-    Layer.buildWithScope(Layer.merge(CatalogSync.layer(), FileEvents.layer()), scope).pipe(
-      Effect.flatMap((services) =>
-        watchCatalogs(config, mode, stop, {
+  const started = Promise.withResolvers<"started">();
+  // The watch for its whole life, in a scope that closes as its fiber ends, after the start fails or the watch stops:
+  // the scope's stop has then closed every watcher.
+  const ended = runtime.runPromiseExit(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const watching = yield* watchCatalogs(config, mode, stop, {
           report: (result) =>
             Effect.sync(() => {
               report(result);
             }),
           ready: Effect.void,
-        }).pipe(Scope.provide(scope), Effect.provideContext(services))
-      ),
-      Effect.tap((started) => started.reported)
+        });
+        yield* watching.reported;
+        yield* Effect.sync(() => {
+          started.resolve("started");
+        });
+        yield* watching.done;
+      })
     )
   );
+  const start = await Promise.race([started.promise, ended]);
 
-  if (Exit.isFailure(start)) {
-    // The scope's stop closes the watchers; the start's failure is the one to report.
-    await Effect.runPromiseExit(Scope.close(scope, Exit.void));
-    throw Cause.squash(start.cause);
+  if (start !== "started") {
+    const failure = endFailure(start);
+
+    // An end by interruption alone is the host's own disposal; Effect's squash of it names no cause.
+    throw failure === undefined
+      ? new Error(
+          Exit.isFailure(start)
+            ? "the watch's runtime was disposed during its start"
+            : "the watch ended before its first result was reported"
+        )
+      : Cause.squash(failure);
   }
-
-  const watching = start.value;
 
   // Whether the watch's end is someone else's to report: the host's, once it asks the watch to stop, or the event
   // loop's, once a failure that ended the watch was thrown there.
   let closing = false;
-  const ended = Effect.runPromiseExit(watching.done.pipe(Effect.ensuring(Scope.close(scope, Exit.void))));
   void ended.then((exit) => {
+    const cause = endFailure(exit);
+
     // Nothing is left to report a failure that ends the watch: it ends the host, as a throwing report always did.
-    if (!closing && Exit.isFailure(exit)) {
+    if (!closing && cause !== undefined) {
       closing = true;
       queueMicrotask(() => {
-        throw Cause.squash(exit.cause);
+        throw Cause.squash(cause);
       });
     }
   });
@@ -629,12 +645,20 @@ export async function watchProject(
       Deferred.doneUnsafe(stop, Effect.void);
 
       return ended.then((exit) => {
-        if (reports && Exit.isFailure(exit)) {
-          throw Cause.squash(exit.cause);
+        const cause = endFailure(exit);
+
+        if (reports && cause !== undefined) {
+          throw Cause.squash(cause);
         }
       });
     },
   };
+}
+
+// How a watch's fiber ended, when that is a failure to report: an end by interruption alone (its runtime disposed) has
+// nothing to report.
+function endFailure(exit: Exit.Exit<void>): Cause.Cause<never> | undefined {
+  return Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause) ? exit.cause : undefined;
 }
 
 // A catalog deleted or replaced by a directory reads as changed.

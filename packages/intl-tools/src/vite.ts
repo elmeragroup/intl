@@ -1,5 +1,10 @@
 // Vite hosting: `import catalog from "./intl/nb.po"` compiles the catalog (`?source` for `en`), `vite dev` runs
 // `extract --watch` in-process and reloads open tabs on a PO save, `vite build` runs `check` first.
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { readFileSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
@@ -7,15 +12,17 @@ import type { Plugin } from "vite";
 import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { catalogModule } from "./catalog-module";
-import { runOnceInProcess } from "./command-run";
+import type { OneShotOutcome } from "./command-run";
+import { oneShot } from "./command-run";
 import { compileCatalog } from "./compile";
 import { describeProblem } from "./problem";
-import { catalogLocale, catalogPath, loadFormats } from "./project";
+import { catalogLocale, catalogPath } from "./project-catalogs";
 import { CONFIG_FILE, loadConfig } from "./project-config";
-import type { ProjectWatcher } from "./watch";
-import type { WatchMode } from "./watch";
-import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
-import { nearestExisting } from "./watch-trees";
+import { loadFormats } from "./project-formats";
+import { Reporter } from "./reporter";
+import type { ProjectWatcher, WatchMode, WatchServices } from "./watch";
+import { CatalogSync, MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
+import { FileEvents, nearestExisting } from "./watch-trees";
 
 // chokidar's default interval, which Vite's `server.watch` passes on when polling sets none.
 const DEFAULT_POLL_MS = 100;
@@ -38,8 +45,12 @@ const NAME = "elmera-intl";
  */
 export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
   const configPath = (root: string) => resolve(root, options.config ?? CONFIG_FILE);
+  // What this instance runs its programs on: the dev server's watch, and each build's check.
+  const runtime = pluginRuntime();
   // The watch as soon as its start begins: a dev server that closes while it is still starting closes it too.
   let watcher: Promise<ProjectWatcher> | undefined;
+  // Every stop of the watch begun so far, settled: the runtime's disposal waits for them, so it never cuts one short.
+  let stopped: Promise<unknown> = Promise.resolve();
 
   return [
     intlCatalogs(options),
@@ -74,6 +85,7 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
               ? { _tag: "poll", intervalMs: DEFAULT_POLL_MS }
               : polled;
         watcher = watchProject(
+          runtime.current(),
           loaded.config,
           (result) => {
             if (result._tag === "Written") {
@@ -86,14 +98,34 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
           },
           mode
         );
-        await watcher;
+
+        try {
+          await watcher;
+        } catch (error) {
+          // The failed start fails createServer, and Vite closes no plugin of a server it never made: the runtime goes
+          // here, its watchers already closed by the start.
+          await runtime.dispose();
+          throw error;
+        }
       },
+      // Once per environment as the dev server closes, in parallel: the first stops the watch (once its start has
+      // settled), in order, reporting how it ended; each then waits for every stop begun, and the runtime goes, with
+      // anything a stop did not reach.
       async closeBundle() {
         const starting = watcher;
         watcher = undefined;
         // A start that failed has stopped already, and failed the dev server's start with its error.
-        const running = await starting?.catch(() => undefined);
-        await running?.close();
+        const stopping = starting?.then(
+          (running) => running.close(),
+          () => undefined
+        );
+        stopped = Promise.allSettled([stopped, stopping]);
+        try {
+          await stopping;
+        } finally {
+          await stopped;
+          await runtime.dispose();
+        }
       },
     },
     {
@@ -123,28 +155,91 @@ export function intl(options: IntlPluginOptions = {}): Array<Plugin> {
         catalogInputs(config).forEach((input) => {
           this.addWatchFile(realpathSync(nearestExisting(input)));
         });
-        const result = await check(config);
+        const result = await check(runtime, config);
 
         if (!result.ok) {
           this.error(result.output);
         }
       },
+      // Each build's end, per environment: the next build (a reused config's) starts a fresh runtime. A watch build keeps
+      // it for every rebuild, as Rolldown's closeBundle contract asks of watch-mode resources, and its watcher's close
+      // disposes it.
+      async closeBundle() {
+        if (!this.meta.watchMode) {
+          await runtime.dispose();
+        }
+      },
+      async closeWatcher() {
+        await runtime.dispose();
+      },
     },
   ];
 }
 
+/** A plugin instance's runtime, one at a time: made on first use, disposed when the host is done with it. */
+type PluginRuntime = {
+  /** The runtime, made now unless one is live. */
+  readonly current: () => ManagedRuntime.ManagedRuntime<WatchServices, never>;
+  /**
+   * Runs `effect` on the current runtime.
+   *
+   * @throws What the effect failed or died with.
+   */
+  readonly run: <A, E>(effect: Effect.Effect<A, E, WatchServices>) => Promise<A>;
+  /**
+   * Retires the current runtime, so the next use makes a new one, and disposes it: any watch still on it is interrupted
+   * and closed. Safe to call again, or with no runtime: it then waits for the disposal already under way.
+   */
+  readonly dispose: () => Promise<void>;
+};
+
+// The build reuses one plugin instance for every environment and every build of a reused config: a build after an end
+// must find a runtime. The check is synchronous within its fiber, so a disposal cannot cut one short (layer 6, whose
+// check is asynchronous, makes the disposal wait for running checks).
+function pluginRuntime(): PluginRuntime {
+  let runtime: ManagedRuntime.ManagedRuntime<WatchServices, never> | undefined;
+  let disposed: Promise<void> = Promise.resolve();
+  const current = () =>
+    (runtime ??= ManagedRuntime.make(Layer.mergeAll(CatalogSync.layer(), FileEvents.layer())));
+
+  return {
+    current,
+    run: async (effect) => {
+      const exit = await current().runPromiseExit(effect);
+
+      if (Exit.isFailure(exit)) {
+        throw Cause.squash(exit.cause);
+      }
+
+      return exit.value;
+    },
+    dispose: () => {
+      const retired = runtime;
+      runtime = undefined;
+
+      if (retired !== undefined) {
+        disposed = Promise.all([disposed, retired.dispose()]).then(() => undefined);
+      }
+
+      return disposed;
+    },
+  };
+}
+
 // The CLI's own check, so the build fails with exactly what `elmera-intl check` prints.
+// Its output collected per call, so environments checking in parallel each fail with their own.
 async function check(
+  runtime: PluginRuntime,
   config: string
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly output: string }> {
   let output = "";
   const collect = (text: string) => {
     output += text;
   };
-  const outcome = await runOnceInProcess(
-    "check",
-    { configPath: config, crash: "reject" },
-    { stdout: collect, stderr: collect }
+  const outcome: OneShotOutcome = await runtime.run(
+    oneShot("check", { configPath: config, crash: "reject" }).pipe(
+      Effect.provide(Reporter.layer({ stdout: collect, stderr: collect }))
+    )
   );
 
   return outcome === "ok" ? { ok: true } : { ok: false, output: `${NAME} check failed:\n${output}` };

@@ -13,8 +13,10 @@ import type { PoEntry, PoFile, UnusedEntries } from "./po";
 import { formatPo, mergeEntries, parsePo, SERIALIZER_HEADER } from "./po";
 import type { Problem } from "./problem";
 import type { ParseCache, ProjectMessage } from "./project";
-import { catalogPath, loadFormats, scanProject } from "./project";
+import { scanProject } from "./project";
+import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
+import { loadFormats } from "./project-formats";
 
 /** What one command run found. Success has no problems. */
 export type CommandReport = {

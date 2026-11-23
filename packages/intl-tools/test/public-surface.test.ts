@@ -12,6 +12,12 @@ import PUBLIC_SURFACE from "./public-surface.json" with { type: "json" };
 // `./po` ships only declarations (the `*.po` module types), so it has no runtime module to import.
 const RUNTIME_SURFACE = Object.entries(PUBLIC_SURFACE).filter(([subpath]) => subpath !== "./po");
 
+// A test that resolves one subpath in a fresh Node and imports the built entry it names: about 0.1 s on an idle
+// machine, past Vitest's default 5 s once under extreme load (load average 77). Its spawn is killed before the test's
+// timeout, so a hung Node fails the test with its own error.
+const RESOLVES = { timeout: 30_000 };
+const SPAWN_GUARD = { timeout: 25_000, killSignal: "SIGKILL" } as const;
+
 // Node's own resolver (the package resolving itself by name), so export conditions apply as they do for an app;
 // Vitest's resolver applies its own.
 function resolveExport(subpath: string): string {
@@ -20,7 +26,7 @@ function resolveExport(subpath: string): string {
   return execFileSync(
     process.execPath,
     ["--input-type=module", "--eval", `console.log(import.meta.resolve(${JSON.stringify(specifier)}))`],
-    { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }
+    { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8", ...SPAWN_GUARD }
   ).trim();
 }
 
@@ -33,12 +39,12 @@ it("exports the public subpaths only", () => {
   expect(Object.keys(manifest.exports).toSorted()).toEqual(Object.keys(PUBLIC_SURFACE).toSorted());
 });
 
-it.each(RUNTIME_SURFACE)("%s exports its public runtime names", async (subpath, names) => {
+it.each(RUNTIME_SURFACE)("%s exports its public runtime names", RESOLVES, async (subpath, names) => {
   expect(await exportNames(resolveExport(subpath))).toEqual([...names].toSorted());
 });
 
 // The plugin name is the rule-id prefix apps write in .oxlintrc.json, a global namespace: `elmera-intl/extractable`.
-it("names the oxlint plugin in the elmera- namespace", async () => {
+it("names the oxlint plugin in the elmera- namespace", RESOLVES, async () => {
   const plugin: unknown = await import(resolveExport("./oxlint"));
 
   expect(plugin).toHaveProperty("default.meta.name", "elmera-intl");

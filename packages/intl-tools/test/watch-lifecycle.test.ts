@@ -22,6 +22,7 @@ import {
   component,
   CONFIG,
   deliveredEvents,
+  hostRuntime,
   it,
   lockedRoot,
   POLL_MS,
@@ -80,6 +81,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     async function watchPolling(project: Project): Promise<Array<string>> {
       const reported: Array<string> = [];
       const watcher = await watchProject(
+        hostRuntime(project),
         projectConfig(project),
         (result) => {
           if (result._tag === "Failed") {
@@ -460,6 +462,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const results: Array<string> = [];
     let written = 0;
     const watcher = await watchProject(
+      hostRuntime(project),
       projectConfig(project),
       (result) => {
         if (result._tag === "Written" && ++written === 2) {
@@ -542,6 +545,47 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     expect(log).toEqual(["gate released", "sync resumed", "layer released"]);
   });
 
+  // Unit under test: `watchProject` on a host's runtime, which the host disposes while the start is pending (its
+  // first sync held). Oracle: the contract by hand: the runtime's disposal is the watch's backstop, so it ends the start
+  // (rejecting it) and closes every tree the watch opened, once the running sync has finished; nothing stays open.
+  it("closes every watcher when its runtime is disposed during the start", async ({ project }) => {
+    const events = deliveredEvents();
+    const held = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const holding = Layer.succeed(CatalogSync, {
+      extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+        held.resolve();
+        yield* Effect.promise(() => gate.promise);
+
+        return extractCatalogs(config, options);
+      }),
+    });
+    const runtime = hostRuntime(project, events.layer, holding);
+    const starting = watchProject(runtime, projectConfig(project), () => undefined);
+    project.defer(() =>
+      starting.then(
+        ({ close }) => close(),
+        () => undefined
+      )
+    );
+    // First at teardown, so a failed assertion never leaves the sync, and so the start and the runtime, held.
+    project.defer(() => {
+      gate.resolve();
+    });
+    await project.within(held.promise, "the first sync");
+    // The catalogs and the sources share the project root, so the watch opens that one tree.
+    expect(events.open()).toEqual([project.root]);
+
+    const disposed = runtime.dispose();
+    gate.resolve();
+    await project.within(disposed, "the disposal");
+
+    await expect(project.within(starting, "the start")).rejects.toThrow(
+      "the watch's runtime was disposed during its start"
+    );
+    expect(events.open()).toEqual([]);
+  });
+
   // Unit under test: `watchProject`, as the Vite plugin starts it. Oracle: layer 2's plugin, by hand: when the first
   // sync's report throws and so does its SyncFailed, the start fails with that error (layer 2 threw it from the
   // plugin's start), and only after every watcher it opened is closed, rather than the error escaping later.
@@ -550,7 +594,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
   }) => {
     const before = watches();
     const reports: Array<SyncResult["_tag"]> = [];
-    const starting = watchProject(projectConfig(project), (result) => {
+    const starting = watchProject(hostRuntime(project), projectConfig(project), (result) => {
       reports.push(result._tag);
       throw new Error(result._tag === "Failed" ? "logger.error gone" : "logger.info gone");
     });
@@ -751,7 +795,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
 
       await expect(
         project.within(
-          watchProject(projectConfig(project), () => undefined),
+          watchProject(hostRuntime(project), projectConfig(project), () => undefined),
           "the start"
         )
       ).rejects.toThrow(/EACCES/u);

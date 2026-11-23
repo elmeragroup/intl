@@ -1,12 +1,13 @@
 import { makeMethods, test } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { mkdirSync } from "node:fs";
 
 import type { ExtractOptions, ExtractResult } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
-import type { WatchMode } from "../src/watch";
+import type { WatchMode, WatchServices } from "../src/watch";
 import { CatalogSync } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import { FileEvents } from "../src/watch-trees";
@@ -72,6 +73,26 @@ export function projectConfig(project: Project): ProjectConfig {
   }
 
   return loaded.config;
+}
+
+/**
+ * A host's runtime for `watchProject`, as the Vite plugin makes one: the synchronous extract and Node's file events,
+ * disposed when the test ends (after every cleanup registered later, such as a watch's close).
+ *
+ * @param project - The project whose teardown disposes it.
+ * @param events - The file events it provides; Node's unless a test delivers its own.
+ * @param sync - The sync's extract it provides; the synchronous one unless a test holds it.
+ * @returns The runtime.
+ */
+export function hostRuntime(
+  project: Project,
+  events: Layer.Layer<FileEvents> = FileEvents.layer(),
+  sync: Layer.Layer<CatalogSync> = CatalogSync.layer()
+): ManagedRuntime.ManagedRuntime<WatchServices, never> {
+  const runtime = ManagedRuntime.make(Layer.mergeAll(sync, events));
+  project.defer(() => runtime.dispose());
+
+  return runtime;
 }
 
 /**

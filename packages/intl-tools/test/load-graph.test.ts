@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { expect, test } from "vitest";
 
 import { formatPo } from "../src/po";
+import type { Project } from "./project-fixture";
+import { openProject } from "./project-fixture";
 
 const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
 
@@ -109,29 +110,31 @@ type ProbeRun<T> = {
   readonly result: T;
 };
 
-let root = "";
-
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "elmera-intl-load-graph-"));
-  writeFileSync(
-    join(root, "elmera-intl.json"),
+// Each test owns its project (see `Project`): a valid config, a malformed one beside it and in `bad-app`, and an nb
+// catalog translating "Hello" as "Hei". Every probe is killed at the project's deadline.
+const it = test.extend("project", ({ task }, { onCleanup }) => {
+  const { project, close } = openProject("elmera-intl-load-graph-", task.timeout);
+  onCleanup(close);
+  project.write(
+    "elmera-intl.json",
     JSON.stringify({ include: ["src/**/*.ts"], catalogs: "messages/{locale}.po", locales: ["nb"] })
   );
-  writeFileSync(join(root, "bad.json"), "{ not json");
-  mkdirSync(join(root, "bad-app"));
-  writeFileSync(join(root, "bad-app/elmera-intl.json"), "{ not json");
-  mkdirSync(join(root, "messages"));
-  writeFileSync(
-    join(root, "messages/nb.po"),
+  project.write("bad.json", "{ not json");
+  project.write("bad-app/elmera-intl.json", "{ not json");
+  project.write(
+    "messages/nb.po",
     formatPo("nb", [
       { source: "Hello", context: undefined, translation: "Hei", references: [], comments: [], flags: [] },
     ])
   );
+
+  return project;
 });
 
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
-});
+// A probe is a fresh Node that loads a built entry cold and runs it once, about 0.2 s on an idle machine; under extreme
+// load (load average 77) one has taken past Vitest's default 5 s. The timeout of a test that runs one or two of them,
+// whose spawns the project's deadline still guards.
+const PROBES = { timeout: 30_000 };
 
 const SOURCE_MAPPING_URL = /\/\/# sourceMappingURL=(\S+)\s*$/u;
 
@@ -199,10 +202,11 @@ function isBuiltFile(url: string): boolean {
   return !path.startsWith("..") && !path.split(sep).includes("node_modules");
 }
 
-function probe<T>(script: string, args: ReadonlyArray<string>): ProbeRun<T> {
+function probe<T>(project: Project, script: string, args: ReadonlyArray<string>): ProbeRun<T> {
   const output = execFileSync(process.execPath, ["--input-type=module", "--eval", script, ...args], {
     cwd: PACKAGE,
     encoding: "utf8",
+    ...project.spawnGuard(),
   });
   // SAFETY: each probe prints this shape, and each caller names the result its probe prints; the test's assertions on
   // the result fail on any other.
@@ -227,47 +231,55 @@ function probe<T>(script: string, args: ReadonlyArray<string>): ProbeRun<T> {
 // Unit under test: the public `./next` entry, as an app's next.config resolves and calls it, and then the loader its
 // rule names, in a fresh loader worker. Oracle: Next loads next.config in several processes, so withIntl loads no
 // extractor, oxc native binding or Effect, on a valid config or a malformed one; the loader runs in every Turbopack
-// and webpack worker, so it loads no CLI, commands or watcher, compiling or reporting. The fixture's "Hello" is "Hei"
+// and webpack worker, so it loads no CLI, commands, watcher, extractor or oxc, compiling or reporting. The fixture's "Hello" is "Hei"
 // in nb, and a malformed config is a ConfigInvalid problem. The rule names the built loader beside the built `./next`
 // entry, dist/po-loader.js, which the export map resolves to.
-it("keeps the extractor, oxc and Effect out of withIntl, and the CLI out of the loader its rule names", () => {
-  const next = probe<{
-    readonly keys: ReadonlyArray<string>;
-    readonly invalid: string;
-    readonly loader: string;
-  }>(NEXT_PROBE, [root]);
-  const builtLoader = join(PACKAGE, "dist/po-loader.js");
+it(
+  "keeps the extractor, oxc and Effect out of withIntl, and the CLI and the extractor out of the loader its rule names",
+  PROBES,
+  ({ project }) => {
+    const next = probe<{
+      readonly keys: ReadonlyArray<string>;
+      readonly invalid: string;
+      readonly loader: string;
+    }>(project, NEXT_PROBE, [project.root]);
+    const builtLoader = join(PACKAGE, "dist/po-loader.js");
 
-  expect(next.result).toEqual({
-    keys: ["*.po"],
-    loader: builtLoader,
-    invalid:
-      'withIntl: not JSON: …; write elmera-intl.json as { "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }',
-  });
-  expect(next.inspected).toBeGreaterThan(0);
-  expect(
-    next.modules.filter(
-      (module) =>
-        /(?:^|\/)src\/(?:extract[\w-]*|bindings|scopes)\.ts$/u.test(module) ||
-        /\/(?:oxc-parser|oxc-transform|effect)\//u.test(module)
-    )
-  ).toEqual([]);
+    expect(next.result).toEqual({
+      keys: ["*.po"],
+      loader: builtLoader,
+      invalid:
+        'withIntl: not JSON: …; write elmera-intl.json as { "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }',
+    });
+    expect(next.inspected).toBeGreaterThan(0);
+    expect(
+      next.modules.filter(
+        (module) =>
+          /(?:^|\/)src\/(?:extract[\w-]*|bindings|scopes)\.ts$/u.test(module) ||
+          /\/(?:oxc-parser|oxc-transform|effect)\//u.test(module)
+      )
+    ).toEqual([]);
 
-  const loader = probe(LOADER_PROBE, [next.result.loader, root]);
+    const loader = probe(project, LOADER_PROBE, [next.result.loader, project.root]);
 
-  expect(loader.result).toEqual({ hello: "Hei", invalid: `${join(root, "bad.json")}: ConfigInvalid` });
-  expect(loader.inspected).toBeGreaterThan(0);
-  expect(
-    loader.modules.filter((module) => /(?:^|\/)src\/(?:cli-run|commands|watch)\.ts$/u.test(module))
-  ).toEqual([]);
-});
+    expect(loader.result).toEqual({ hello: "Hei", invalid: `${project.path("bad.json")}: ConfigInvalid` });
+    expect(loader.inspected).toBeGreaterThan(0);
+    expect(
+      loader.modules.filter(
+        (module) =>
+          /(?:^|\/)src\/(?:cli-run|commands|watch|extract[\w-]*|bindings|scopes)\.ts$/u.test(module) ||
+          /\/(?:oxc-parser|oxc-transform|@oxc-parser)\//u.test(module)
+      )
+    ).toEqual([]);
+  }
+);
 
 // Unit under test: the public `./vitest` entry, as a Vitest global setup imports and runs it. Oracle: the setup runs
 // `check` once per test run, so it pays for no argument parser: it loads neither effect/cli, nor the Node platform
 // services only the executable uses (@effect/platform-node-shared), nor the CLI's parsing and watch modules. The
 // fixture's catalog holds "Hello", which no source declares, so check finds it stale.
-it("keeps effect/cli, the Node platform and the watcher out of the Vitest setup", () => {
-  const vitest = probe<{ readonly outcome: string }>(VITEST_PROBE, [root]);
+it("keeps effect/cli, the Node platform and the watcher out of the Vitest setup", PROBES, ({ project }) => {
+  const vitest = probe<{ readonly outcome: string }>(project, VITEST_PROBE, [project.root]);
 
   expect(vitest.result.outcome).toMatch(/^elmera-intl check found problems in /u);
   expect(vitest.inspected).toBeGreaterThan(0);
