@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BuildEnvironmentOptions, InlineConfig, Plugin, Rolldown, ViteDevServer } from "vite";
+import type { BuildEnvironmentOptions, InlineConfig, Rolldown, ViteDevServer } from "vite";
 import { build, createBuilder, createLogger, createServer } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -76,8 +76,7 @@ type HookResult = void | (() => void) | Promise<void | (() => void)>;
 function handlerOf<F extends (...args: never) => HookResult>(
   hook: F | { readonly handler: F } | undefined
 ): F | undefined {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Vite's ObjectHook is a function or `{ handler }`, and Vite itself tells them apart by typeof.
-  return hook === undefined || typeof hook === "function" ? hook : hook.handler;
+  return hook === undefined || !("handler" in hook) ? hook : hook.handler;
 }
 
 // SAFETY: the dev plugin's hooks never read `this`; Vite's context for them is not needed to call them as Vite does.
@@ -331,39 +330,16 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     await expect.poll(() => read("messages/nb.po"), HANG_GUARD).toContain(`msgid "New"\nmsgstr ""`);
   });
 
-  // Unit under test: the dev plugin's watch when the dev server closes before the watch has started: here, from the
-  // first sync's own report, while the start still waits for it. Oracle: layer 2's plugin, by hand: closing the dev
-  // server closes the watch, whatever point its start has reached, so every file watcher it opened is closed.
-  it("closes a watch still starting when the dev server closes", async () => {
+  // Unit under test: the dev plugin's watch, as a dev server starts and closes it. Oracle: layer 2's plugin, by hand:
+  // closing the dev server closes the watch, so every file watcher it opened is closed. A close during the watch's start
+  // is the hook-level test below.
+  it("closes its watch when the dev server closes", async () => {
     const before = watches();
-    // A message the first sync adds, so it reports a write.
+    // A message the first sync adds, so the watch has started once the server has.
     write("src/first.tsx", component("First"));
-    let dev: ViteDevServer | undefined;
-    let closing: Promise<void> | undefined;
-    const capture: Plugin = {
-      name: "capture-dev-server",
-      configureServer(started) {
-        dev = started;
-      },
-    };
-    const created = createServer({
-      root,
-      configFile: false,
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          if (message.includes("wrote") && closing === undefined) {
-            queueMicrotask(() => {
-              closing = dev?.close();
-            });
-          }
-        },
-      },
-      plugins: [capture, intl()],
-    });
-    await expect.poll(() => closing !== undefined, HANG_GUARD).toBe(true);
-    await closing;
-    server = await created;
+    const dev = await createServer({ root, configFile: false, logLevel: "silent", plugins: [intl()] });
+    server = dev;
+    await dev.close();
 
     expect(read("messages/nb.po")).toContain(`msgid "First"`);
     await expect.poll(watches, HANG_GUARD).toBe(before);

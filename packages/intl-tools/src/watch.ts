@@ -200,8 +200,8 @@ type Pipeline = {
   readonly cache: ParseCache;
   // The text this watch last wrote to each catalog: a change that finds it unchanged is our own write.
   readonly written: Ref.Ref<ReadonlyMap<string, string>>;
-  // Each admitted batch of changes, for classification.
-  readonly intake: Queue.Queue<ReadonlyArray<Change>>;
+  // Each admitted change, for classification.
+  readonly intake: Queue.Queue<Change>;
   // Every output, in order, for the writer.
   readonly results: Queue.Queue<Output, Cause.Done>;
   // That a change can alter a catalog, for the debounce: coalesced, since one pending trigger restarts it as well as
@@ -209,8 +209,11 @@ type Pipeline = {
   readonly triggers: Queue.Queue<void>;
   // Held by a sync from its read until it has recorded its writes, and by each classification.
   readonly syncing: Semaphore.Semaphore;
-  // Done once the watch must stop: the caller's stop, a write that fails for good, a defect, or the stop itself.
+  // Done once the watch must stop: a write that fails for good, a defect, its scope closing, or the stop itself. With
+  // the caller's stop signal, the stop gate.
   readonly halt: Deferred.Deferred<void>;
+  // Done once every tree is watched (a poll's first walks taken): the first sync starts then.
+  readonly sourcesOpened: Deferred.Deferred<void>;
   // Done once the first sync has run and its result and the ready line are queued: classification starts then.
   readonly firstSynced: Deferred.Deferred<void>;
   // Done once the ready line is written.
@@ -224,11 +227,12 @@ const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (config: Projec
     includeRoots: includePrefixes(config),
     cache: new Map(),
     written: yield* Ref.make<ReadonlyMap<string, string>>(new Map()),
-    intake: yield* Queue.unbounded<ReadonlyArray<Change>>(),
+    intake: yield* Queue.unbounded<Change>(),
     results: yield* Queue.unbounded<Output, Cause.Done>(),
     triggers: yield* Queue.dropping<void>(1),
     syncing: yield* Semaphore.make(1),
     halt: yield* Deferred.make<void>(),
+    sourcesOpened: yield* Deferred.make<void>(),
     firstSynced: yield* Deferred.make<void>(),
     readyWritten: yield* Deferred.make<void>(),
   } satisfies Pipeline;
@@ -311,18 +315,16 @@ function alters(pipeline: Pipeline, written: ReadonlyMap<string, string>, change
   return change.event === "rename" && movesTree(pipeline.includeRoots, change.path);
 }
 
-// Classification, from the first sync on: every batch admitted since the last one, under one permit (so never while a
-// sync runs, and a catalog's change is compared with what the last sync wrote), queues one trigger when any change can
-// alter a catalog. A burst is one classification and one trigger.
+// Classification, from the first sync on: every change admitted since the last one, under one permit (so never while a
+// sync runs, and a catalog's change is compared with what the last sync wrote), queues one trigger when any can alter a
+// catalog. A burst is one classification and one trigger.
 const classifier = /* @__PURE__ */ Effect.fnUntraced(function* (pipeline: Pipeline) {
   yield* Deferred.await(pipeline.firstSynced);
 
   for (;;) {
-    const batches = yield* Queue.takeAll(pipeline.intake);
+    const changes = yield* Queue.takeAll(pipeline.intake);
     const fires = yield* Ref.get(pipeline.written).pipe(
-      Effect.map((written) =>
-        batches.some((batch) => batch.some((change) => alters(pipeline, written, change)))
-      ),
+      Effect.map((written) => changes.some((change) => alters(pipeline, written, change))),
       Semaphore.withPermit(pipeline.syncing)
     );
 
@@ -354,61 +356,73 @@ function debouncer(pipeline: Pipeline, sync: Effect.Effect<void>) {
   });
 }
 
-// The scopes a watch's stop closes: its two children.
-type Scopes = { readonly sources: Scope.Closeable; readonly workers: Scope.Closeable };
+// The watch's own scope, and the two children its stop closes.
+type Scopes = {
+  readonly own: Scope.Scope;
+  readonly sources: Scope.Closeable;
+  readonly workers: Scope.Closeable;
+};
 
-// The watch's one stop, and the outcome everyone who asks for it shares. It runs once, uninterruptibly, whoever asks
-// first (a second ask waits for the first): it shuts the gate (`halt`); closes `sources`, so the watchers close at once;
-// closes `workers`, which drops a pending sync and waits for a running one; ends the results; and joins the writer, so
-// every result already made is written. It ends as the writing ended, then as a worker's defect, then as the watchers
-// closed. `own`'s close runs it first (the watch adds `finalizer` after everything else `own` holds), and fails with its
-// outcome unless `deliver` handed that outcome to someone, so an interrupted caller never hides a defect.
+// The watch's one stop, and the outcome everyone who waits for it shares. One fiber of `own` runs it, uninterruptibly,
+// once the stop signal or a halt comes: it shuts the gate (`halt`, in the same synchronous step); closes `sources`, so
+// the watchers close at once; closes `workers`, which drops a pending sync and waits for a running one; ends the
+// results; and joins the writer, so every result already made is written. It ends as the writing ended, then as a
+// worker's defect, then as the watchers closed, and settles `finished` with that. `own`'s close halts the watch, so the
+// same stop runs, and waits for it (this adds that finalizer last, so it runs first, whatever the caller's strategy);
+// it fails with the outcome unless `done` handed it to someone, so an interrupted caller never hides a defect.
 const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
   pipeline: Pipeline,
   scopes: Scopes,
-  writing: Fiber.Fiber<void>
+  writing: Fiber.Fiber<void>,
+  stop: Deferred.Deferred<void>
 ) {
-  let stopping = false;
+  const { halt } = pipeline;
   // A worker's defect: it halts the watch, and the stop ends with it.
   let defect: Cause.Cause<never> | undefined;
   // Whether the stop's outcome reached someone (`done`'s caller, or a start that failed with it).
   let delivered = false;
   const finished = yield* Deferred.make<void>();
-  const shutdown = Effect.suspend(() => {
-    if (stopping) {
-      return Deferred.await(finished);
+  const halting = Effect.sync(() => {
+    Deferred.doneUnsafe(halt, Effect.void);
+  });
+  const shutdown = Effect.gen(function* () {
+    yield* halting;
+    const closed = yield* Effect.exit(Scope.close(scopes.sources, Exit.void));
+    yield* Scope.close(scopes.workers, Exit.void);
+    yield* Queue.end(pipeline.results);
+    yield* Fiber.join(writing);
+
+    if (defect !== undefined) {
+      return yield* Effect.failCause(defect);
     }
 
-    stopping = true;
+    return yield* closed;
+  }).pipe(Deferred.into(finished), Effect.uninterruptible);
+  yield* Effect.raceFirst(Deferred.await(stop), Deferred.await(halt)).pipe(
+    Effect.andThen(shutdown),
+    Effect.forkIn(scopes.own)
+  );
+  yield* Scope.addFinalizer(
+    scopes.own,
+    halting.pipe(
+      Effect.andThen(Effect.exit(Deferred.await(finished))),
+      Effect.flatMap((exit) => (delivered ? Effect.void : exit))
+    )
+  );
 
-    return Effect.gen(function* () {
-      yield* Deferred.succeed(pipeline.halt, undefined);
-      const closed = yield* Effect.exit(Scope.close(scopes.sources, Exit.void));
-      yield* Scope.close(scopes.workers, Exit.void);
-      yield* Queue.end(pipeline.results);
-      yield* Fiber.join(writing);
-
-      if (defect !== undefined) {
-        return yield* Effect.failCause(defect);
-      }
-
-      return yield* closed;
-    }).pipe(
-      Effect.exit,
-      Effect.flatMap((exit) => Deferred.done(finished, exit)),
-      Effect.uninterruptible,
-      Effect.andThen(Deferred.await(finished))
-    );
-  });
   return {
-    shutdown,
-    // `own`'s finalizer, for the watch to add last, so that it runs first.
-    finalizer: Effect.exit(shutdown).pipe(Effect.flatMap((exit) => (delivered ? Effect.void : exit))),
-    finished,
-    // Whether the stop has begun: from then on nothing is admitted.
-    stopping: () => stopping,
+    // Waits for the stop, then hands its outcome to the caller, who then owns reporting it.
+    done: Effect.exit(Deferred.await(finished)).pipe(
+      Effect.flatMap((exit) =>
+        Effect.suspend(() => {
+          delivered = true;
+
+          return exit;
+        }).pipe(Effect.uninterruptible)
+      )
+    ),
     // A worker whose defect halts the watch, the stop then ending with it.
-    supervised: (worker: Effect.Effect<void>) =>
+    supervised: <R>(worker: Effect.Effect<void, never, R>) =>
       worker.pipe(
         Effect.onError((cause) =>
           Cause.hasInterruptsOnly(cause)
@@ -416,17 +430,10 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
             : Effect.suspend(() => {
                 defect ??= cause;
 
-                return Deferred.succeed(pipeline.halt, undefined);
+                return halting;
               })
         )
       ),
-    // Hands the stop's outcome to its caller, who then owns reporting it.
-    deliver: (exit: Exit.Exit<void>) =>
-      Effect.suspend(() => {
-        delivered = true;
-
-        return exit;
-      }).pipe(Effect.uninterruptible),
   };
 });
 
@@ -435,20 +442,22 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* (
  * messages and references and never remove an entry or a translation; a sync that finds a problem writes nothing.
  * The catalogs it writes do not trigger another sync.
  *
- * The watch owns a scope inside the caller's, with two children: `sources`, the trees' native listeners or poll walks,
- * and `workers`, the first sync, classification and the debounce. Each delivery is admitted through the stop gate as it
- * happens: its warnings to the writer, its changes to classification, which (never while a sync runs) queues a trigger
- * for the debounce; then one sync runs, and its result joins the outputs, which one fiber writes in order. Syncs never
- * overlap, and no sync waits for a write.
+ * The watch owns a scope inside the caller's, with two children: `sources`, which opens the trees and holds their
+ * native listeners or poll walks, and `workers`, the first sync, classification and the debounce. Each delivery is
+ * admitted through the stop gate as it happens: its warnings to the writer, its changes to classification, which (never
+ * while a sync runs) queues a trigger for the debounce; then one sync runs, and its result joins the outputs, which one
+ * fiber writes in order. Syncs never overlap, and no sync waits for a write.
  *
  * Returns once the trees are watched (a poll's first walks taken, the next ones already timed from them) and the first
- * sync has run, so no change after it returns is missed; a stop during the start ends it with no first sync.
+ * sync has run, so no change after it returns is missed. A stop during the start (or before it) ends the start once the
+ * stop has run, with no first sync unless that had begun, and with the stop's outcome when that is a failure.
  *
- * One stop, whatever asks first (the stop signal, a write that fails for good, a worker's defect, or the caller's scope
- * closing): the gate shuts, so nothing delivered after it is admitted; `sources` closes, so the watchers close at once;
- * `workers` closes, dropping a pending sync and waiting for a running one; then every result already made is written.
- * It ends as the writing ended, then as the workers ended, then as the watchers closed. `done` delivers that outcome;
- * when nothing does (an interrupted `done`, or no `done`), the scope's close fails with it, so no defect is lost.
+ * One stop, whatever asks first (the stop signal, a write that fails for good, a defect, a tree that fails to open, or
+ * the caller's scope closing): the gate shuts, so nothing delivered after it is admitted; `sources` closes, so the
+ * watchers close at once (a tree still opening first, so a watcher it is acquiring is closed too); `workers` closes,
+ * dropping a pending sync and waiting for a running one; then every result already made is written. It ends as the
+ * writing ended, then as the workers ended, then as the watchers closed. `done` delivers that outcome; when nothing
+ * does (an interrupted `done`, or no `done`), the scope's close fails with it, so no defect is lost.
  *
  * @param config - The project config.
  * @param mode - Where change events come from.
@@ -465,93 +474,77 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
   const catalogSync = yield* CatalogSync;
   const pipeline = yield* makePipeline(config);
   const { halt, results } = pipeline;
-  // The watch's own scope: closed in order whatever the caller's strategy, its stop first (added last).
+  // The watch's own scope: closed in order whatever the caller's strategy, its stop first.
   const own = yield* Scope.fork(yield* Effect.scope, "sequential");
   const sources = yield* Scope.fork(own, "sequential");
+  // `sources` closes `opening` before `watchers` (the last child first), so a watcher a tree is still acquiring as the
+  // stop lands is held by `watchers` when that closes it.
+  const watchers = yield* Scope.fork(sources, "sequential");
+  const opening = yield* Scope.fork(sources, "sequential");
   const workers = yield* Scope.fork(own, "sequential");
   const writing = yield* writer(pipeline, output).pipe(Effect.forkIn(own));
-
-  const owned = yield* ownedStop(pipeline, { sources, workers }, writing);
-  const isHalted = () => owned.stopping() || Deferred.isDoneUnsafe(stop) || Deferred.isDoneUnsafe(halt);
-  // The stop signal, or the watch halting.
-  const stopAsked = Effect.raceFirst(Deferred.await(stop), Deferred.await(halt));
-  // Either stops the watch at once, the start's and the first sync's included.
-  yield* stopAsked.pipe(Effect.andThen(Effect.exit(owned.shutdown)), Effect.forkIn(own));
-  // The scope closing stops the watch the same way: added last, so it runs first, whatever the caller's strategy.
-  yield* Scope.addFinalizer(own, owned.finalizer);
-  const done = stopAsked.pipe(
-    Effect.andThen(Effect.exit(owned.shutdown)),
-    Effect.flatMap((exit) => owned.deliver(exit))
-  );
-  const reported = Effect.raceFirst(Deferred.await(pipeline.readyWritten), Fiber.join(writing));
-  const watching: Watching = { done, reported };
+  const owned = yield* ownedStop(pipeline, { own, sources, workers }, writing, stop);
+  const isHalted = () => Deferred.isDoneUnsafe(stop) || Deferred.isDoneUnsafe(halt);
 
   // The stop gate, at delivery: each warning and change is admitted at once, synchronously, as the tree delivers it
   // (its warnings to the writer, its changes to classification), or from the stop on not at all. What was admitted
   // before the stop is the stop's to drain.
   const admit = (item: Intake): void => {
-    if (!isHalted()) {
+    if (isHalted()) {
+      return;
+    }
+
+    if (item.problems.length > 0) {
       Queue.offerAllUnsafe(
         results,
         item.problems.map((problem) => failed(problem))
       );
-
-      if (item.changes.length > 0) {
-        Queue.offerUnsafe(pipeline.intake, item.changes);
-      }
     }
+
+    Queue.offerAllUnsafe(pipeline.intake, item.changes);
   };
   // A directory the config excludes holds no source; one holding a catalog is still walked.
   const prune = (directory: string): boolean =>
     isExcludedDirectory(config, directory) &&
     ![...pipeline.catalogs].some((catalog) => catalog.startsWith(`${directory}${sep}`));
   const roots = watchRoots(pipeline.includeRoots, [...pipeline.catalogs]);
-  // The trees, raced against the stop: a stop while they open ends the start, with no first sync. A start failure
-  // stops the watch (closing what opened) and fails the start.
-  const opened = yield* Effect.raceFirst(
-    (mode._tag === "poll"
-      ? startPolling(roots, mode.intervalMs, prune, admit, owned.supervised)
-      : listenNative(roots, admit).pipe(Effect.as<ReadonlyArray<Problem>>([]))
-    ).pipe(
-      Scope.provide(sources),
-      Effect.map((warnings) => ({ _tag: "Opened" as const, warnings }))
-    ),
-    stopAsked.pipe(Effect.as({ _tag: "Stopped" as const }))
-  ).pipe(Effect.onError(() => Effect.exit(owned.shutdown)));
-
-  if (opened._tag === "Stopped") {
-    return watching;
-  }
-
-  yield* Queue.offerAll(
-    results,
-    opened.warnings.map((problem) => failed(problem))
-  );
-  const sync = syncStep(pipeline, catalogSync);
-  // The first sync, then its result and the ready line, in one step the stop waits for; none once the stop began.
-  const firstSync = Effect.suspend(() =>
+  // The trees open in `opening`, their watchers held by `watchers`; none once the stop has begun. A tree that fails to
+  // open stops the watch, like any worker's defect.
+  const open = Effect.suspend(() =>
     isHalted()
       ? Effect.void
-      : sync.pipe(
-          Effect.andThen(Queue.offer(results, { _tag: "Ready" })),
-          Effect.andThen(Deferred.succeed(pipeline.firstSynced, undefined))
-        )
-  ).pipe(Effect.uninterruptible);
+      : (mode._tag === "poll"
+          ? startPolling(roots, mode.intervalMs, prune, admit, owned.supervised)
+          : listenNative(roots, admit)
+        ).pipe(Scope.provide(watchers), Effect.andThen(Deferred.succeed(pipeline.sourcesOpened, undefined)))
+  );
+  yield* owned.supervised(open).pipe(Effect.forkIn(opening));
+  const sync = syncStep(pipeline, catalogSync);
+  // Once the trees are watched: the first sync, then its result and the ready line, in one step the stop waits for;
+  // none once the stop has begun.
+  const firstSync = Deferred.await(pipeline.sourcesOpened).pipe(
+    Effect.andThen(
+      Effect.suspend(() =>
+        isHalted()
+          ? Effect.void
+          : sync.pipe(
+              Effect.andThen(Queue.offer(results, { _tag: "Ready" })),
+              Effect.andThen(Deferred.succeed(pipeline.firstSynced, undefined))
+            )
+      ).pipe(Effect.uninterruptible)
+    )
+  );
   // Every worker forks into `workers`; once the stop has closed it, none starts.
   for (const worker of [firstSync, classifier(pipeline), debouncer(pipeline, sync)]) {
     yield* owned.supervised(worker).pipe(Effect.forkIn(workers));
   }
-  // Until the first sync is queued, or the stop ends the start: with its outcome when that is a failure (a defect in
-  // the first sync, say), which the start then delivers.
-  yield* Effect.raceFirst(
-    Deferred.await(pipeline.firstSynced),
-    Deferred.await(owned.finished).pipe(
-      Effect.exit,
-      Effect.flatMap((exit) => owned.deliver(exit))
-    )
-  );
+  // Until the first sync is queued, or the stop has run: then the start ends as the stop did.
+  yield* Effect.raceFirst(Deferred.await(pipeline.firstSynced), owned.done);
 
-  return watching;
+  return {
+    done: owned.done,
+    reported: Effect.raceFirst(Deferred.await(pipeline.readyWritten), Fiber.join(writing)),
+  } satisfies Watching;
 });
 
 /**

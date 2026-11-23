@@ -117,19 +117,19 @@ export const listenNative = /* @__PURE__ */ Effect.fnUntraced(function* (
 
 /**
  * Poll every tree, in the current scope: each tree's first walk is taken here, before the caller goes on (its first
- * sync), so no edit after it is missed. Then each tree walks every `intervalMs` from its own first walk, on the
- * monotonic clock (a wall-clock step moves no walk), in a fiber of the scope: a walk that runs late, behind a slow
- * first sync or another tree's slow walk, does not move the next one, ticks missed meanwhile are skipped rather than
- * piled up, and a tree's walks never overlap. A walk's changes and the directories it newly cannot read are one item,
- * handed to `admit` as the walk ends. Closing the scope ends every walk; a walk's defect is the `supervised` wrapper's
- * to handle.
+ * sync), so no edit after it is missed, and the directories those walks cannot read are one item handed to `admit`.
+ * Then each tree walks every `intervalMs` from its own first walk, on the monotonic clock (a wall-clock step moves no
+ * walk), in a fiber of the scope: a walk that runs late, behind a slow first sync or another tree's slow walk, does not
+ * move the next one, ticks missed meanwhile are skipped rather than piled up, and a tree's walks never overlap. A
+ * walk's changes and the directories it newly cannot read are one item, handed to `admit` as the walk ends. Closing
+ * the scope ends every walk; a walk's defect is the `supervised` wrapper's to handle.
  *
  * @param dirs - The trees.
  * @param intervalMs - Milliseconds between a tree's walks.
  * @param prune - Whether a directory is left unwalked.
- * @param admit - Takes each walk's item.
+ * @param admit - Takes the first walks' item, then each later walk's.
  * @param supervised - Wraps each tree's walking fiber, so its defect reaches the watch.
- * @returns The directories the first walks could not read.
+ * @returns An effect that takes the first walks and starts the later ones in its scope.
  */
 export const startPolling = /* @__PURE__ */ Effect.fnUntraced(function* (
   dirs: ReadonlyArray<string>,
@@ -145,6 +145,7 @@ export const startPolling = /* @__PURE__ */ Effect.fnUntraced(function* (
     first: snapshot(dir, prune),
     walked: clock.monotonicTimeNanosUnsafe(),
   }));
+  admit({ problems: trees.flatMap(({ first }) => newlyUnreadable(first, undefined)), changes: [] });
 
   for (const { dir, first, walked } of trees) {
     let previous = first;
@@ -168,8 +169,6 @@ export const startPolling = /* @__PURE__ */ Effect.fnUntraced(function* (
     });
     yield* Effect.forkScoped(supervised(Effect.forever(tick.pipe(Effect.andThen(walk)))));
   }
-
-  return trees.flatMap(({ first }) => newlyUnreadable(first, undefined));
 });
 
 // What a poll compares a path by: nanosecond change and modification times and the size, so a rewrite within one

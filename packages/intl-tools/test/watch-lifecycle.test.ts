@@ -61,10 +61,7 @@ function inProcess<A, E>(
 
 // Interrupts a watch running in this process, failing at the project's deadline rather than outliving the test.
 function interrupt(project: Project, fiber: Fiber.Fiber<unknown, unknown>): Promise<void> {
-  return project.within(
-    Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.asVoid)),
-    "the watch's interruption"
-  );
+  return project.within(Effect.runPromise(Fiber.interrupt(fiber)), "the watch's interruption");
 }
 
 describe("extract --watch in this process", { timeout: 20_000 }, () => {
@@ -565,7 +562,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
   // the start with no first sync, nothing written, and the program exits 0.
   it("exits 0 on a signal while its watchers are opening", async ({ project }) => {
     const opening = Promise.withResolvers<void>();
-    const events = deliveredEvents({ opening: opening.promise });
+    const events = deliveredEvents({ opening: () => opening.promise });
     let stdout = "";
     const reporter = Reporter.layer({
       stdout: (text) => {
@@ -586,6 +583,38 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const exit = await running.exit();
 
     expect([exitCodeOf(exit), stdout, existsSync(project.path("messages/nb.po"))]).toEqual([0, "", false]);
+  });
+
+  // Unit under test: the executable's watch run in this process, signalled as soon as its signal listeners are on, before
+  // its start opens any tree. Oracle: the contract by hand: the stop came first, so the watch opens no tree (here one
+  // whose watch would fail with EACCES), runs no sync, writes nothing, and the program exits 0.
+  it("exits 0 on a signal right after its listeners are on, opening no tree", async ({ project }) => {
+    const events = deliveredEvents({
+      refuses: { dir: project.root, error: new Error("EACCES: permission denied, watch") },
+    });
+    let stdout = "";
+    const reporter = Reporter.layer({
+      stdout: (text) => {
+        stdout += text;
+      },
+      stderr: () => undefined,
+    });
+    const before = process.listeners("SIGTERM");
+    const running = inProcess(
+      project,
+      cliProgram(["extract", "--watch"], { cwd: project.root }).pipe(
+        Effect.provide([CliPlatform, reporter, CatalogSync.layer(), events.layer])
+      )
+    );
+    sigtermCli(before);
+    const exit = await running.exit();
+
+    expect([exitCodeOf(exit), events.calls(), stdout, existsSync(project.path("messages/nb.po"))]).toEqual([
+      0,
+      0,
+      "",
+      false,
+    ]);
   });
 
   // Unit under test: the executable's watch run in this process, interrupted as a host runtime shutting down
@@ -651,7 +680,12 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       lockedRoot(project);
       const before = watches();
 
-      await expect(watchProject(projectConfig(project), () => undefined)).rejects.toThrow(/EACCES/u);
+      await expect(
+        project.within(
+          watchProject(projectConfig(project), () => undefined),
+          "the start"
+        )
+      ).rejects.toThrow(/EACCES/u);
       // A closed watch's handles are released by the event loop (on Linux, one per directory).
       await expect.poll(watches, project.guard()).toBe(before);
     });

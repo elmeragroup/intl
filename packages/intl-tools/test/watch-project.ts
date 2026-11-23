@@ -97,8 +97,10 @@ export type DeliveredEvents = {
   readonly layer: Layer.Layer<FileEvents>;
   /** The trees the watch is listening to now, in the order it opened them. */
   readonly open: () => ReadonlyArray<string>;
-  /** How many trees the watch has begun to open (and not yet opened, when `opening` holds them). */
+  /** How many trees the watch has begun to open (and not yet opened, when `opening` or `acquiring` holds them). */
   readonly opening: () => number;
+  /** How many times the watch has called `FileEvents.watch`. */
+  readonly calls: () => number;
   /**
    * The listener of an open tree, to deliver an event or an error to.
    *
@@ -111,8 +113,17 @@ export type DeliveredEvents = {
 
 /** How a `deliveredEvents` fake opens and closes. */
 export type DeliveredEventsOptions = {
-  /** Each tree opens only once this settles, as a host's watcher that opens asynchronously. */
-  readonly opening?: Promise<void>;
+  /**
+   * What a tree waits for before it opens, as a host's watcher that opens asynchronously; the wait can be interrupted.
+   * Undefined for a tree that opens at once.
+   */
+  readonly opening?: (dir: string) => Promise<void> | undefined;
+  /** What each tree's watcher waits for while it is acquired, so the wait cannot be interrupted. */
+  readonly acquiring?: Promise<void>;
+  /** Called as each tree opens, synchronously, once its listener is recorded. */
+  readonly opened?: (dir: string) => void;
+  /** A tree whose watch fails as it starts, dying with this error, as a recursive watch of an unreadable one does. */
+  readonly refuses?: { readonly dir: string; readonly error: Error };
   /** Each tree's close dies with this, as a watcher that fails to close. */
   readonly closeFails?: Error;
 };
@@ -125,22 +136,32 @@ export type DeliveredEventsOptions = {
  */
 export function deliveredEvents(options: DeliveredEventsOptions = {}): DeliveredEvents {
   const listeners = new Map<string, TreeListener>();
-  let opening = 0;
+  let calls = 0;
 
   return {
     layer: Layer.succeed(FileEvents, {
       watch: Effect.fn("DeliveredEvents.watch")(function* (dir: string, listener: TreeListener) {
-        opening += 1;
+        calls += 1;
+        const opening = options.opening?.(dir);
 
-        if (options.opening !== undefined) {
-          const opened = options.opening;
-          yield* Effect.promise(() => opened);
+        if (opening !== undefined) {
+          yield* Effect.promise(() => opening);
         }
 
+        if (options.refuses?.dir === dir) {
+          return yield* Effect.die(options.refuses.error);
+        }
+
+        const { acquiring } = options;
         yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            listeners.set(dir, listener);
-          }),
+          (acquiring === undefined ? Effect.void : Effect.promise(() => acquiring)).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                listeners.set(dir, listener);
+                options.opened?.(dir);
+              })
+            )
+          ),
           () =>
             Effect.suspend(() => {
               listeners.delete(dir);
@@ -151,7 +172,8 @@ export function deliveredEvents(options: DeliveredEventsOptions = {}): Delivered
       }),
     }),
     open: () => [...listeners.keys()],
-    opening: () => opening - listeners.size,
+    opening: () => calls - listeners.size,
+    calls: () => calls,
     listener: (dir) => {
       const listener = listeners.get(dir);
 

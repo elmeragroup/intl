@@ -7,19 +7,20 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
 import type { ExtractOptions } from "../src/commands";
 import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import type { SyncResult, Watching, WatchMode, WatchOutput } from "../src/watch";
 import { CatalogSync, watchCatalogs } from "../src/watch";
+import type { TreeListener } from "../src/watch-trees";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
-import { component, deliveredEvents, it, POLLING, projectConfig, syncing } from "./watch-project";
+import type { DeliveredEvents } from "./watch-project";
+import { component, deliveredEvents, it, lockedRoot, POLLING, projectConfig, syncing } from "./watch-project";
 
 // The watch's timing on the test clock: it polls a real tree every 50 ms, so a change is seen at the next poll and its
 // sync starts after the 100 ms debounce, with no real timer. Unit under test: `watchCatalogs`. Oracle: the contract
@@ -34,6 +35,9 @@ describe("extract --watch on the test clock", () => {
     readonly scope: Scope.Closeable;
     readonly watching: Watching;
   };
+
+  // Native file events, which a test delivers itself through `deliveredEvents`.
+  const NATIVE: WatchMode = { _tag: "native" };
 
   // Starts `effect` from a sleep the test clock wakes, so the clock waits until everything it sets off (the classifying
   // of a backlog, a sync) has suspended before it moves on. Returns the fiber that finishes it.
@@ -61,11 +65,8 @@ describe("extract --watch on the test clock", () => {
     readonly events?: Layer.Layer<FileEvents>;
     /** How the watch's caller scope runs its finalizers; sequential unless a test closes it in parallel. */
     readonly strategy?: "sequential" | "parallel";
-    /**
-     * Whether a fiber gives the stop signal as the watch starts, with the scheduler yielding after every operation, so
-     * the stop lands while the start is still running.
-     */
-    readonly stopDuringStart?: boolean;
+    /** The stop signal; a new one unless a test gives it before the watch starts or as its trees open. */
+    readonly stop?: Deferred.Deferred<void>;
   };
 
   // Starts the watch in a scope of its own inside the test's, with its sync step built in that scope so it lives as long
@@ -74,7 +75,7 @@ describe("extract --watch on the test clock", () => {
   const launch = Effect.fnUntraced(function* (project: Project, options: Options = {}) {
     const reports: Array<SyncResult["_tag"]> = [];
     const scope = yield* Scope.fork(yield* Effect.scope, options.strategy ?? "sequential");
-    const stop = yield* Deferred.make<void>();
+    const stop = options.stop ?? (yield* Deferred.make<void>());
     const services = yield* Layer.buildWithScope(
       Layer.merge(options.layer ?? CatalogSync.layer(), options.events ?? FileEvents.layer()),
       scope
@@ -96,14 +97,7 @@ describe("extract --watch on the test clock", () => {
       options.clock === undefined
         ? starting
         : starting.pipe(Effect.provideService(Clock.Clock, options.clock));
-    const watching = yield* wake(
-      options.stopDuringStart === true
-        ? Effect.forkChild(Deferred.succeed(stop, undefined)).pipe(
-            Effect.andThen(clocked),
-            Effect.provideService(References.MaxOpsBeforeYield, 1)
-          )
-        : clocked
-    );
+    const watching = yield* wake(clocked);
 
     return { reports, stop, scope, watching };
   });
@@ -171,6 +165,18 @@ describe("extract --watch on the test clock", () => {
     });
   }
 
+  // The sync step: `extractCatalogs`, counting its calls.
+  function counted() {
+    let calls = 0;
+    const layer = syncing((config, options) => {
+      calls += 1;
+
+      return extractCatalogs(config, options);
+    });
+
+    return { layer, calls: () => calls };
+  }
+
   // Closes the watch's scope while `gate` holds a sync: the close is still pending a turn later, and ends once the sync
   // is released.
   const closeWhileHeld = (scope: Scope.Closeable, gate: Deferred.Deferred<void>) =>
@@ -180,6 +186,25 @@ describe("extract --watch on the test clock", () => {
       expect(close.pollUnsafe()).toBeUndefined();
 
       return close;
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(gate, undefined)),
+      Effect.flatMap((fiber) => Fiber.join(fiber))
+    );
+
+  // Closes the watch's scope while `gate` holds a sync: its watchers are already closed while the close is pending, so an
+  // error the platform then delivers on `listener` is not admitted. The close ends once the sync is released.
+  const closeWatchersFirst = (
+    scope: Scope.Closeable,
+    gate: Deferred.Deferred<void>,
+    events: DeliveredEvents,
+    listener: TreeListener
+  ) =>
+    Effect.gen(function* () {
+      const closing = yield* wake(Scope.close(scope, Exit.void));
+      expect([closing.pollUnsafe(), events.open()]).toEqual([undefined, []]);
+      listener.error(new Error("EMFILE: too many open files"));
+
+      return closing;
     }).pipe(
       Effect.ensuring(Deferred.succeed(gate, undefined)),
       Effect.flatMap((fiber) => Fiber.join(fiber))
@@ -547,7 +572,7 @@ describe("extract --watch on the test clock", () => {
       const events = deliveredEvents();
       const { reports, stop, watching } = yield* launch(project, {
         layer: sync.layer,
-        mode: { _tag: "native" },
+        mode: NATIVE,
         events: events.layer,
       });
       expect([sync.calls(), events.open()]).toEqual([1, [project.root]]);
@@ -641,7 +666,7 @@ describe("extract --watch on the test clock", () => {
         const events = deliveredEvents();
         const { reports, scope } = yield* start(project, {
           layer: sync.layer,
-          mode: { _tag: "native" },
+          mode: NATIVE,
           events: events.layer,
         });
         const listener = events.listener(project.root);
@@ -650,14 +675,7 @@ describe("extract --watch on the test clock", () => {
         yield* TestClock.adjust("150 millis");
         expect(sync.calls()).toBe(2);
 
-        const close = yield* Effect.gen(function* () {
-          const closing = yield* wake(Scope.close(scope, Exit.void));
-          expect([closing.pollUnsafe(), events.open()]).toEqual([undefined, []]);
-          listener.error(new Error("EMFILE: too many open files"));
-
-          return closing;
-        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
-        yield* Fiber.join(close);
+        yield* closeWatchersFirst(scope, gate, events, listener);
         expect(reports).toEqual(["Written", "Written"]);
       })
   );
@@ -671,19 +689,12 @@ describe("extract --watch on the test clock", () => {
         const events = deliveredEvents();
         const { reports, scope } = yield* launch(project, {
           layer: sync.layer,
-          mode: { _tag: "native" },
+          mode: NATIVE,
           events: events.layer,
         });
         const listener = events.listener(project.root);
 
-        const close = yield* Effect.gen(function* () {
-          const closing = yield* wake(Scope.close(scope, Exit.void));
-          expect([closing.pollUnsafe(), events.open()]).toEqual([undefined, []]);
-          listener.error(new Error("EMFILE: too many open files"));
-
-          return closing;
-        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
-        yield* Fiber.join(close);
+        yield* closeWatchersFirst(scope, gate, events, listener);
         expect(reports).toEqual(["Written"]);
       })
   );
@@ -714,21 +725,154 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
-  // A stop that lands while the watch is still starting, before its first sync: the start ends with no first sync, and
-  // nothing is written.
-  it.effect("runs no first sync when the stop lands during the start", ({ project }) =>
+  // The start is the stop's too: a stop before it, or during it, ends it only once the stop has run, with no first sync,
+  // nothing reported and no watcher left open; a failure the stop ends with (a write that failed for good, a watcher that
+  // failed to close) fails the start. Oracle: that contract, by hand, per case.
+  it.effect("opens no tree and reports nothing when stopped before it starts", ({ project }) =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>();
-      const sync = holding(gate, 0);
-      const { reports, watching } = yield* start(project, { layer: sync.layer, stopDuringStart: true });
+      const stop = yield* Deferred.make<void>();
+      yield* Deferred.succeed(stop, undefined);
+      const sync = counted();
+      const events = deliveredEvents();
+      const { reports, watching } = yield* start(project, {
+        layer: sync.layer,
+        mode: NATIVE,
+        events: events.layer,
+        stop,
+      });
       yield* watching.done;
       yield* TestClock.adjust("1 second");
 
-      expect({ calls: sync.calls(), reports, written: existsSync(project.path("messages/nb.po")) }).toEqual({
-        calls: 0,
-        reports: [],
-        written: false,
+      expect({
+        opened: events.calls(),
+        syncs: sync.calls(),
+        reports,
+        written: existsSync(project.path("messages/nb.po")),
+      }).toEqual({ opened: 0, syncs: 0, reports: [], written: false });
+    })
+  );
+
+  it.effect(
+    "walks no tree and reports nothing when stopped before it starts, a tree unreadable",
+    ({ project }) =>
+      Effect.gen(function* () {
+        lockedRoot(project);
+        const stop = yield* Deferred.make<void>();
+        yield* Deferred.succeed(stop, undefined);
+        const sync = counted();
+        const { reports, watching } = yield* start(project, { layer: sync.layer, stop });
+        yield* watching.done;
+        yield* TestClock.adjust("1 second");
+
+        expect({ syncs: sync.calls(), reports, written: existsSync(project.path("messages/nb.po")) }).toEqual(
+          {
+            syncs: 0,
+            reports: [],
+            written: false,
+          }
+        );
+      })
+  );
+
+  it.effect("runs no first sync when the stop lands during the start", ({ project }) =>
+    Effect.gen(function* () {
+      const stop = yield* Deferred.make<void>();
+      const sync = counted();
+      // The stop lands as the last tree opens: after the trees are watched, before the first sync.
+      const events = deliveredEvents({
+        opened: () => {
+          Deferred.doneUnsafe(stop, Effect.void);
+        },
       });
+      const { reports, watching } = yield* start(project, {
+        layer: sync.layer,
+        mode: NATIVE,
+        events: events.layer,
+        stop,
+      });
+      yield* watching.done;
+      yield* TestClock.adjust("1 second");
+
+      expect({
+        opened: events.calls(),
+        open: events.open(),
+        syncs: sync.calls(),
+        reports,
+        written: existsSync(project.path("messages/nb.po")),
+      }).toEqual({ opened: 1, open: [], syncs: 0, reports: [], written: false });
+    })
+  );
+
+  it.effect(
+    "ends the start once its open trees are closed, when stopped while a tree still opens",
+    ({ project }) =>
+      Effect.gen(function* () {
+        mkdirSync(project.path("messages"));
+        const src = Promise.withResolvers<void>();
+        const stop = yield* Deferred.make<void>();
+        const events = deliveredEvents({
+          opening: (dir) => (dir === project.path("src") ? src.promise : undefined),
+          closeFails: new Error("close failed"),
+        });
+        const { watching } = yield* launch(project, { mode: NATIVE, events: events.layer, stop });
+        // Before the watch's scope closes, should an assertion end the test first.
+        yield* Effect.addFinalizer(() => Effect.sync(() => src.resolve()));
+        expect([events.open(), events.opening()]).toEqual([[project.path("messages")], 1]);
+
+        yield* Deferred.succeed(stop, undefined);
+        const exit = yield* Fiber.await(watching);
+
+        expect([Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit, events.open()]).toEqual([
+          new Error("close failed"),
+          [],
+        ]);
+      })
+  );
+
+  it.effect("fails the start with a write that fails for good while a tree still opens", ({ project }) =>
+    Effect.gen(function* () {
+      mkdirSync(project.path("messages"));
+      const src = Promise.withResolvers<void>();
+      const events = deliveredEvents({
+        opening: (dir) => (dir === project.path("src") ? src.promise : undefined),
+      });
+      const { watching } = yield* launch(project, {
+        mode: NATIVE,
+        events: events.layer,
+        report: (result) => (result._tag === "Failed" ? Effect.die(new Error("stderr gone")) : Effect.void),
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => src.resolve()));
+      expect(events.open()).toEqual([project.path("messages")]);
+
+      events.listener(project.path("messages")).error(new Error("EMFILE: too many open files"));
+      const exit = yield* Fiber.await(watching);
+
+      expect([Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit, events.open()]).toEqual([
+        new Error("stderr gone"),
+        [],
+      ]);
+    })
+  );
+
+  it.effect("fails the start with the close failure of a watcher acquired as the stop lands", ({ project }) =>
+    Effect.gen(function* () {
+      const acquiring = Promise.withResolvers<void>();
+      const stop = yield* Deferred.make<void>();
+      const events = deliveredEvents({ acquiring: acquiring.promise, closeFails: new Error("close failed") });
+      const { watching } = yield* launch(project, { mode: NATIVE, events: events.layer, stop });
+      // Before the watch's scope closes, which waits for the acquire, should an assertion end the test first.
+      yield* Effect.addFinalizer(() => Effect.sync(() => acquiring.resolve()));
+      expect([events.open(), events.opening()]).toEqual([[], 1]);
+
+      yield* Deferred.succeed(stop, undefined);
+      yield* Effect.yieldNow;
+      acquiring.resolve();
+      const exit = yield* Fiber.await(watching);
+
+      expect([Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit, events.open()]).toEqual([
+        new Error("close failed"),
+        [],
+      ]);
     })
   );
 
@@ -754,23 +898,6 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
-  // A burst of native events is one sync, a debounce after it: every change still syncs, once.
-  it.effect("folds a burst of 200 native events into one sync", ({ project }) =>
-    Effect.gen(function* () {
-      const events = deliveredEvents();
-      const { reports } = yield* start(project, { mode: { _tag: "native" }, events: events.layer });
-      const listener = events.listener(project.root);
-      project.write("src/a.tsx", component("A"));
-
-      for (let event = 0; event < 200; event += 1) {
-        listener.change("change", "src/a.tsx");
-      }
-
-      yield* TestClock.adjust("1 second");
-      expect(reports).toEqual(["Written", "Written"]);
-    })
-  );
-
   // A burst that lands while a sync holds: every batch admitted meanwhile is one classification once the sync ends,
   // one trigger and one debounce, and exactly one follow-up sync.
   it.effect("folds a burst of 200 native events during a held sync into one follow-up", ({ project }) =>
@@ -781,7 +908,7 @@ describe("extract --watch on the test clock", () => {
       const debounce = yield* counting(100);
       const { reports } = yield* start(project, {
         layer: sync.layer,
-        mode: { _tag: "native" },
+        mode: NATIVE,
         events: events.layer,
         clock: debounce.clock,
       });

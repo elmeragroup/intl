@@ -139,7 +139,7 @@ msgstr ""
     const po = project.read("messages/nb.po");
     const { output } = await startWatch(project);
     project.write("src/broken.tsx", `${IMPORT}export const C = () => <T>Broken</T;\n`);
-    // One line: a late probe report also says ExtractFailed.
+    // The file and its ExtractFailed, on one line.
     await expect
       .poll(() => output().stderr, project.guard())
       .toMatch(/src\/broken\.tsx[^\n]*: ExtractFailed:/u);
