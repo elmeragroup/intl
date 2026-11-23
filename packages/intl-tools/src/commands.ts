@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
 
 // The CLI's two operations over a project: `extract` writes catalogs, `check` proves them in sync and compilable. Each
 // is an effect over its edges (the scan, the formats module, the catalogs' reads and writes); what it decides from what
@@ -7,9 +7,8 @@ import { relative } from "node:path";
 import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { checkLocale, checkSources, compileLocale } from "./catalog-check";
-import type { CatalogIdentity } from "./catalog-files";
 import { CatalogFiles, ioEdge } from "./catalog-files";
-import type { CatalogPlan, CatalogSnapshot, CatalogText, WrittenCatalog } from "./catalog-plan";
+import type { CatalogPlan, CatalogText, WrittenCatalog } from "./catalog-plan";
 import { mergeCatalogs } from "./catalog-plan";
 import type { UnreachableArm } from "./compile";
 import type { UnusedEntries } from "./po";
@@ -69,19 +68,19 @@ const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (config: Project
   } satisfies CatalogText;
 });
 
-// Each locale's PO, in the config's order, each file read once: a locale whose path names a file another locale's
-// already did (a duplicate locale, a `{locale}/..` path, a link) shares that read, so every output to one file merges
-// from one snapshot of it.
+// Each locale's PO, in the config's order, each distinct path read once: a locale whose path resolves to one another
+// locale's already did (a duplicate locale, a `{locale}/..` path) shares that read. Paths that differ are read each on
+// its own, links included: the write guard knows a file several paths name by its content, not by asking the storage.
 const snapshotCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: ProjectConfig) {
   const files = yield* CatalogFiles;
-  const texts = new Map<CatalogIdentity, string | undefined>();
-  const catalogs: Array<CatalogSnapshot> = [];
+  const texts = new Map<string, string | undefined>();
+  const catalogs: Array<CatalogText> = [];
   for (const locale of config.locales) {
     const path = catalogPath(config, locale);
-    const identity = yield* files.identify(path);
-    const text = texts.has(identity) ? texts.get(identity) : yield* files.read(path);
-    texts.set(identity, text);
-    catalogs.push({ locale, path, shown: relative(config.root, path), text, identity });
+    const key = resolve(path);
+    const text = texts.has(key) ? texts.get(key) : yield* files.read(path);
+    texts.set(key, text);
+    catalogs.push({ locale, path, shown: relative(config.root, path), text });
   }
 
   return catalogs;
@@ -178,24 +177,27 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
 
   const files = yield* CatalogFiles;
 
+  // Before the first write, every distinct path against its own snapshot: a save to any of them since the plan read it
+  // supersedes the sync with nothing written, whichever file it names now.
   if (options.concurrentSave === "yield") {
-    for (const { path, text } of plan.read.values()) {
+    for (const [path, text] of plan.read) {
       if ((yield* files.read(path)) !== text) {
         return { problems, messages, written: [], superseded: true } satisfies ExtractResult;
       }
     }
   }
 
-  // What each file holds, as this sync last read or wrote it: a later output to a file several locales' paths name is
-  // compared with this sync's own write to it, not taken for a save.
-  const expected = new Map([...plan.read].map(([identity, { text }]) => [identity, text] as const));
+  // A path may hold its own snapshot, or a text this sync wrote: through another path that names the same file (a
+  // link, a hard link, a name a case-insensitive file system folds), it is the sync's own write. Anything else is a
+  // save since, which this sync never writes over.
+  const ownTexts = new Set<string>();
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
     const outcome = yield* files.write(
       output.path,
       output.text,
       options.concurrentSave === "yield"
-        ? { _tag: "IfUnchangedFrom", text: expected.get(output.identity) }
+        ? { _tag: "IfHoldsOneOf", texts: new Set([plan.read.get(resolve(output.path)), ...ownTexts]) }
         : { _tag: "Overwrite" }
     );
 
@@ -204,10 +206,9 @@ export const writeCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.writeCatalog
     }
 
     if (outcome === "written") {
-      written.push({ path: output.path, text: output.text });
+      written.push(output);
+      ownTexts.add(output.text);
     }
-
-    expected.set(output.identity, output.text);
   }
 
   return { problems, messages, written, superseded: false } satisfies ExtractResult;

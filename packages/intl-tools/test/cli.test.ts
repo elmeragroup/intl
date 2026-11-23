@@ -218,6 +218,39 @@ msgstr ""
     expect(() => project.read("messages/nb.po")).toThrow();
   });
 
+  // A catalog path that cannot be read as a file (a symbolic link that loops, a path through a regular file) reads as
+  // absent, as the layer 4 CLI read it (62bfdb1): a malformed catalog beside it is the one problem, exit 1, and nothing
+  // is written. Neither path is looked up before its read.
+  it.for([
+    {
+      blocked: "a self-looping symbolic link",
+      catalogs: "messages/{locale}.po",
+      nb: "messages/nb.po",
+      block: (project: Project) => {
+        symlinkSync("sv.po", project.path("messages/sv.po"));
+      },
+    },
+    {
+      blocked: "a regular file where its directory goes",
+      catalogs: "messages/{locale}/catalog.po",
+      nb: "messages/nb/catalog.po",
+      block: (project: Project) => {
+        project.write("messages/sv", "");
+      },
+    },
+  ])("reports a malformed catalog beside $blocked", async ({ catalogs, nb, block }, { project }) => {
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, catalogs, locales: ["nb", "sv"] }));
+    project.write(nb, `msgid "Broken\n`);
+    block(project);
+    const { code, stdout } = await cli(project, "extract", "--json");
+
+    expect({ code, problems: readReport(stdout).problems.map(({ code: problem }) => problem) }).toEqual({
+      code: 1,
+      problems: ["CatalogUnreadable"],
+    });
+    expect(project.read(nb)).toBe(`msgid "Broken\n`);
+  });
+
   it("refuses to overwrite a PO it cannot read", async ({ project }) => {
     await cli(project, "extract");
     project.write("messages/nb.po", `# translator note\n${project.read("messages/nb.po")}`);
@@ -931,6 +964,30 @@ describe("bin", BIN_TEST, () => {
     });
     expect(run.stdout.length).toBeGreaterThan(65536);
     expect([run.status, readReport(run.stdout).problems.length]).toEqual([1, 1503]);
+  });
+
+  // The failure surfaces where the write fails, as the layer 4 CLI's did (62bfdb1): nb's catalog is written first, then
+  // sv's directory cannot be made through the regular file at its place.
+  it("writes the catalogs before one whose directory cannot be made, then exits 2 with that failure", ({
+    project,
+  }) => {
+    project.write(
+      "elmera-intl.json",
+      JSON.stringify({ ...CONFIG, catalogs: "messages/{locale}/catalog.po", locales: ["nb", "sv"] })
+    );
+    project.write("messages/sv", "");
+    const run = bin(project, "extract");
+
+    expect({
+      code: run.code,
+      stdout: run.stdout,
+      written: existsSync(project.path("messages/nb/catalog.po")),
+    }).toEqual({
+      code: 2,
+      stdout: "",
+      written: true,
+    });
+    expect(run.stderr).toMatch(/^elmera-intl failed: Error: E[A-Z]+: .*mkdir/u);
   });
 
   it("exits 2 and names the failure when the CLI throws", ({ project }) => {

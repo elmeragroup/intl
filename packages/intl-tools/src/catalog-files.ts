@@ -5,17 +5,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 /**
  * I/O the commands do not classify threw, such as a file a checkout deletes mid-scan or a directory where a catalog
@@ -59,8 +50,11 @@ export function ioEdge<A>(
 export type WriteGuard =
   /** Write over whatever the catalog holds (`extract`). */
   | { readonly _tag: "Overwrite" }
-  /** Write only while the catalog still holds `text` (undefined: absent), so a save since is never written over. */
-  | { readonly _tag: "IfUnchangedFrom"; readonly text: string | undefined };
+  /**
+   * Write only while the catalog holds one of `texts` (undefined: absent): its own snapshot, or a text this sync wrote
+   * (to it or to another path naming the same file), so a save since is never written over.
+   */
+  | { readonly _tag: "IfHoldsOneOf"; readonly texts: ReadonlySet<string | undefined> };
 
 /** What a guarded catalog write did. */
 export type WriteOutcome =
@@ -70,13 +64,6 @@ export type WriteOutcome =
   | "unchanged"
   /** The catalog no longer holds what the guard expected, so nothing was written. */
   | "changed";
-
-/**
- * Which file a catalog path names, whatever path names it: one key for every alias of one file (a duplicate locale, a
- * `{locale}/..` path, a symbolic link, a hard link), so a sync reads each file once and guards each write against its
- * own last write to that file.
- */
-export type CatalogIdentity = string;
 
 /**
  * The synchronous file operations the live `CatalogFiles` runs, each of its operations one call of them, so a guarded
@@ -89,8 +76,6 @@ export type CatalogFileSystem = {
   readonly readExisting: (path: string) => string;
   /** Writes a file's text, making its directory. */
   readonly write: (path: string, text: string) => void;
-  /** Which file `path` names (see `CatalogIdentity`). */
-  readonly identify: (path: string) => CatalogIdentity;
 };
 
 /** Node's file system, as `CatalogFiles.layer()` reads and writes it. */
@@ -101,32 +86,7 @@ export const NODE_CATALOG_FILES: CatalogFileSystem = {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
   },
-  identify: (path) => {
-    // An existing file is its device and inode, through every link; one not created yet is where it will be created.
-    const stats = statSync(path, { throwIfNoEntry: false });
-
-    return stats === undefined ? `new:${pendingPath(path, 0)}` : `file:${stats.dev}:${stats.ino}`;
-  },
 };
-
-// The symbolic links one path may follow before the path counts as unresolved, as the kernel's own limit.
-const MAX_LINKS = 40;
-
-// Where a file that does not exist yet will be created: a dangling link's target, else the real path of its nearest
-// existing directory joined with the rest.
-function pendingPath(path: string, links: number): string {
-  if (links < MAX_LINKS && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
-    return pendingPath(resolve(dirname(path), readlinkSync(path)), links + 1);
-  }
-
-  const parent = dirname(path);
-
-  if (parent === path) {
-    return path;
-  }
-
-  return join(existsSync(parent) ? realpathSync(parent) : pendingPath(parent, links), basename(path));
-}
 
 /** Where catalogs are read and written. */
 export class CatalogFiles
@@ -137,8 +97,6 @@ export class CatalogFiles
       readonly read: (path: string) => Effect.Effect<string | undefined, ProjectIoFailed>;
       /** A catalog's text; a catalog that does not exist fails as its read did. */
       readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
-      /** Which file a catalog path names (see `CatalogIdentity`). */
-      readonly identify: (path: string) => Effect.Effect<CatalogIdentity, ProjectIoFailed>;
       /**
        * Write a catalog's text, making its directory, unless it already holds the text or (under `IfUnchangedFrom`)
        * changed. One operation: its read, its comparison and its write never yield to another fiber in between, so a
@@ -166,15 +124,12 @@ export class CatalogFiles
       readExisting: Effect.fn("CatalogFiles.readExisting")(function* (path: string) {
         return yield* ioEdge("read", () => fs.readExisting(path));
       }),
-      identify: Effect.fn("CatalogFiles.identify")(function* (path: string) {
-        return yield* ioEdge("read", () => fs.identify(path));
-      }),
       // The read, the comparison and the write are one synchronous call: nothing can run between them.
       write: Effect.fn("CatalogFiles.write")(function* (path: string, text: string, guard: WriteGuard) {
         return yield* ioEdge("write", (): WriteOutcome => {
           const current = fs.read(path);
 
-          if (guard._tag === "IfUnchangedFrom" && current !== guard.text) {
+          if (guard._tag === "IfHoldsOneOf" && !guard.texts.has(current)) {
             return "changed";
           }
 

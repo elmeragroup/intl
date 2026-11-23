@@ -2,7 +2,7 @@ import { describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
-import { linkSync, mkdirSync, symlinkSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
 
 import { CatalogFiles, NODE_CATALOG_FILES } from "../src/catalog-files";
@@ -385,6 +385,97 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
 
       expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po, messages/da.po"]);
       expect(project.read("messages/sv.po")).toContain(String.raw`"Language: da\n"`);
+    })
+  );
+
+  // A link through a linked directory: `sv.po -> jump/../nb.po` with `jump -> ../other/sub` names `other/nb.po`, not
+  // `messages/nb.po`. Each path is its own snapshot, so both writes are made and reported, as the layer 4 watch's were
+  // (62bfdb1), and the file the link names exists once the watch is ready.
+  it.effect("writes a catalog whose link resolves through a linked directory", ({ project }) =>
+    Effect.gen(function* () {
+      project.write("elmera-intl.json", TWO_LOCALES);
+      mkdirSync(project.path("messages"));
+      mkdirSync(project.path("other/sub"), { recursive: true });
+      symlinkSync("../other/sub", project.path("messages/jump"));
+      symlinkSync("jump/../nb.po", project.path("messages/sv.po"));
+      const reports = recorded(project);
+      yield* startWatch(project, { report: reports.report });
+
+      expect(reports.lines).toEqual(["wrote messages/nb.po, messages/sv.po"]);
+      expect(project.read("other/nb.po")).toContain(String.raw`"Language: sv\n"`);
+    })
+  );
+
+  // Two locales whose names a case-insensitive file system folds into one file: the second write finds the first's
+  // text, the sync's own, so both are written and reported, as at 62bfdb1, and the file holds the last locale's.
+  it.effect(
+    "writes catalogs whose names a case-insensitive file system folds, each in turn",
+    ({ project, skip }) =>
+      Effect.gen(function* () {
+        project.write("case-probe", "");
+
+        if (!existsSync(project.path("CASE-PROBE"))) {
+          skip("the file system under the test's root is case-sensitive");
+        }
+
+        project.write(
+          "elmera-intl.json",
+          `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "NB"] }`
+        );
+        const reports = recorded(project);
+        yield* startWatch(project, { report: reports.report });
+
+        expect(reports.lines).toEqual(["wrote messages/nb.po, messages/NB.po"]);
+        expect(project.read("messages/nb.po")).toContain(String.raw`"Language: NB\n"`);
+      })
+  );
+
+  // An editor's atomic save (write a new file, rename it over the old) breaks a hard link: nb.po becomes a new file,
+  // and da.po keeps the old one. The check before the first write reads every path, nb's included, so the sync is
+  // superseded with nothing written, as at 62bfdb1, and the next sync merges the save.
+  it.effect("writes nothing when an atomic save breaks a hard link after the plan", ({ project }) =>
+    Effect.gen(function* () {
+      project.write(
+        "elmera-intl.json",
+        `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["sv", "nb", "da"] }`
+      );
+      project.write("messages/nb.po", "");
+      linkSync(project.path("messages/nb.po"), project.path("messages/da.po"));
+      const da = project.path("messages/da.po");
+      let armed = false;
+      let saved = false;
+      const files = wrapped((live) => ({
+        ...live,
+        read: (path) =>
+          live.read(path).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (armed && !saved && path === da) {
+                  saved = true;
+                  const tmp = project.path("messages/nb.po.tmp");
+                  writeFileSync(
+                    tmp,
+                    project
+                      .read("messages/nb.po")
+                      .replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hei"`)
+                  );
+                  renameSync(tmp, project.path("messages/nb.po"));
+                }
+              })
+            )
+          ),
+      }));
+      const reports = recorded(project);
+      yield* startWatch(project, { files, report: reports.report });
+      armed = true;
+      project.write("src/ready.tsx", component("Ready"));
+      yield* TestClock.adjust("1 second");
+
+      expect({ saved, lines: reports.lines.slice(0, 2) }).toEqual({
+        saved: true,
+        lines: ["wrote messages/sv.po, messages/nb.po, messages/da.po", "Superseded"],
+      });
+      expect(project.read("messages/nb.po")).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
     })
   );
 
