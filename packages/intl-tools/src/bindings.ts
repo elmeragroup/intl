@@ -29,9 +29,15 @@ export const VALUE_TRANSPARENT: ReadonlySet<string> = new Set(["ParenthesizedExp
 export const AWAIT_TRANSPARENT: ReadonlySet<string> = new Set([...VALUE_TRANSPARENT, "AwaitExpression"]);
 
 const PACKAGE_SPECIFIER = /^@elmeragroup\/intl(\/.*)?$/u;
-// An npm package or a Node builtin. Relative, aliased (`@/`, `~/`, `#`) and workspace (`@elmeragroup/`) modules may export
-// an IntlInstance, so their imports stay untraced.
-const FOREIGN_SPECIFIER = /^(?:node:|(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$))/iu;
+// The build-time tools: a package of ours, never an app module, though its scope is the workspace's.
+const TOOLS_SPECIFIER = /^@elmeragroup\/intl-tools(\/.*)?$/u;
+// A package a registry scheme (in any case, as a URL's) names, with or without a version: its name, then its subpath.
+const REGISTRY_SPECIFIER = /^(?:npm|jsr):((?:@[^/@]+\/)?[^/@]+)(?:@[^/]*)?(\/.*)?$/iu;
+// An npm package, or a module a runtime or registry scheme names (`node:`, `bun:`, `deno:`, `npm:`, `jsr:`). Relative,
+// aliased (`@/`, `~/`, `#`) and workspace (`@elmeragroup/`) modules may export an IntlInstance, so their imports stay
+// untraced, as does any other scheme: a `file:` URL names a file of the app, a bundler's `virtual:` module is the
+// app's, and an app may define its own. A drive letter (`c:/`) is no scheme at all.
+const FOREIGN_SPECIFIER = /^(?:(?:node|bun|deno|npm|jsr):|(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$))/iu;
 const WORKSPACE_SCOPE = "@elmeragroup/";
 // Values written in the file that hold no other value: a primitive is data; a function or class is code, so passing one
 // to a call may make the call return anything (`useMemo(make, [])`).
@@ -55,10 +61,49 @@ const MAX_ALIAS_DEPTH = 16;
  * Whether a specifier names the package or one of its subpaths.
  *
  * @param specifier - An import specifier.
- * @returns `true` for `@elmeragroup/intl` and `@elmeragroup/intl/*`.
+ * @returns `true` for `@elmeragroup/intl` and `@elmeragroup/intl/*`, also when a registry scheme names them
+ *   (`npm:@elmeragroup/intl@1.2.3/react`, `jsr:@elmeragroup/intl/react`).
  */
 export function isPackageSpecifier(specifier: string): boolean {
-  return PACKAGE_SPECIFIER.test(specifier);
+  return PACKAGE_SPECIFIER.test(unqualified(specifier));
+}
+
+// The package a registry scheme names, without the scheme or a version: Deno imports the intl packages as
+// `npm:@elmeragroup/intl@1.2.3/react` or `jsr:@elmeragroup/intl/react`, which are the packages themselves.
+function unqualified(specifier: string): string {
+  const qualified = REGISTRY_SPECIFIER.exec(specifier);
+
+  return qualified ? `${qualified[1] ?? ""}${qualified[2] ?? ""}` : specifier;
+}
+
+// An npm package or a module a runtime or registry scheme names, outside the workspace's scope and other than the intl
+// packages.
+function isForeignSpecifier(specifier: string): boolean {
+  return (
+    FOREIGN_SPECIFIER.test(specifier) &&
+    !specifier.startsWith(WORKSPACE_SCOPE) &&
+    !isPackageSpecifier(specifier)
+  );
+}
+
+// A module of the app: relative, aliased (`@/`, `~/`, `#`) or in the workspace's scope, other than the intl packages.
+function isAppSpecifier(specifier: string): boolean {
+  return !isForeignSpecifier(specifier) && !isPackageSpecifier(specifier) && !TOOLS_SPECIFIER.test(specifier);
+}
+
+// Whether a `var` of this name written in this scope sits inside a catch clause whose parameter has the name. Only a
+// simple parameter can share a name with a `var` in its clause, and the scopes between a `var` and the function body or
+// static block it hoists to are blocks, loops and catch clauses, so a parameter there is the catch clause's.
+function assignsCatchParameter(name: string, site: Scope): boolean {
+  for (let scope: Scope | undefined = site; scope !== undefined && !scope.hoistsVar; scope = scope.parent) {
+    if (
+      scope.bindings.get(name)?.declarations.some((declaration) => declaration._tag === "Parameter") === true
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -175,6 +220,21 @@ export class Bindings {
   }
 
   /**
+   * The first app import a value is rooted in: one the classifier does not call foreign (a relative, `@/`, `~/`, `#` or
+   * `@elmeragroup/*` module other than the intl packages), reached through `await`, `yield*`, the initializer of any
+   * `const`, `let` or `var` declaration of a name (destructured or not), a plain assignment's right-hand side, a member's
+   * object, and a call's or `new`'s callee, never its arguments: `useContext(LocalCtx)` is rooted in `react`. A translator rooted there may be the
+   * package's, returned by a wrapper the extractor never reads, so a bare `t(…)` on it fails in every file (#30).
+   *
+   * @param node - The expression.
+   * @param scope - The scope it is evaluated in.
+   * @returns The import's specifier, or `undefined` when no app import is reached in fewer than `MAX_ALIAS_DEPTH` steps.
+   */
+  appImportOf(node: Node | null | undefined, scope: Scope): string | undefined {
+    return this.appImportAt(node, scope, 0, new Map());
+  }
+
+  /**
    * The import an identifier refers to.
    *
    * @param node - The expression.
@@ -202,7 +262,11 @@ export class Bindings {
   isService(node: Node | null | undefined, scope: Scope): boolean {
     const imported = this.importOf(node, scope);
 
-    return imported?.source === SERVICE.source && imported.imported === SERVICE.imported;
+    return (
+      imported !== undefined &&
+      unqualified(imported.source) === SERVICE.source &&
+      imported.imported === SERVICE.imported
+    );
   }
 
   /**
@@ -310,6 +374,81 @@ export class Bindings {
     }
   }
 
+  // `visited` holds the shallowest depth each binding's declarations were walked at in this lookup. One reached again at
+  // that depth or deeper is skipped, so `var t = t` ends and a name redeclared many times is walked once per depth, not
+  // once per declaration; one reached shallower is walked again, because the deeper walk may have spent its depth budget
+  // before reaching the import (`var t = a12(); var t = mid();`).
+  private appImportAt(
+    node: Node | null | undefined,
+    scope: Scope,
+    depth: number,
+    visited: Map<Binding, number>
+  ): string | undefined {
+    const value = unwrap(node, AWAIT_TRANSPARENT);
+
+    if (!value || depth >= MAX_ALIAS_DEPTH) {
+      return undefined;
+    }
+
+    switch (value.type) {
+      case "Identifier": {
+        const binding = resolveName(scope, value.name);
+        const walked = binding === undefined ? undefined : visited.get(binding);
+
+        if (binding === undefined || (walked !== undefined && walked <= depth)) {
+          return undefined;
+        }
+
+        visited.set(binding, depth);
+
+        for (const declaration of binding.declarations) {
+          const found = this.appImportOfDeclaration(value.name, declaration, depth, visited);
+
+          if (found !== undefined) {
+            return found;
+          }
+        }
+
+        return undefined;
+      }
+      // A plain `yield` receives its value from whoever resumes the generator.
+      case "YieldExpression":
+        return value.delegate ? this.appImportAt(value.argument, scope, depth + 1, visited) : undefined;
+      case "MemberExpression":
+        return this.appImportAt(value.object, scope, depth + 1, visited);
+      case "CallExpression":
+      case "NewExpression":
+        return this.appImportAt(value.callee, scope, depth + 1, visited);
+      // An assignment's value is its right-hand side: a TypeScript namespace's export compiles to one
+      // (`const t = _Labels.t = getT()`). A compound assignment computes a new value.
+      case "AssignmentExpression":
+        return value.operator === "=" ? this.appImportAt(value.right, scope, depth + 1, visited) : undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  // A `var` written inside `catch (name)` assigns the catch parameter, not the hoisted name, so its initializer never
+  // reaches a read of the name outside the clause.
+  private appImportOfDeclaration(
+    name: string,
+    declaration: Declaration,
+    depth: number,
+    visited: Map<Binding, number>
+  ): string | undefined {
+    switch (declaration._tag) {
+      case "Import":
+        return isAppSpecifier(declaration.source) ? declaration.source : undefined;
+      case "Variable":
+        return assignsCatchParameter(name, declaration.site)
+          ? undefined
+          : this.appImportAt(declaration.declarator.init, declaration.site, depth + 1, visited);
+      case "Local":
+      case "Parameter":
+        return undefined;
+    }
+  }
+
   // A literal holding these values: data when every one is, untraced when any is (`{ a: intl }` carries an
   // IntlInstance), else local.
   private literalRoot(values: ReadonlyArray<Node>, scope: Scope, depth: number): Root {
@@ -325,9 +464,7 @@ export class Bindings {
   private rootOfDeclaration(declaration: Declaration, depth: number): Root {
     switch (declaration._tag) {
       case "Import":
-        return FOREIGN_SPECIFIER.test(declaration.source) && !declaration.source.startsWith(WORKSPACE_SCOPE)
-          ? "foreign"
-          : "untraced";
+        return isForeignSpecifier(declaration.source) ? "foreign" : "untraced";
       case "Variable":
         return declaration.constant ? this.rootOfVariable(declaration, depth) : "untraced";
       case "Local":

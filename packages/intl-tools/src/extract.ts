@@ -645,9 +645,7 @@ class Extraction {
     }
 
     if (callee.type === "Identifier") {
-      const origin = this.originOf(callee);
-
-      if (origin === "t") {
+      if (this.kindOf(callee) === "t") {
         const source = literalValue(first);
 
         if (source === undefined || first === undefined) {
@@ -655,12 +653,14 @@ class Extraction {
         } else {
           this.push(source, undefined, []);
         }
-      } else if (this.importsPackage && callee.name === "t" && !this.cannotHoldT(callee)) {
-        // Outside an importing file a bare t cannot hold a package translator: passing or exporting one fails where it is bound.
-        this.fail(
-          node,
-          "cannot trace `t` to useT() or getT() in this file, so `t(…)` is not extracted; bind `const t = useT()` (or `await getT()`) here"
-        );
+      } else if (callee.name === "t") {
+        // In every file, a t rooted in an app import may be the package's translator, returned by a wrapper the
+        // extractor never reads (#30). In an importing file, any t that may hold one fails.
+        const appImport = this.bindings.appImportOf(callee, this.scope);
+
+        if (appImport !== undefined || (this.importsPackage && !this.cannotHoldT(callee))) {
+          this.fail(node, untracedT(appImport, this.importsPackage));
+        }
       }
 
       return;
@@ -739,6 +739,21 @@ class Extraction {
       code: this.code,
     };
   }
+}
+
+// Why a bare `t(…)` is not extracted. The migration advice depends on the file: excluding or renaming in a file that
+// imports the package would lose its intl checks, so that file is pointed at the README's adapter and split remedies.
+function untracedT(appImport: string | undefined, importsPackage: boolean): string {
+  const from = appImport === undefined ? "" : `; it comes from \`${appImport}\``;
+  const base = `cannot trace \`t\` to useT() or getT(), or to the \`.t\` of an IntlInstance from useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\`, in this file${from}, so \`t(…)\` is not extracted; bind it here (\`const t = useT()\`, \`const t = await getT()\`, or an instance's \`const { t } = await getIntl()\`), or translate \`msg()\` descriptors with \`t.from(descriptor)\` / \`.t.from\``;
+
+  if (!importsPackage) {
+    return `${base}. If this \`t\` is another library's translator (an app module wrapping it while the app migrates), rename it in this file, or, if this file's only i18n is this legacy translator, list this file in \`exclude\` and turn \`elmera-intl/extractable\` off for it (see the README's migration section)`;
+  }
+
+  return appImport === undefined
+    ? base
+    : `${base}. If this \`t\` is another library's translator, have its module expose it under another name, or move the code that uses it to a file without the intl package and give that file a legacy-only remedy too (see the README's migration section)`;
 }
 
 // Whether an identifier is read here, rather than declared or used as a property or label name.

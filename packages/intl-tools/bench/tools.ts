@@ -82,6 +82,34 @@ export const View = () => <T>Welcome to feature ${i}</T>;
 `
     );
   }
+  // A file still on another library: bare `t(…)` calls with npm provenance, which pass but are each traced for an app
+  // import.
+  write(
+    "src/legacy/view.tsx",
+    `import i18next from "i18next";
+import { useTranslation } from "react-i18next";
+
+export function Legacy() {
+  const { t } = useTranslation();
+  return [t("legacy.title"), t("legacy.body"), t("legacy.footer")];
+}
+
+export async function legacyServer(lng: string) {
+  const t = await i18next.getFixedT(lng);
+  return [t("legacy.server.title"), t("legacy.server.body")];
+}
+`
+  );
+  // A name redeclared many times, each bare `t(…)` traced through every declaration: the walk visits each binding once
+  // per depth, so its cost grows with the declarations, not with their square.
+  write(
+    "src/legacy/redeclared.tsx",
+    `export function redeclared(c: boolean) {
+${Array.from({ length: 1024 }, () => "  if (c) { var t = t; }").join("\n")}
+  return [${Array.from({ length: 8 }, (_, i) => `t("legacy.redeclared.${i}")`).join(", ")}];
+}
+`
+  );
 }
 
 /** One spawned CLI process: how long it ran, its exit code and what it wrote to stderr. */

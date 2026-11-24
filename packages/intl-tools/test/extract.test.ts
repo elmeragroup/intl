@@ -155,11 +155,6 @@ function E() { const t = useT(); return <T>Read <a title={t("Tooltip")}>terms</a
       `import { getT } from "${PKG}/server";\nasync function f(c: boolean) { if (c) { var t = await getT(); } return t!("Lit"); }`,
       ["Lit"],
     ],
-    [
-      "residual: non-importing file destructuring t from an app wrapper is missed",
-      `async function f() { const { t } = await getAppIntl(); return t("Lit"); }`,
-      [],
-    ],
   ] as const)("follows %s", (_label, code, expected) => {
     expect(keys(code)).toEqual(expected);
   });
@@ -407,7 +402,50 @@ function result(code: string): ReadonlyArray<string> {
 const UNTRACED_INTL = (receiver: string) =>
   `cannot trace \`${receiver}\` to useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\` in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``;
 const UNTRACED_T =
-  "cannot trace `t` to useT() or getT() in this file, so `t(…)` is not extracted; bind `const t = useT()` (or `await getT()`) here";
+  "cannot trace `t` to useT() or getT(), or to the `.t` of an IntlInstance from useIntl(), getIntl(), createIntl() or `yield* CurrentIntl`, in this file, so `t(…)` is not extracted; bind it here (`const t = useT()`, `const t = await getT()`, or an instance's `const { t } = await getIntl()`), or translate `msg()` descriptors with `t.from(descriptor)` / `.t.from`";
+
+// Unit under test: the package specifier classifier, for a specifier that names the intl package through a registry
+// scheme, as Deno imports it. Oracle: the keys and failures the same code gives when it imports `@elmeragroup/intl`,
+// written out per case; the package under a scheme is the package, never an npm package whose translator passes.
+describe("the package under a registry scheme", () => {
+  it.each([
+    [
+      "useT() from npm: in a file that imports msg() without a scheme",
+      `import { msg } from "${PKG}/core";\nimport { useT } from "npm:${PKG}/react";\nexport const D = msg("Due");\nexport function A() { const t = useT(); return t("Pay invoice"); }`,
+      ["Due", "Pay invoice"],
+    ],
+    [
+      "useT() from a versioned npm: specifier",
+      `import { useT } from "npm:${PKG}@1.2.3/react";\nexport function A() { const t = useT(); return t("Pay invoice"); }`,
+      ["Pay invoice"],
+    ],
+    [
+      "getT() from jsr:",
+      `import { getT } from "jsr:${PKG}/server";\nexport async function f() { const t = await getT(); return t("Pay invoice"); }`,
+      ["Pay invoice"],
+    ],
+    [
+      "yield* CurrentIntl from npm:",
+      `import * as Effect from "effect/Effect";\nimport { CurrentIntl } from "npm:${PKG}@1.2.3/effect";\nexport const f = Effect.gen(function* () { const { t } = yield* CurrentIntl; return t("Pay invoice"); });`,
+      ["Pay invoice"],
+    ],
+    [
+      "an IntlInstance called as t in a file that also imports the package without a scheme",
+      `import { msg } from "${PKG}/core";\nimport { useIntl } from "npm:${PKG}/react";\nexport const D = msg("Due");\nexport function A() { const t = useIntl(); return t("Pay invoice"); }`,
+      [UNTRACED_T],
+    ],
+    [
+      "a namespace import from jsr:",
+      `import * as intl from "jsr:${PKG}@1.2.3/react";\nexport const D = intl;`,
+      [
+        "`import * as` the intl package is not extractable; use named imports",
+        "aliasing `intl` from the intl package hides its call sites; use the import directly",
+      ],
+    ],
+  ] as const)("reads %s as the package", (_label, code, expected) => {
+    expect(result(code)).toEqual(expected);
+  });
+});
 
 // Unit under test: receiver provenance (R2-6). Oracle: the hand-written messages and diagnostics each receiver must produce:
 // traced to the documented surface, extracted; unrelated (a non-intl package import or a value written in this file), ignored;
@@ -461,6 +499,12 @@ describe("receiver provenance", () => {
       "ctx.intl",
     ],
     ["a relative import", `import { intl } from "./intl";\nexport const x = intl.t("P");`, "intl"],
+    // A Vite plugin's virtual module is the app's: only runtime and registry schemes count as npm packages.
+    [
+      "a virtual module's import",
+      `import { intl } from "virtual:i18n";\nexport const x = intl.t("Pay invoice");`,
+      "intl",
+    ],
     [
       "a workspace import",
       `import { intl } from "@elmeragroup/api/intl";\nexport const x = intl.t("P");`,
@@ -545,6 +589,235 @@ describe("receiver provenance", () => {
     expect(result(`${pre}export function D(t: (s: string) => string) { return t("Param"); }`)).toEqual([
       UNTRACED_T,
     ]);
+  });
+});
+
+// What a file that does not import the package is told when its `t` comes from an app module: the base text, the
+// module, and the migration advice only such a file gets.
+const APP_T = (specifier: string) =>
+  `cannot trace \`t\` to useT() or getT(), or to the \`.t\` of an IntlInstance from useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\`, in this file; it comes from \`${specifier}\`, so \`t(…)\` is not extracted; bind it here (\`const t = useT()\`, \`const t = await getT()\`, or an instance's \`const { t } = await getIntl()\`), or translate \`msg()\` descriptors with \`t.from(descriptor)\` / \`.t.from\`. If this \`t\` is another library's translator (an app module wrapping it while the app migrates), rename it in this file, or, if this file's only i18n is this legacy translator, list this file in \`exclude\` and turn \`elmera-intl/extractable\` off for it (see the README's migration section)`;
+// What a file that imports the package is told: no exclusion or rename advice, since either would lose its intl checks,
+// and a split file still needs a legacy-only remedy.
+const APP_T_IMPORTING = (specifier: string) =>
+  `cannot trace \`t\` to useT() or getT(), or to the \`.t\` of an IntlInstance from useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\`, in this file; it comes from \`${specifier}\`, so \`t(…)\` is not extracted; bind it here (\`const t = useT()\`, \`const t = await getT()\`, or an instance's \`const { t } = await getIntl()\`), or translate \`msg()\` descriptors with \`t.from(descriptor)\` / \`.t.from\`. If this \`t\` is another library's translator, have its module expose it under another name, or move the code that uses it to a file without the intl package and give that file a legacy-only remedy too (see the README's migration section)`;
+
+// A diamond of const aliases into an app import: `mid` reaches `c2` in one step, `a<ALIASES>` only through the whole
+// chain, which spends the depth budget before `c1`. A walk that visits `c2` once, the first time it is reached, misses
+// the app import when the long chain is declared first.
+const ALIASES = 12;
+const diamond = (declarations: string) =>
+  `import { getT } from "./wrap";\nconst c1 = getT;\nconst c2 = c1;\nconst mid = c2;\n${Array.from(
+    { length: ALIASES },
+    (_, i) => `const a${i + 1} = ${i === 0 ? "c2" : `a${i}`};`
+  ).join("\n")}\nexport function f() {\n  ${declarations}\n  return t("Hi");\n}\n`;
+
+// A translator `steps` steps from the app import: `const t = a<n>()` is two (the initializer and the call's callee), and
+// each const alias `a<i>` one more. The walk is bounded at 16, the limit the README states.
+const chain = (steps: number) =>
+  `import { getT } from "./wrap";\nconst a0 = getT;\n${Array.from(
+    { length: steps - 3 },
+    (_, i) => `const a${i + 1} = a${i};`
+  ).join("\n")}\nexport function f() { const t = a${steps - 3}(); return t("Hi"); }\n`;
+
+// Unit under test: a bare `t(…)` call in a file, by its translator's provenance (#30). Oracle: the hand-written failure
+// each translator rooted in an app import must produce, naming that import, and the keys each other translator keeps.
+// The page this replaces extracted nothing from such a call, in a file that does not import the package.
+describe("a bare t from an app import", () => {
+  it.each([
+    ["a named import of t", `import { t } from "./x";\nexport const x = t("Hi");`, "./x"],
+    [
+      "a relative wrapper's awaited result",
+      `import { translator } from "../shared/wrap";\nexport async function f() { const t = await translator(); return t("Hi"); }`,
+      "../shared/wrap",
+    ],
+    // Only runtime and registry schemes are foreign: a `file:` URL names a file of the app, a one-letter prefix is a
+    // Windows drive, and any other scheme (Vite's `virtual:`, an app's own) may name an app module.
+    ...[
+      "@/lib/wrap",
+      "~/lib/wrap",
+      "#lib/wrap",
+      "@elmeragroup/shared/wrap",
+      "@elmeragroup/intl-wrapper",
+      "file:///app/wrap.js",
+      "c:/app/wrap.js",
+      "virtual:i18n",
+      "app:wrap",
+    ].map(
+      (specifier) =>
+        [
+          `a wrapper from ${specifier}`,
+          `import { translator } from "${specifier}";\nexport async function f() { const t = await translator(); return t("Hi"); }`,
+          specifier,
+        ] as const
+    ),
+    [
+      "an app hook named useT",
+      `import { useT } from "../shared/hooks";\nexport function A() { const t = useT(); return t("Hi"); }`,
+      "../shared/hooks",
+    ],
+    [
+      "{ t } from an app hook",
+      `import { useAppIntl } from "./app-intl";\nexport function A() { const { t } = useAppIntl(); return t("Hi"); }`,
+      "./app-intl",
+    ],
+    [
+      "{ t } from an awaited app factory",
+      `import { getAppIntl } from "./app-intl";\nexport async function f() { const { t } = await getAppIntl(); return t("Hi"); }`,
+      "./app-intl",
+    ],
+    [
+      "{ t } from yield* an app service",
+      `import { AppIntl } from "./app-intl";\nexport function* f() { const { t } = yield* AppIntl; return t("Hi"); }`,
+      "./app-intl",
+    ],
+    [
+      "yield* an app factory",
+      `import { getAppT } from "./app-intl";\nexport function* f() { const t = yield* getAppT(); return t("Hi"); }`,
+      "./app-intl",
+    ],
+    [
+      "a let",
+      `import { translator } from "./wrap";\nexport async function f() { let t = await translator(); return t("Hi"); }`,
+      "./wrap",
+    ],
+    [
+      "a var redeclared from two app imports",
+      `import { a } from "./a";\nimport { b } from "./b";\nexport function f() { var t = a(); var t = b(); return t("Hi"); }`,
+      "./a",
+    ],
+    [
+      "a namespace import's member",
+      `import * as wrap from "./wrap";\nexport async function f() { const t = await wrap.getT(); return t("Hi"); }`,
+      "./wrap",
+    ],
+    [
+      "an app factory given arguments",
+      `import { getAppT } from "./wrap";\nexport async function f(request: Request) { const t = await getAppT(request); return t("Hi"); }`,
+      "./wrap",
+    ],
+    [
+      "{ t } from an app class's instance",
+      `import { Legacy } from "./legacy";\nexport function f(locale: string) { const { t } = new Legacy(locale); return t("key"); }`,
+      "./legacy",
+    ],
+    [
+      "a TypeScript namespace's exported t",
+      // oxc compiles the export to an assignment: `const t = _Labels.t = getT()`.
+      `import { getT } from "../shared/wrap";\nexport namespace Labels { export const t = getT(); export const title = t("Namespace title"); }`,
+      "../shared/wrap",
+    ],
+    ["a translator 15 steps from the import", chain(15), "./wrap"],
+    [
+      "a hoisted var that shadows an outer t",
+      `import { getT } from "./wrap";\nconst t = (s: string) => s;\nexport function f(c: boolean) { if (c) { var t = getT(); } return t("Hi"); }`,
+      "./wrap",
+    ],
+    // By decision: an app module wrapping i18next fails like any other, and the message names the remedy.
+    [
+      "the i18next App Router form",
+      `import { useTranslation } from "../i18n";\nexport default async function Page({ lng }: { lng: string }) { const { t } = await useTranslation(lng); return <h1>{t("title")}</h1>; }`,
+      "../i18n",
+    ],
+    [
+      "a redeclared var, the long alias chain first",
+      diamond(`var t = a${ALIASES}();\n  var t = mid();`),
+      "./wrap",
+    ],
+    [
+      "a redeclared var, the long alias chain last",
+      diamond(`var t = mid();\n  var t = a${ALIASES}();`),
+      "./wrap",
+    ],
+  ] as const)("reports %s in a file that does not import the package", (_label, code, specifier) => {
+    expect(result(code)).toEqual([APP_T(specifier)]);
+  });
+
+  // A type-only import is erased by the compiler, but the file still counts as importing the package.
+  it.each([
+    ["a value import", `import { msg } from "${PKG}/react";\nexport const D = msg("D");\n`],
+    ["a type-only import", `import type { IntlInstance } from "${PKG}/core";\n`],
+  ] as const)("names the app import without the exclusion advice in a file with %s", (_label, intlImport) => {
+    expect(
+      result(
+        `${intlImport}import { translator } from "../shared/wrap";\nexport async function f() { const t = await translator(); return t("Hi"); }`
+      )
+    ).toEqual([APP_T_IMPORTING("../shared/wrap")]);
+  });
+
+  it.each([
+    ["i18next's t", `import { t } from "i18next";\nexport const x = t("k");`],
+    [
+      "react-i18next's useTranslation()",
+      `import { useTranslation } from "react-i18next";\nexport function A() { const { t } = useTranslation(); return t("k"); }`,
+    ],
+    [
+      "next-intl's useTranslations()",
+      `import { useTranslations } from "next-intl";\nexport function A() { const t = useTranslations("ns"); return t("k"); }`,
+    ],
+    [
+      "next-intl's getTranslations()",
+      `import { getTranslations } from "next-intl/server";\nexport async function f() { const t = await getTranslations({ locale: "nb", namespace: "ns" }); return t("k"); }`,
+    ],
+    [
+      "Lingui's useLingui()",
+      `import { useLingui } from "@lingui/react";\nexport function A() { const { t } = useLingui(); return t("k"); }`,
+    ],
+    ["a parameter", `export function f(t: (s: string) => string) { return t("k"); }`],
+    [
+      "an npm hook given an app value",
+      `import { useContext } from "react";\nimport { LocalCtx } from "./ctx";\nexport function A() { const { t } = useContext(LocalCtx); return t("k"); }`,
+    ],
+    ["a local function", `function t(s: string) { return s; }\nexport const x = t("k");`],
+    [
+      "another name called on an app import",
+      `import { formatDate } from "./date";\nexport const x = formatDate(0);`,
+    ],
+    [
+      "a plain yield, whose value comes from the caller",
+      `import { getAppT } from "./wrap";\nexport function* f() { const t = yield getAppT(); return t("k"); }`,
+    ],
+    ["the tools package", `import { t } from "@elmeragroup/intl-tools/compile";\nexport const x = t("k");`],
+    ...["node:test", "bun:test", "deno:test", "npm:vitest", "jsr:@std/testing"].map(
+      (specifier) =>
+        [
+          `a module the ${specifier.slice(0, specifier.indexOf(":"))}: scheme names`,
+          `import { test as t } from "${specifier}";\nt("k", () => {});`,
+        ] as const
+    ),
+    [
+      "i18next's t and its instance's .t from the npm: scheme",
+      `import i18next, { t } from "npm:i18next";\nexport const x = [t("k"), i18next.t("k")];`,
+    ],
+    ["a translator 16 steps from the import, beyond the walk's bound", chain(16)],
+    ["a var initialized from itself", `export function f() { var t = t; return t("k"); }`],
+    [
+      "a block-scoped const that shadows the app import in a hoisted var's initializer",
+      // The import is used elsewhere, so the compiler keeps it.
+      `import { getT } from "./wrap";\nexport const g = getT;\nexport function f() { { const getT = () => (s: string) => s; var t = getT(); } return t("k"); }`,
+    ],
+    [
+      "an npm translator a var in catch (t) does not reassign",
+      // JavaScript assigns `getAppT()` to the catch parameter, so the `t` read after the `try` still holds `legacy`.
+      `import { legacy } from "legacy-i18n";\nimport { getAppT } from "./wrap";\nexport function f() {\n  var t = legacy;\n  try { return 1; } catch (t) { var t = getAppT(); }\n  return t("x");\n}\n`,
+    ],
+  ] as const)("ignores %s in a file that does not import the package", (_label, code) => {
+    expect(result(code)).toEqual([]);
+  });
+
+  // An IntlInstance is not a translator: the message names its `.t` and the destructuring that binds it.
+  it("tells a t bound to an IntlInstance how to bind the instance's translator", () => {
+    const code = (binding: string) =>
+      `import { getIntl } from "${PKG}/server";\nexport async function f() { const ${binding} = await getIntl(); return t("Title"); }`;
+
+    expect([result(code("t")), result(code("{ t }"))]).toEqual([[UNTRACED_T], ["Title"]]);
+  });
+
+  it("keeps extracting a var redeclared from an app wrapper and from useT()", () => {
+    expect(
+      result(
+        `import { useT } from "${PKG}/react";\nimport { wrapper } from "./wrap";\nexport function A() { var t = wrapper(); var t = useT(); return t("Hi"); }`
+      )
+    ).toEqual(["Hi"]);
   });
 });
 

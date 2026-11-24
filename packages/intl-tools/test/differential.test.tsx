@@ -142,7 +142,7 @@ const rows: ReadonlyArray<Row> = [
   {
     label: "a translator shadowed by a parameter is not a translator",
     code: `function C() { const t = useT(); const f = (t: (s: string) => string) => t("Param"); return <>{t("Outer")}{f((s) => s)}</>; }\nexport const el = <C />;`,
-    fails: "cannot trace `t` to useT() or getT()",
+    fails: "cannot trace `t` to useT() or getT(), or to the `.t` of an IntlInstance",
   },
   {
     label: "var t hoisted out of a nested block",
