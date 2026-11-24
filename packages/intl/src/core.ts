@@ -24,3 +24,4 @@ export {
   type ServerAdapter,
   type SwitchOutcome,
 } from "./adapter";
+export { negotiateLocale, type NegotiateLocaleOptions } from "./negotiate";

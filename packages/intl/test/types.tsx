@@ -2,8 +2,8 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-import type { CreateIntlOptions, Descriptor } from "@elmeragroup/intl/core";
-import { createIntl, msg } from "@elmeragroup/intl/core";
+import type { CreateIntlOptions, Descriptor, NegotiateLocaleOptions } from "@elmeragroup/intl/core";
+import { createIntl, msg, negotiateLocale } from "@elmeragroup/intl/core";
 import { CurrentIntl } from "@elmeragroup/intl/effect";
 import { createRequestConfig } from "@elmeragroup/intl/next/server";
 import { Select, Val } from "@elmeragroup/intl/react";
@@ -113,3 +113,26 @@ const _fixed: Effect.Effect<string> = Effect.provide(greet, CurrentIntl.layer(fi
 // The request config resolves the whole IntlConfig: an adapter without a time zone would leave dates in the host's.
 // @ts-expect-error createRequestConfig needs resolveTimeZone
 createRequestConfig({ resolveLocale: () => "en", loadCatalog: () => Promise.resolve(english()) });
+
+// negotiateLocale infers the locales from the list and checks the aliases against them, never widening the list.
+declare const header: string | null;
+const SHIPPED = ["en", "nb"] as const;
+// @ts-expect-error an alias names a shipped locale, with an `as const` list
+negotiateLocale(header, SHIPPED, { aliases: { no: "zz" } });
+// @ts-expect-error an alias names a shipped locale, with an inline list
+negotiateLocale(header, ["en", "nb"], { aliases: { no: "zz" } });
+declare const wider: NegotiateLocaleOptions<"en" | "nb" | "zz">;
+// @ts-expect-error options typed for more locales than the list
+negotiateLocale(header, SHIPPED, wider);
+// The result is exactly the list's locales or none, inferred, not narrowed to the alias targets nor widened. `Equal` is
+// true only when each type is assignable to the other, where an annotation checks one direction alone. It passes an
+// `any` result, which `_always` below rejects.
+type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const negotiated = negotiateLocale(header, SHIPPED, { aliases: { no: "nb" } });
+const _negotiated: Equal<typeof negotiated, "en" | "nb" | undefined> = true;
+// An explicit list type alone is enough: the alias type defaults to it.
+const _explicit: "en" | "nb" | undefined = negotiateLocale<"en" | "nb">(header, SHIPPED, {
+  aliases: { no: "nb" },
+});
+// @ts-expect-error the header may accept none, so the caller picks its default
+const _always: "en" | "nb" = negotiated;

@@ -1,5 +1,5 @@
 import type * as Compile from "#compile";
-// Benchmark, not a test: per-request translation cost over a compiled catalog and the client formatter's size, the
+// Benchmark, not a test: per-request translation and Accept-Language negotiation cost and the client formatter's size, the
 // numbers a PR's G9 gate reports. Run `pnpm bench` from the repository root, which builds both packages first; it
 // reads the built runtime through its exports and the built compiler by path (intl-tools depends on this package,
 // not the reverse).
@@ -10,7 +10,7 @@ import { gzipSync } from "node:zlib";
 import { rolldown } from "rolldown";
 
 import type { MessageValue } from "@elmeragroup/intl/core";
-import { createIntl } from "@elmeragroup/intl/core";
+import { createIntl, negotiateLocale } from "@elmeragroup/intl/core";
 
 const MESSAGES = 200;
 const WARM_UP = 20;
@@ -98,12 +98,46 @@ async function gzipBytes(entry: string): Promise<number> {
   return output.reduce((sum, file) => sum + (file.type === "chunk" ? gzipSync(file.code).length : 0), 0);
 }
 
+// One request's negotiation: a browser's header with regions, weights and a wildcard, over an app's four locales and
+// the Norwegian aliases. Each call builds its tables and parses the header, as each request does.
+const HEADER = "nb-NO,nb;q=0.9,sv;q=0.8,en-US;q=0.7,en;q=0.6,*;q=0.1";
+const LOCALES = ["en", "nb", "sv", "fi"] as const;
+const NEGOTIATIONS = 1000;
+
+// Hostile headers: one range of two-character subtags that falls back to `nb` at its root. Lookup walks its subtags
+// once, so the cost per subtag stays flat as the range grows; a quadratic walk would grow it in step with the
+// size. 1,000 subtags (3 KB) fits Node's default 16 KB limit on a request's headers; the larger ones show the
+// growth rate.
+const HOSTILE_SUBTAGS = [1000, 10_000, 50_000] as const;
+const HOSTILE_NEGOTIATIONS = 10;
+
+function hostileRange(subtags: number): string {
+  return ["nb", ...Array.from({ length: subtags - 1 }, () => "zz")].join("-");
+}
+
+function negotiations(header: string, count: number): number {
+  const start = performance.now();
+  for (let i = 0; i < count; i += 1) {
+    negotiateLocale(header, LOCALES, { aliases: { no: "nb", nn: "nb" } });
+  }
+
+  return ((performance.now() - start) * 1000) / count;
+}
+
 const cold = request();
 for (let i = 0; i < WARM_UP; i += 1) {
   request();
 }
 
 const warm = median(Array.from({ length: REQUESTS }, request));
+negotiations(HEADER, NEGOTIATIONS);
+const negotiation = median(Array.from({ length: WARM_UP }, () => negotiations(HEADER, NEGOTIATIONS)));
+const hostile = HOSTILE_SUBTAGS.map((subtags) => {
+  const range = hostileRange(subtags);
+  const perCall = median(Array.from({ length: WARM_UP }, () => negotiations(range, HOSTILE_NEGOTIATIONS)));
+
+  return { subtags, perCall };
+});
 const formatter = fileURLToPath(new URL("../dist/internal/formatter.js", import.meta.url));
 const sizes = [
   ["intl-messageformat (with parser), min+gzip", await gzipBytes("intl-messageformat")],
@@ -116,5 +150,13 @@ console.table([
   { metric: `cold request, ${MESSAGES} messages (ms)`, value: cold.toFixed(2) },
   { metric: `warm request, ${MESSAGES} messages, median of ${REQUESTS} (ms)`, value: warm.toFixed(3) },
   { metric: "warm per message (µs)", value: ((warm * 1000) / MESSAGES).toFixed(2) },
+  {
+    metric: `negotiateLocale, 6-range header, median of ${WARM_UP} × ${NEGOTIATIONS} (µs per call)`,
+    value: negotiation.toFixed(2),
+  },
+  ...hostile.map(({ subtags, perCall }) => ({
+    metric: `negotiateLocale, one ${subtags.toLocaleString("en")}-subtag range to its root, median of ${WARM_UP} × ${HOSTILE_NEGOTIATIONS} (µs per call; ns per subtag)`,
+    value: `${perCall.toFixed(1)}; ${((perCall * 1000) / subtags).toFixed(1)}`,
+  })),
   ...sizes.map(([metric, bytes]) => ({ metric, value: `${bytes} B` })),
 ]);

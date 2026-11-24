@@ -44,12 +44,21 @@ The public subpaths; the `/internal/*` subpaths exist for `@elmeragroup/intl-too
 
 | Subpath                 | Exports                                                                                                                                                                                                                                                                                                     |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/core`                 | `createIntl`, `msg`, `keyOf`, `serialize`, `SERIALIZER_VERSION`, `createLocaleSwitcher`, `resolveIntlConfig`, types (`IntlInstance`, `Translate`, `Descriptor`, `Catalog`, `Formats`, `IntlConfig`, `ServerAdapter`, `RequestConfig`, `SwitchOutcome`). No React.                                           |
+| `/core`                 | `createIntl`, `msg`, `keyOf`, `serialize`, `SERIALIZER_VERSION`, `createLocaleSwitcher`, `resolveIntlConfig`, `negotiateLocale` (Accept-Language), types (`IntlInstance`, `Translate`, `Descriptor`, `Catalog`, `Formats`, `IntlConfig`, `ServerAdapter`, `RequestConfig`, `SwitchOutcome`). No React.      |
 | `/react`                | `IntlProvider`, `useIntl`, `T`, `Val`, `Plural`, `Select`, `useT`, `useFormat`, `msg`, `createIntl`. Same list under `default` and `react-server`; the `react-server` build reads the request's `IntlInstance` (`React.cache`), and its `IntlProvider` is the client one, so a server layout can render it. |
 | `/server`               | `getIntl`, `getT`, `getFormat`, read from the host's request config (Next: `withIntl` aliases it to the app's `intl/request.ts`).                                                                                                                                                                           |
 | `/next`, `/next/server` | `useLocaleSwitch(persist)` (client); `createRequestConfig(adapter)` (server), the default export of `intl/request.ts`.                                                                                                                                                                                      |
 | `/start`                | `useLocaleSwitch(persist)`, `loadIntlConfig`, `createCatalogReload(import.meta.hot)` (dev: a PO save reruns the loaders).                                                                                                                                                                                   |
 | `/effect`               | `CurrentIntl`, the translator as an Effect service: `const { t } = yield* CurrentIntl`, provided per request by `CurrentIntl.provide(options)` or for a whole program by `CurrentIntl.layer(options)` (see "Effect" below). Needs the optional peer `effect` (`^4.1.3`).                                    |
+
+`negotiateLocale(header, locales, { aliases })` (`/core`) picks the most preferred of `locales` an Accept-Language
+header accepts (RFC 9110 §12.4.2 weights, RFC 4647 §3.4 lookup, so `nb-NO` finds `nb`), written as in `locales`, or
+`undefined` when it accepts none, so the app's default answers. The wildcard names no locale: `*` alone gives
+`undefined`, the app's default, and `*, sv;q=0.5` gives `sv`. A range rejected with `q=0` excludes the locale it names
+on every path, and its alias target only through an alias: with `{ no: "nb", nn: "nb" }` and no `no` shipped,
+`nb-NO, nb;q=0` and `nn, no;q=0` are not Bokmål, but `nb, no;q=0` is, since an alias is the app's mapping and never
+takes away a locale the client names. It throws a `RangeError` when the configuration is wrong (an alias naming a
+locale not in the list, two locales differing only in case), on every call, whatever the header.
 
 `<IntlProvider locale catalog timeZone formats>` takes the serializable config, so a Next layout or a Start root loader passes it straight through. The catalog is the request locale's compiled catalog (type `Catalog`, which only the compiler makes, so a PO or a JSON of translations does not type-check): complete, with an untranslated message as its English source, formatted in `en`. A message the catalog lacks renders its source as is when it is plain text; a structured one (not extracted yet: in dev until the watcher writes the PO, about a second) renders its raw source, or `<T>`'s children, and calls `onError` with `MessageNotExtracted`. A message that fails to format (a missing or wrongly typed value: a caller bug the types and `check` rule out) calls `onError`, then throws. Every date and time formats in `timeZone`. `t` and `t.from` always return text, and never call a function value (only `<T>` renders tags). Argument values are typed as next-intl types them: a plain `{x}` (and `<Val>`) takes text only, a number goes through `{x, number}`, `plural` or `selectordinal`, a `Date` through `{x, date}` or `{x, time}`, a select takes text. `t.from` types values from its descriptor's literal; a descriptor widened to `Descriptor` takes untyped values. A number or `Date` that reaches a plain `{x}` untyped (a cast or `any`) fails like a missing argument (`onError`, then a throw), naming the argument and the fix. A present `null` or `undefined` renders as nothing, as in next-intl.
 
@@ -99,7 +108,10 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Layer from "effect/Layer";
 
 import type { Catalog } from "@elmeragroup/intl/core";
+import { negotiateLocale } from "@elmeragroup/intl/core";
 import { CurrentIntl } from "@elmeragroup/intl/effect";
+
+const LOCALES = ["en", "nb"] as const;
 
 // App-owned: compiled catalogs, loaded the app's way (here, `*.po` imports through the Vite plugin).
 const loadCatalog = (locale: "en" | "nb"): Effect.Effect<Catalog> =>
@@ -109,7 +121,12 @@ const loadCatalog = (locale: "en" | "nb"): Effect.Effect<Catalog> =>
 
 const intlOptions = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  const locale = request.cookies.locale === "nb" ? "nb" : "en";
+  // App policy: a stored choice, else the best of Accept-Language (Norwegian and Nynorsk as Bokmål), else English.
+  const stored = LOCALES.find((locale) => locale === request.cookies.locale);
+  const locale =
+    stored ??
+    negotiateLocale(request.headers["accept-language"], LOCALES, { aliases: { no: "nb", nn: "nb" } }) ??
+    "en";
 
   return { locale, catalog: yield* loadCatalog(locale), timeZone: "Europe/Oslo" };
 });
@@ -129,6 +146,9 @@ const { handler, dispose } = HttpRouter.toWebHandler(
   HttpRouter.add("GET", "/", greet).pipe(Layer.provide(IntlMiddleware))
 );
 ```
+
+`negotiateLocale` is the `/core` function described below the subpath table; it is platform-neutral, so a Next adapter or
+a Start server function calls it the same way.
 
 The effect `CurrentIntl.provide` returns fails with the handler's errors and the options effect's, and requires every
 service the options effect uses plus what the handler still requires once `CurrentIntl` is provided. In the loader above a rejected import is a defect, since
