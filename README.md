@@ -13,13 +13,16 @@ parser formats the compiled catalogs per locale.
 | [`packages/intl-e2e`](packages/intl-e2e)         | Private. Fixture apps per host and their Playwright gates, on linked and on packed packages.                                      |
 | [`apps/next-example`](apps/next-example)         | Private. Example: both packages in a Next.js App Router app on Fuse, in four languages, with Playwright specs and Vitest tests.   |
 | [`apps/start-example`](apps/start-example)       | Private. Example: both packages in a TanStack Start app on Fuse, in four languages, with Playwright specs and Vitest tests.       |
+| [`apps/effect-example`](apps/effect-example)     | Private. Example: `@elmeragroup/intl/effect` in an Effect 4 HTTP API on Node, in four languages, with HTTP and Vitest tests.      |
 | `tooling/typescript`                             | Private. Shared TypeScript configuration.                                                                                         |
 | `tooling/lint`                                   | Private. The workspace's own contracts as lint: the `elmera-workspace` oxlint plugin and manifest checks.                         |
 
-Apps depend on `@elmeragroup/intl` and take `@elmeragroup/intl-tools` as a devDependency. The two
-publish together under one version, with provenance, from `main`: a canary for each merge that leaves
-a version bump pending, and stable versions through the Version Packages PR
-([Releases](CONTRIBUTING.md#releases)).
+Apps depend on `@elmeragroup/intl`. A bundled app, as on Next.js or TanStack Start, takes
+`@elmeragroup/intl-tools` as a devDependency, since its build plugin compiles the catalogs; a server
+with no bundler, as the Effect example, imports the tools' `/compile` at runtime to compile them at
+start, so it takes them as a dependency. The two publish together under one version, with
+provenance, from `main`: a canary for each merge that leaves a version bump pending, and stable
+versions through the Version Packages PR ([Releases](CONTRIBUTING.md#releases)).
 
 Canary releases are off until the packages are ready
 ([#4](https://github.com/elmeragroup/intl/issues/4)). Once they are on, install a canary pair at one
@@ -27,7 +30,8 @@ exact version: resolve the tools' canary, write both entries at that exact versi
 The tools pin the runtime's exact version, so that pair always matches. Write the entries rather
 than using `pnpm add`. Over an existing `^0.1.0` entry, `pnpm add` keeps the caret, even with
 `--save-exact`, and saves the runtime as `^<canary>`; a later update could then move the runtime
-alone.
+alone. The command writes the tools for a bundled app; a server with no bundler writes them under
+`dependencies` instead.
 
 ```sh
 V=$(npm view @elmeragroup/intl-tools@canary version) &&
@@ -42,7 +46,7 @@ Requires macOS or glibc-based Linux (the Effect lint pass does not run on musl).
 
 ```sh
 pnpm install
-pnpm dev           # rebuild packages on change; serve the example apps (ports 3030, 3031)
+pnpm dev           # rebuild packages on change; serve the example apps (ports 3030, 3031, 3032)
 pnpm ci:checks     # format, lint, type-check and tests
 pnpm test:e2e      # fixture apps on linked, then packed, packages, and the example apps
 ```

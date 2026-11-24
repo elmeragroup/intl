@@ -30,6 +30,34 @@ describe("chooseLocale", () => {
     { stored: undefined, acceptLanguage: "no", locale: "nb", why: "Norwegian falls back to Bokmål" },
     // RFC 9110 §12.4.2: weight 0 means "not acceptable", and `q` is case-insensitive.
     { stored: undefined, acceptLanguage: "nb;q=0", locale: "en", why: "weight 0 rules a language out" },
+    // RFC 9110 §12.4.2: weight 0 rules a language out wherever it stands, so the Norwegian fallback cannot pick the
+    // Bokmål the client rejected.
+    {
+      stored: undefined,
+      acceptLanguage: "no;q=0.9, nb;q=0, sv;q=0.8",
+      locale: "sv",
+      why: "a rejected Bokmål is no fallback for Norwegian",
+    },
+    {
+      stored: undefined,
+      acceptLanguage: "no, nb;q=0",
+      locale: "en",
+      why: "Norwegian with Bokmål rejected leaves the default",
+    },
+    // RFC 9110 §12.4.2 with RFC 4647 §3.4: a regional range looks up the language the client rejected by name, so the
+    // rejection holds for it too, and the next acceptable language wins.
+    {
+      stored: undefined,
+      acceptLanguage: "nb-NO, nb;q=0, sv;q=0.8",
+      locale: "sv",
+      why: "a rejected Bokmål is no fallback for nb-NO",
+    },
+    {
+      stored: undefined,
+      acceptLanguage: "sv-FI, sv;q=0, fi;q=0.8",
+      locale: "fi",
+      why: "a rejected Swedish is no fallback for sv-FI",
+    },
     {
       stored: undefined,
       acceptLanguage: "en;q=0.4, nb;Q=0.5",

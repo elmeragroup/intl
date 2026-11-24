@@ -1,0 +1,42 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: fi\n"
+"X-Elmera-Serializer: 1\n"
+
+#: src/intl/messages.ts
+msgid "Credited"
+msgstr "Hyvitetty"
+
+#: src/handlers.ts
+msgid "Due on {dueOn, date, short}"
+msgstr "Erääntyy {dueOn, date, short}"
+
+#: src/handlers.ts
+msgid "Hello {name}, welcome back."
+msgstr "Hei {name}, tervetuloa takaisin."
+
+#: src/handlers.ts
+msgid "No invoice has the number {invoiceId}."
+msgstr "Laskua numerolla {invoiceId} ei löydy."
+
+#: src/intl/messages.ts
+msgid "Overdue"
+msgstr "Erääntynyt"
+
+#: src/intl/messages.ts
+msgid "Paid"
+msgstr "Maksettu"
+
+#: src/intl/intl-middleware.ts
+msgid "This request is missing a parameter, or has one that is not valid."
+msgstr "Pyynnöstä puuttuu parametri, tai jokin sen parametreista ei kelpaa."
+
+#: src/handlers.ts
+msgid "{channel, select, efaktura {Sent as eFaktura} email {Sent by email} other {Sent by post}}"
+msgstr "{channel, select, efaktura {Lähetetty e-laskuna} email {Lähetetty sähköpostilla} other {Lähetetty postitse}}"
+
+#: src/handlers.ts
+msgid "{count, plural, =0 {No invoices are overdue} one {# invoice is overdue} other {# invoices are overdue}}."
+msgstr "{count, plural, =0 {Yhtään laskua ei ole erääntynyt} one {# lasku on erääntynyt} other {# laskua on erääntynyt}}."

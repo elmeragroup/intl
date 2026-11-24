@@ -61,44 +61,48 @@ export function fuseLocale(locale: string): SupportedLocale {
 // A language range (RFC 4647 §2.1): `*`, or a primary subtag of 1 to 8 letters and subtags of 1 to 8 letters or digits.
 const LANGUAGE_RANGE = /^(?:\*|[A-Za-z]{1,8}(?:-[A-Za-z\d]{1,8})*)$/u;
 
-// The locale a well-formed range asks for, by its primary subtag. Norwegian (`no`) and its written standards fall back
-// to Bokmål, the one the app ships; a malformed range asks for nothing.
-function fromLanguageRange(range: string): Locale | undefined {
-  if (!LANGUAGE_RANGE.test(range)) {
-    return undefined;
-  }
+// An Accept-Language weight (RFC 9110 §12.4.2): `q` in either case, then 0 to 1 with at most three decimals.
+const WEIGHT = /^q=(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/iu;
 
-  const language = range.split("-")[0]?.toLowerCase();
+// One well-formed `range;q=weight` entry, its range lowercased. An entry without a weight weighs 1; one with a
+// malformed range or weight, or anything after the weight, is dropped rather than given the default.
+type Entry = { readonly range: string; readonly quality: number };
+
+function parseEntry(entry: string): ReadonlyArray<Entry> {
+  const [range = "", weight, ...rest] = entry.split(";");
+  const trimmed = range.trim();
+  const quality =
+    weight === undefined ? "1" : rest.length === 0 ? WEIGHT.exec(weight.trim())?.[1] : undefined;
+
+  return LANGUAGE_RANGE.test(trimmed) && quality !== undefined
+    ? [{ range: trimmed.toLowerCase(), quality: Number(quality) }]
+    : [];
+}
+
+// The shipped locale a range resolves to, by its primary subtag: `nb-NO` is `nb`, `sv-FI` is `sv`. Norwegian (`no`)
+// and its written standards resolve to Bokmål, the one the app ships.
+function localeFor(range: string): Locale | undefined {
+  const language = range.split("-")[0];
 
   return language === "no" || language === "nn" ? "nb" : parseLocale(language);
 }
 
-// An Accept-Language weight (RFC 9110 §12.4.2): `q` in either case, then 0 to 1 with at most three decimals.
-const WEIGHT = /^q=(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/iu;
-
-type Preference = { readonly locale: Locale; readonly quality: number };
-
-// One `range;q=weight` entry, when it names a locale the app ships at a positive weight. An entry without a weight
-// weighs 1; weight 0 means "not this one"; one with a malformed weight, or anything after it, is dropped rather than
-// given the default.
-function parsePreference(entry: string): Preference | undefined {
-  const [range = "", weight, ...rest] = entry.split(";");
-  const locale = fromLanguageRange(range.trim());
-  const quality =
-    weight === undefined ? "1" : rest.length === 0 ? WEIGHT.exec(weight.trim())?.[1] : undefined;
-
-  return locale === undefined || quality === undefined || Number(quality) === 0
-    ? undefined
-    : { locale, quality: Number(quality) };
-}
-
-// The most preferred language in an Accept-Language header that the app ships. The sort is stable, so equal weights
-// keep the header's order.
+// The most preferred language in an Accept-Language header that the app ships. Weight 0 means "not acceptable"
+// (RFC 9110 §12.4.2): each range first resolves to a shipped locale, and that locale is then dropped when the header
+// rejects it by name, wherever the rejection stands, so no path to it (a region, the Norwegian alias) gets past the
+// rejection: `nb-NO, nb;q=0` is not Bokmål, nor is `no;q=0.9, nb;q=0`. The sort is stable, so equal weights keep the
+// header's order.
 function negotiate(acceptLanguage: string): Locale | undefined {
-  return acceptLanguage
-    .split(",")
-    .map((entry) => parsePreference(entry))
-    .filter((preference) => preference !== undefined)
+  const entries = acceptLanguage.split(",").flatMap((entry) => parseEntry(entry));
+  const rejected = new Set(entries.filter(({ quality }) => quality === 0).map(({ range }) => range));
+
+  return entries
+    .filter(({ quality }) => quality > 0)
+    .flatMap(({ range, quality }) => {
+      const locale = localeFor(range);
+
+      return locale === undefined || rejected.has(locale) ? [] : [{ locale, quality }];
+    })
     .toSorted((left, right) => right.quality - left.quality)[0]?.locale;
 }
 

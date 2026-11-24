@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { draftOf, INITIAL_SETTINGS, parseSettings, settleSave } from "../src/data/settings";
+import { SettingsDraftSchema } from "../src/data/settings-draft";
 
 // Unit under test: parseSettings's email field, which the form and the save action both run, the action on whatever a
 // client posts. Oracle, stated per row: RFC 5321 §4.5.3.1.3, a forward path of at most 256 octets, so an address of
@@ -68,5 +69,30 @@ describe("settleSave", () => {
 
   it("takes each answer when they arrive in order", () => {
     expect(settleSave(settleSave(opened, first), second).settings.name).toBe("Ola Nordmann");
+  });
+});
+
+// Unit under test: SettingsDraftSchema, which the save runs on whatever a client posts before parseSettings reads its
+// fields. Oracle: the draft's shape, SettingsDraft, as the form builds it (draftOf): every field present with its type,
+// a string, a finite number or a boolean, stated per row; an array is no draft even when it carries the seven fields.
+describe("SettingsDraftSchema", () => {
+  it("takes the form's own draft as it is", () => {
+    expect(SettingsDraftSchema.safeParse(draft)).toEqual({ success: true, data: draft });
+  });
+
+  it.each([
+    { input: null, why: "null" },
+    { input: "draft", why: "a string" },
+    { input: [draft], why: "an array" },
+    { input: Object.assign([], draft), why: "an array with the seven properties" },
+    { input: { ...draft, name: undefined }, why: "a missing name" },
+    { input: { ...draft, alertsOn: "false" }, why: 'the string "false" for a switch' },
+    { input: { ...draft, weeklyReport: 0 }, why: "a number for a switch" },
+    { input: { ...draft, paymentTerms: "14" }, why: "a number as a string" },
+    { input: { ...draft, paymentTerms: Number.NaN }, why: "NaN payment terms" },
+    { input: { ...draft, paymentTerms: Number.POSITIVE_INFINITY }, why: "infinite payment terms" },
+    { input: { ...draft, threshold: 150 }, why: "a number for a text field" },
+  ])("turns back $why", ({ input }) => {
+    expect(SettingsDraftSchema.safeParse(input).success).toBe(false);
   });
 });

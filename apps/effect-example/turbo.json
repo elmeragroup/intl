@@ -1,0 +1,27 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Type-checks as a consumer does: `--customConditions null` drops the workspace's `elmera-source` condition, so it
+    // reads the packages' built declarations. Lint still reads them through source.
+    "type-check": {
+      "dependsOn": ["^build"]
+    },
+    // The watch-mode type-check reads the same built declarations, so it builds them first too: on a fresh checkout it
+    // would otherwise start on a missing `dist`. Source resolution is no option here: NodeNext rejects the packages'
+    // extensionless relative imports (tsconfig.json). `pnpm dev` rebuilds the declarations as the packages change.
+    "tcw": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    // The server listens on PORT when it is set (main.ts), so turbo passes it through. `node --watch-path` restarts it
+    // on a change to src or to the linked packages' dist, which the packages' own `dev` rebuilds.
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["PORT"]
+    }
+  }
+}

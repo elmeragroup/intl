@@ -1,8 +1,11 @@
 // The settings form's domain, ported from Fuse's app-shell block (settings-page.tsx at Fuse 9be80460): what the form
 // holds while the user edits (a draft, every field as typed) and what a save commits (the settings, parsed). Pure: the
 // form parses to show each field's problem, and the save action parses again, since its argument crossed the network.
+import type * as z from "zod";
+
 import { CONTRACT_TYPES } from "./market";
 import type { ContractType } from "./market";
+import type { SettingsDraftSchema } from "./settings-draft";
 import { SIGNED_IN } from "./signed-in";
 
 /** How many days a new customer has to pay an invoice. */
@@ -24,16 +27,11 @@ export type Settings = {
   readonly weeklyReport: boolean;
 };
 
-/** What the form holds while the user edits: every field, the text ones as typed. */
-export type SettingsDraft = {
-  readonly name: string;
-  readonly email: string;
-  readonly defaultContract: string;
-  readonly paymentTerms: number;
-  readonly alertsOn: boolean;
-  readonly threshold: string;
-  readonly weeklyReport: boolean;
-};
+/**
+ * What the form holds while the user edits: every field, the text ones as typed. The output of `SettingsDraftSchema`
+ * (settings-draft.ts), which the save parses its argument with.
+ */
+export type SettingsDraft = Readonly<z.output<typeof SettingsDraftSchema>>;
 
 /** A field of the draft that can fail to parse. */
 export type SettingsField = "name" | "email" | "threshold";

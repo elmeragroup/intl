@@ -7,7 +7,12 @@
   "access": "public",
   "baseBranch": "origin/main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@elmeragroup/intl-e2e", "@elmeragroup/next-example", "@elmeragroup/start-example"],
+  "ignore": [
+    "@elmeragroup/intl-e2e",
+    "@elmeragroup/effect-example",
+    "@elmeragroup/next-example",
+    "@elmeragroup/start-example"
+  ],
   "privatePackages": false,
   "format": "oxfmt",
   "snapshot": {

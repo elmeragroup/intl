@@ -154,7 +154,11 @@ describe("workspace packages", () => {
 // app does, and never publish.
 describe("example apps", () => {
   it("finds the example apps", () => {
-    expect(APPS.map(({ path }) => path).toSorted()).toEqual(["apps/next-example", "apps/start-example"]);
+    expect(APPS.map(({ path }) => path).toSorted()).toEqual([
+      "apps/effect-example",
+      "apps/next-example",
+      "apps/start-example",
+    ]);
   });
 
   // Every manifest that can declare a dependency: each workspace package's and the root's.

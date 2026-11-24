@@ -1,0 +1,6 @@
+{
+  "include": ["src/**/*.ts"],
+  "catalogs": "src/intl/{locale}.po",
+  "locales": ["nb", "sv", "fi"],
+  "formats": "src/intl/formats.ts"
+}

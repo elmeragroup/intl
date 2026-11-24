@@ -1,7 +1,5 @@
 {
-  // effect.json second: the API route reads the translator as an Effect service (`CurrentIntl`). Its `plugins` (the
-  // Effect language service) replace nextjs.json's.
-  "extends": ["@elmeragroup/typescript-config/nextjs.json", "@elmeragroup/typescript-config/effect.json"],
+  "extends": "@elmeragroup/typescript-config/nextjs.json",
   "compilerOptions": {
     "verbatimModuleSyntax": true
   },
