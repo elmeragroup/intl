@@ -61,8 +61,6 @@ Only what an app does not call itself:
   re-renders in the action's response shows the new language
   (`useLocaleSwitch(setLocale, { refresh: "server-action" })`). The API route hands the adapter its
   own `Request` for Accept-Language; `cookies()` there is that request's cookies.
-- **`next.config.ts` annotates its config as `NextConfig`.** The `satisfies NextConfig` form fails to
-  type-check against `withIntl` ([#21](https://github.com/elmeragroup/intl/issues/21)).
 - **Relative times take an explicit `now`.** The example fixes it (`NOW` in
   [intl/messages.ts](intl/messages.ts)) so the server render and the specs agree; an app passes its
   clock's.

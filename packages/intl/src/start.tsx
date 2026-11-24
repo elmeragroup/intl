@@ -36,7 +36,9 @@ export type LocaleSwitch = {
  * Switch the locale without a navigation. `persist` stores the choice where the server adapter's `resolveLocale`
  * reads it (a server function setting a cookie). Then `router.invalidate({ sync: true })` re-runs the loaders and resolves once their data rendered; the root route's
  * loader returns the new `{ locale, catalog }` (from a server function calling `loadIntlConfig`) and passes it to
- * `<IntlProvider>`, so the provider and the route data change in one commit.
+ * `<IntlProvider>`, so the provider and the route data change in one commit. Latest switch wins: a switch resolves
+ * `Superseded` when a later switch started before it ended, so only the latest switch reports `Switched`,
+ * `PersistFailed` or `RefreshFailed`, and outcomes resolve in call order.
  *
  * @param persist - Stores the locale. A new function each render is fine: switches call the latest committed one,
  * and the switch queue lives as long as the router.

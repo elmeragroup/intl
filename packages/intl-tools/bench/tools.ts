@@ -32,9 +32,8 @@ const BIN = join(PACKAGE, "bin/elmera-intl.js");
 const distUrl = (file: string): string => new URL(`../dist/${file}`, import.meta.url).href;
 
 // The host's own module caches stay out of the samples: every process loads every module cold.
-const childEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([name]) => name !== "NODE_COMPILE_CACHE" && name !== "NODE_OPTIONS")
-);
+// oxlint-disable-next-line turbo/no-undeclared-env-vars -- removed, never read: their values reach no bench result, and the uncached bench task has no hash for them to key
+const { NODE_COMPILE_CACHE: _compileCache, NODE_OPTIONS: _options, ...childEnv } = process.env;
 
 function median(samples: ReadonlyArray<number>): number {
   const sorted = samples.toSorted((a, b) => a - b);

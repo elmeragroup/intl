@@ -26,6 +26,9 @@ export type WithIntlOptions = {
   readonly request?: string;
 };
 
+/** What withIntl spreads must be a plain object: not a function, thenable or array, whose fields a spread drops. */
+type PlainObject = { readonly apply?: never; readonly then?: never; readonly length?: never };
+
 /**
  * The part of a Next config `withIntl` reads and extends, typed here so this package needs no `next` (a non-Next
  * host app's pruned install would then carry Next). The rule and alias maps stay opaque: Next owns their entries, and
@@ -34,13 +37,14 @@ export type WithIntlOptions = {
 export type IntlNextConfig = {
   /** Next's root for file tracing, which it also makes Turbopack's root. */
   readonly outputFileTracingRoot?: string;
-  readonly turbopack?: {
-    /** The directory Turbopack resolves files in and matches rule paths against. */
-    readonly root?: string;
-    readonly rules?: object;
-    /** Module aliases, by specifier; withIntl adds the request module's. */
-    readonly resolveAlias?: object;
-  };
+  readonly turbopack?: object &
+    PlainObject & {
+      /** The directory Turbopack resolves files in and matches rule paths against. */
+      readonly root?: string;
+      readonly rules?: object;
+      /** Module aliases, by specifier; withIntl adds the request module's. */
+      readonly resolveAlias?: object;
+    };
 };
 
 /** What the loader receives as options: JSON only. */
@@ -73,13 +77,24 @@ const DEFAULT_REQUEST = "./intl/request.ts";
  * @template C - The app's config type.
  * @param config - The Next config.
  * @param options - The project directory, where `elmera-intl.json` lives, and the request module.
- * @returns The config with the rule and the alias.
+ * @returns The config with the rule and the alias, typed as the config passed: the Turbopack rule and alias entries
+ *   withIntl writes are Next's to read, not part of this API.
  * @throws When `elmera-intl.json` is missing or invalid, its catalogs lie outside Turbopack's root (Next cannot load
  *   them), `request` names the project directory or one above it, or a `turbopack.resolveAlias` key (exact, or a
  *   wildcard whose pattern matches) already maps the request module: anything but an exact key to withIntl's own
- *   target, or any key when withIntl aliases nothing.
+ *   target, or any key when withIntl aliases nothing. Also when the config or its `turbopack` is not a plain object
+ *   (a phase function, a thenable, an array, a class instance or an object inheriting its settings), whose settings a
+ *   spread would drop or Next would replace.
  */
-export function withIntl<C extends IntlNextConfig>(config: C, options: WithIntlOptions): C {
+export function withIntl<C extends object & IntlNextConfig>(
+  config: C & PlainObject,
+  options: WithIntlOptions
+): C {
+  requireSpreadable(config, "the config");
+  if (config.turbopack !== undefined) {
+    requireSpreadable(config.turbopack, "turbopack");
+  }
+
   const configPath = resolve(options.dir, options.config ?? CONFIG_FILE);
   const loaded = loadConfig(configPath);
 
@@ -104,6 +119,90 @@ export function withIntl<C extends IntlNextConfig>(config: C, options: WithIntlO
     ...config,
     turbopack: aliases === undefined ? turbopack : { ...turbopack, resolveAlias: aliases },
   };
+}
+
+// The settings withIntl spreads: the config and its `turbopack`.
+type SpreadSettings = IntlNextConfig | NonNullable<IntlNextConfig["turbopack"]>;
+
+// withIntl spreads the config and its `turbopack` into new objects, which copies only own enumerable data: a function
+// (Next's phase-function config), an array, a class instance or an object inheriting its settings would lose its call,
+// its shape, its getter and method settings or its inherited ones, and a thenable, plain or not, would hand its copied
+// `then` to Next, which awaits the result and loads what that settles to instead of withIntl's rule and alias. The types reject most of these; this covers what they cannot
+// see: a JavaScript next.config.mjs (which may pass anything, `null` included), a wrapper generic over NextConfig
+// passing a decorated function, a class instance.
+function requireSpreadable(value: SpreadSettings, name: string): void {
+  const fix =
+    "; pass the config object itself, and for a phase function call withIntl inside it: `export default async (phase, context) => withIntl(await config(phase, context), options)`";
+
+  if (Object(value) !== value) {
+    // What an untyped config passed: a string quoted, any other primitive as String prints it (JSON writes no BigInt
+    // and no symbol).
+    const primitive: unknown = value;
+    const shown = String(primitive) === primitive ? JSON.stringify(primitive) : String(primitive);
+
+    throw new Error(`withIntl: ${name} is ${shown}, not an object${fix}`);
+  }
+
+  // A callable `then`, own or inherited, is what Next awaits. Callability is read from `typeof`, which no property can
+  // spoof (a `Symbol.toStringTag` can relabel the built-in tag) and which holds for a function of any realm.
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- requireSpreadable is the boundary that parses untyped next.config values, and only typeof decides callability unspoofably across realms
+  if ("then" in value && typeof value.then === "function") {
+    throw new Error(`withIntl: ${name} is a thenable, which Next would await in place of the result${fix}`);
+  }
+
+  if (!isPlainObject(value)) {
+    throw new Error(`withIntl: ${name} is ${unspreadable(value)}, whose settings a spread would drop${fix}`);
+  }
+}
+
+// Whether an object is plain in any realm: a null prototype, or the `Object.prototype` of some realm (a config built by
+// `vm.runInNewContext`, or cloned across realms as Vitest's vmForks pool does, has another realm's, not this one's).
+// That prototype is recognised through its realm's native `Object`: it ends the chain, and its own `constructor` is a
+// native function named `Object` whose `prototype` is it. A null-prototype record, or the prototype of a class that
+// extends null, ends the chain too but has no such constructor; a class instance, a function or an array has a
+// prototype with a prototype of its own. The constructor is read as a data property, so no getter runs.
+function isPlainObject(value: SpreadSettings): boolean {
+  const prototype = Reflect.getPrototypeOf(value);
+
+  if (prototype === null) {
+    return true;
+  }
+
+  const constructor: unknown = Reflect.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+
+  return (
+    Reflect.getPrototypeOf(prototype) === null &&
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- requireSpreadable is the boundary that parses untyped next.config values, and only typeof decides callability unspoofably across realms
+    typeof constructor === "function" &&
+    Reflect.getOwnPropertyDescriptor(constructor, "prototype")?.value === prototype &&
+    NATIVE_OBJECT.test(Function.prototype.toString.call(constructor))
+  );
+}
+
+// The source text every engine gives a realm's built-in `Object` constructor, the NativeFunction form of ECMA-262. A
+// user function, a class and a bound function each read otherwise.
+const NATIVE_OBJECT = /^function Object\(\) \{\s*\[native code\]\s*\}$/u;
+
+// What an object withIntl cannot spread is, for the error.
+function unspreadable(value: SpreadSettings): string {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- requireSpreadable is the boundary that parses untyped next.config values, and only typeof decides callability unspoofably across realms
+  if (typeof value === "function") {
+    return "a function";
+  }
+
+  if (Array.isArray(value)) {
+    return "an array";
+  }
+
+  // A class's prototype has its own `constructor` function; a bare record used as a prototype has none.
+  const prototype = Reflect.getPrototypeOf(value);
+  const constructor: unknown =
+    prototype === null ? undefined : Reflect.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- requireSpreadable is the boundary that parses untyped next.config values, and only typeof decides callability unspoofably across realms
+  return typeof constructor === "function"
+    ? "a class instance"
+    : "an object inheriting another object's settings";
 }
 
 // The app's Turbopack aliases with the request module's added, or none to add when the app has no request module at

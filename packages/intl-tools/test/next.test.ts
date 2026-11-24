@@ -1,9 +1,11 @@
+import type { NextConfig } from "next";
 import type loadNextConfigType from "next/dist/server/config";
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import type { IntlNextConfig, WithIntlOptions } from "../src/next";
@@ -170,6 +172,46 @@ it.each([
     ).toEqual([["apps/web/intl/nb.po"], ["apps/web/intl/nb.po"]]);
   }
 );
+
+// Unit under test: withIntl given a value that is no object, as only an untyped next.config.mjs can pass it, loaded
+// by Next's own loadConfig. Oracle: a spread of a primitive copies nothing of it, so withIntl refuses it, naming the
+// value (a string quoted, a BigInt as it prints, which JSON cannot write), rather than failing on the prototype read
+// with a bare TypeError.
+it.each([
+  {
+    name: "a null config",
+    source: "null",
+    error: "withIntl: the config is null, not an object; pass the config object",
+  },
+  {
+    name: "a null turbopack",
+    source: "{ turbopack: null }",
+    error: "withIntl: turbopack is null, not an object; pass",
+  },
+  {
+    name: "a string turbopack",
+    source: '{ turbopack: "bad" }',
+    error: 'withIntl: turbopack is "bad", not an object; pass',
+  },
+  {
+    name: "a BigInt turbopack",
+    source: "{ turbopack: 4n }",
+    error: "withIntl: turbopack is 4, not an object; pass",
+  },
+])("rejects $name in a next.config.mjs", async ({ source, error }) => {
+  installNext("apps/web");
+  writeIntlConfig("intl/{locale}.po");
+  writeFileSync(join(workspace, "apps/web/package.json"), JSON.stringify({ type: "module" }));
+  Object.assign(globalThis, { withIntlUnderTest: withIntl });
+  writeFileSync(
+    join(workspace, "apps/web/next.config.mjs"),
+    `export default globalThis.withIntlUnderTest(${source}, { dir: import.meta.dirname });\n`
+  );
+
+  await expect(
+    loadNextConfig("phase-production-build", join(workspace, "apps/web"), { silent: true })
+  ).rejects.toThrow(error);
+});
 
 const REQUEST_MODULE = "@elmeragroup/intl/internal/request-module";
 
@@ -363,4 +405,195 @@ it.each([
   },
 ])("rejects $name", ({ config, options, modules, error }) => {
   expect(() => withIntlFor(config, options, modules)).toThrow(error);
+});
+
+// Turbopack settings as a getter, which a spread would not copy.
+class ClassTurbopack {
+  get root(): string {
+    return "/repo";
+  }
+}
+
+// A config whose settings are a getter and a method, which a spread would not copy.
+class ClassConfig {
+  get reactStrictMode(): boolean {
+    return true;
+  }
+
+  generateBuildId(): string {
+    return "build";
+  }
+}
+
+// A class extending null: its prototype ends the chain, and its getter is a setting a spread would not copy.
+class NullSettings extends null {
+  get reactStrictMode(): boolean {
+    return true;
+  }
+}
+
+class NullTurbopack extends null {
+  get root(): string {
+    return "/repo";
+  }
+}
+
+// An object whose settings all live on its prototype.
+function inheriting<T extends object>(prototype: T): T {
+  // SAFETY: Object.create returns an object whose prototype is `prototype`, so it reads every setting it does.
+  return Object.create(prototype) as T;
+}
+
+// Unit under test: withIntl's precondition that it can spread what it extends. Oracle: an object spread copies only
+// the own enumerable data of its operand, so a function (Next's phase-function config), an array or a class instance
+// would lose its call, its elements or its getter and method settings, and a thenable (a Promise, or a plain object
+// with a callable `then`) would hand Next a copied `then`, which Next 16.4.6 awaits, loading what it settles to in
+// place of withIntl's rule and alias; withIntl refuses each, naming it and the fix, which passes on both arguments
+// Next calls a phase function with. Each reaches withIntl as the types let it: through a wrapper generic over NextConfig, which a
+// value decorated with a Next setting satisfies, or directly, as a class instance does.
+it.each([
+  {
+    name: "a phase function",
+    config: Object.assign((_phase: string) => ({}), { reactStrictMode: true }),
+    turbopack: Object.assign(() => ({}), { root: "/repo" }),
+    what: "a function",
+  },
+  {
+    name: "a Promise",
+    config: Object.assign(Promise.resolve({}), { reactStrictMode: true }),
+    turbopack: Object.assign(Promise.resolve({}), { root: "/repo" }),
+    what: "a thenable",
+  },
+  // A plain object with a callable `then`: its spread copies `then`, and Next awaits the result.
+  {
+    name: "a plain thenable",
+    // oxlint-disable-next-line unicorn/no-thenable -- the row is a thenable on purpose: withIntl must refuse one
+    config: { reactStrictMode: true, then: (settle: (config: NextConfig) => void) => settle({}) },
+    // oxlint-disable-next-line unicorn/no-thenable -- the row is a thenable on purpose: withIntl must refuse one
+    turbopack: { root: "/repo", then: (settle: (turbopack: NextConfig["turbopack"]) => void) => settle({}) },
+    what: "a thenable",
+  },
+  // A callable `then` relabelled by `Symbol.toStringTag`: still a function, so still what Next awaits.
+  {
+    name: "a thenable whose then is tagged as no function",
+    config: {
+      reactStrictMode: true,
+      // oxlint-disable-next-line unicorn/no-thenable -- the row is a thenable on purpose: withIntl must refuse one
+      then: Object.assign((settle: (config: NextConfig) => void) => settle({}), {
+        [Symbol.toStringTag]: "Settings",
+      }),
+    },
+    turbopack: {
+      root: "/repo",
+      // oxlint-disable-next-line unicorn/no-thenable -- the row is a thenable on purpose: withIntl must refuse one
+      then: Object.assign((settle: (turbopack: NextConfig["turbopack"]) => void) => settle({}), {
+        [Symbol.toStringTag]: "Settings",
+      }),
+    },
+    what: "a thenable",
+  },
+  {
+    name: "an array",
+    config: Object.assign([], { reactStrictMode: true }),
+    turbopack: Object.assign([], { root: "/repo" }),
+    what: "an array",
+  },
+  {
+    name: "a class instance with a getter",
+    config: new ClassConfig(),
+    turbopack: new ClassTurbopack(),
+    what: "a class instance",
+  },
+  // Its prototype ends the chain, as an Object.prototype does, but it is Settings', with the getter on it.
+  {
+    name: "an instance of a class extending null",
+    // An object whose prototype is the class's, which is all an instance is: `new` cannot build one, as a class
+    // extending null has no super to construct.
+    config: inheriting(NullSettings.prototype),
+    turbopack: inheriting(NullTurbopack.prototype),
+    what: "a class instance",
+  },
+  // A null-prototype record as prototype: the settings are inherited, which a spread does not copy.
+  {
+    name: "an object inheriting from a null-prototype record",
+    config: inheriting({ __proto__: null, reactStrictMode: true }),
+    turbopack: inheriting({ __proto__: null, root: "/repo" }),
+    what: "an object inheriting another object's settings",
+  },
+])("rejects $name as the config or as turbopack", ({ config, turbopack, what }) => {
+  const withApp = <T extends NextConfig>(app: T): T => withIntl(app, { dir: join(workspace, "apps/web") });
+  // The fix names the phase-function remedy; the remedy test below runs it.
+  const fix = /; pass the config object itself, and for a phase function call withIntl inside it: `[^`]+`$/u;
+
+  expect(() => withApp(config)).toThrow(`withIntl: the config is ${what}, `);
+  expect(() => withApp(config)).toThrow(fix);
+  expect(() => withApp({ turbopack })).toThrow(`withIntl: turbopack is ${what}, `);
+  expect(() => withApp({ turbopack })).toThrow(fix);
+});
+
+// Unit under test: the phase-function remedy withIntl's error suggests, taken from the message and run. Oracle: Next
+// calls a phase-function config with the phase and a context carrying the default config. The remedy must pass both to
+// the app's function and return what withIntl makes of its result, which keeps the app's settings and adds the rules.
+it("suggests a phase-function remedy that passes the phase and context through", async () => {
+  installNext("apps/web");
+  writeIntlConfig("intl/{locale}.po");
+  const options: WithIntlOptions = { dir: join(workspace, "apps/web") };
+  const withApp = <T extends NextConfig>(app: T): T => withIntl(app, options);
+  let message = "";
+  try {
+    withApp(Object.assign((_phase: string) => ({}), { reactStrictMode: true }));
+  } catch (error) {
+    message = error instanceof Error ? error.message : "";
+  }
+  const remedy = /`export default (?<source>[^`]+)`$/u.exec(message)?.groups?.source;
+  expect(remedy, message).toBeDefined();
+  type Context = { readonly defaultConfig: NextConfig };
+  // The app's phase function, reading both arguments.
+  const config = (phase: string, context: Context): NextConfig => ({
+    ...context.defaultConfig,
+    reactStrictMode: phase === "phase-production-build",
+  });
+  // SAFETY: the remedy is the arrow function the message spells, evaluated with the names it uses in scope.
+  const run = runInNewContext(`(${remedy})`, { withIntl, config, options }) as (
+    phase: string,
+    context: Context
+  ) => Promise<IntlNextConfig>;
+  const result = await run("phase-production-build", { defaultConfig: { poweredByHeader: false } });
+
+  expect(result).toMatchObject({ poweredByHeader: false, reactStrictMode: true });
+  expect(poRulePaths(result)).toHaveLength(2);
+});
+
+// Unit under test: withIntl's precondition, given plain objects it must accept. Oracle: a spread copies every
+// setting of an object with a null prototype, and of an object literal from another realm (a `vm` context; Vitest's
+// vmForks pool and a structured clone hand over the same), whose prototype is that realm's `Object.prototype`, not
+// this one's.
+it.each([
+  {
+    name: "without a prototype",
+    make: (root: string) => {
+      const turbopack = { __proto__: null, root };
+
+      return { __proto__: null, turbopack };
+    },
+    prototype: null,
+  },
+  {
+    name: "from another realm",
+    // SAFETY: runInNewContext returns the literal it evaluates, the config shape written beside it.
+    make: (root: string) =>
+      runInNewContext("({ turbopack: { root } })", { root }) as {
+        readonly turbopack: { readonly root: string };
+      },
+    prototype: "foreign",
+  },
+])("extends a config and turbopack $name", ({ make, prototype }) => {
+  const config = make(workspace);
+  const prototypes = [Reflect.getPrototypeOf(config), Reflect.getPrototypeOf(config.turbopack)].map((found) =>
+    found === null ? null : found === Object.prototype ? "this realm's" : "foreign"
+  );
+  const result = withIntlFor(config, {});
+
+  expect(prototypes).toEqual([prototype, prototype]);
+  expect(poRulePaths(result)).toHaveLength(2);
 });
