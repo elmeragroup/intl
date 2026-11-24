@@ -59,8 +59,8 @@ export type LocaleSwitchPort = {
 };
 
 /**
- * Make the switch function behind an adapter's `useLocaleSwitch`. Each switch persists, then refreshes the server
- * so the provider gets the new locale and catalog in the same commit as the rest of the server data.
+ * Make a framework-free locale switch: each switch persists, then refreshes the server so the provider gets the new
+ * locale and catalog in the same commit as the rest of the server data.
  *
  * Latest switch wins: switches run one at a time in call order (persist, then refresh), so the stored locale ends
  * as the last one asked for even when requests would reach the server out of order, and a switch superseded before
@@ -72,16 +72,84 @@ export type LocaleSwitchPort = {
  * choice at display time. When `refreshServer` resolves
  * after the refreshed render lands (Start's `router.invalidate({ sync: true })`), an older refresh also lands before a
  * newer one starts; a fire-and-forget refresh (Next's `router.refresh()`) leaves render order to the framework's router.
+ * Each call makes its own queue: `useLocaleSwitch` shares one queue per router instead, across every mount under it.
  *
- * @param port - The app's persist and the framework's refresh.
+ * @param port - The app's persist and the framework's refresh, each called on `port`.
  * @returns `switchLocale(locale)`, resolving to how that switch ended; it never rejects.
  */
 export function createLocaleSwitcher(port: LocaleSwitchPort): (locale: string) => Promise<SwitchOutcome> {
+  const queue = createSwitchQueue();
+  const queued: QueuedSwitch = { port, rendersOnPersist: false };
+
+  return (locale) => queue.switch(locale, () => queued);
+}
+
+/** What one switch persists and refreshes through, and how its new render arrives: read together, once, when it starts. */
+export type QueuedSwitch = {
+  /** The persist and refresh, each called on `port`. */
+  readonly port: LocaleSwitchPort;
+  /**
+   * The persist's own response carries the re-rendered page (a Next Server Action), so no refresh follows it. Kept
+   * apart from the port, so a public port's own properties change nothing.
+   */
+  readonly rendersOnPersist: boolean;
+};
+
+/** One latest-switch-wins queue, shared by every switch made through it, and whether any of them is in flight. */
+export type SwitchQueue = {
+  /**
+   * Switch to `locale` through the port and mode `start` returns, which may differ per call (each mount's own persist
+   * and refresh). `start` runs once, synchronously, when the switch's turn comes and no newer switch has started, so
+   * a switch queued behind another uses what its caller committed by then; a switch superseded before its turn never
+   * calls it.
+   *
+   * @param locale - The locale to switch to.
+   * @param start - The port (each method called on it) and mode this switch runs with.
+   * @returns How the switch ended; it never rejects.
+   */
+  readonly switch: (locale: string, start: () => QueuedSwitch) => Promise<SwitchOutcome>;
+  /**
+   * Listen for `isPending` changing.
+   *
+   * @param listener - Called each time `isPending()` flips.
+   * @returns Stops listening.
+   */
+  readonly subscribe: (listener: () => void) => () => void;
+  /**
+   * Whether a switch is in flight.
+   *
+   * @returns True from a switch's call until it settles.
+   */
+  readonly isPending: () => boolean;
+};
+
+/**
+ * Make a switch queue: the latest-switch-wins logic `createLocaleSwitcher` documents, with the in-flight state every
+ * mount under one router reads.
+ *
+ * @returns The queue.
+ */
+export function createSwitchQueue(): SwitchQueue {
   let latest = 0;
   let queue: Promise<void> = Promise.resolve();
-  // Whether the server stores a locale the page has not rendered: set by a persist, cleared by a refresh that succeeds.
+  let inFlight = 0;
+  const listeners = new Set<() => void>();
+  // Whether the server stores a locale the page has not rendered: set by a persist that renders nothing itself,
+  // cleared by a refresh that succeeds or a persist that renders.
   let storedUnrendered = false;
-  const refresh = async (): Promise<RefreshResult> => {
+  const notify = (): void => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const decrement = (): void => {
+    inFlight -= 1;
+    if (inFlight === 0) {
+      notify();
+    }
+  };
+  // Every port under one router refreshes that router, so the latest switch's own refresh is a real one in every mode.
+  const refresh = async (port: LocaleSwitchPort): Promise<RefreshResult> => {
     try {
       await port.refreshServer();
       storedUnrendered = false;
@@ -92,7 +160,7 @@ export function createLocaleSwitcher(port: LocaleSwitchPort): (locale: string) =
     }
   };
 
-  return (locale) => {
+  const switchLocale = (locale: string, start: () => QueuedSwitch): Promise<SwitchOutcome> => {
     latest += 1;
     const id = latest;
     // How the switch ended by its own steps; `classified` below decides what the caller hears.
@@ -100,14 +168,15 @@ export function createLocaleSwitcher(port: LocaleSwitchPort): (locale: string) =
       if (id !== latest) {
         return { _tag: "Superseded", locale };
       }
+      const { port, rendersOnPersist } = start();
 
       try {
         await port.persist(locale);
-        storedUnrendered = true;
+        storedUnrendered = !rendersOnPersist;
       } catch (cause) {
         // The latest switch failed to store its own locale, so the page shows the one the server now resolves.
         if (id === latest && storedUnrendered) {
-          await refresh();
+          await refresh(port);
         }
 
         return { _tag: "PersistFailed", locale, cause };
@@ -117,7 +186,11 @@ export function createLocaleSwitcher(port: LocaleSwitchPort): (locale: string) =
         return { _tag: "Superseded", locale };
       }
 
-      const refreshed = await refresh();
+      if (rendersOnPersist) {
+        return { _tag: "Switched", locale };
+      }
+
+      const refreshed = await refresh(port);
 
       return refreshed._tag === "Failed"
         ? { _tag: "RefreshFailed", locale, cause: refreshed.cause }
@@ -129,35 +202,29 @@ export function createLocaleSwitcher(port: LocaleSwitchPort): (locale: string) =
       id === latest || outcome._tag === "Superseded" ? outcome : { _tag: "Superseded", locale }
     );
     // The next switch starts a step after this one's settlement, so a handler attached to the returned promise before
-    // it settles (the caller's, the pending count's) runs before the next switch's persist; a handler attached from
-    // inside one of those handlers can run after it.
+    // it settles (the caller's, the in-flight decrement) runs before the next switch's persist; a handler attached
+    // from inside one of those handlers can run after it. A listener hears of the switch (`notify()` below) before
+    // this returns the promise, when the two handlers attached to it are the queue tail and the in-flight decrement;
+    // the caller gets `classified` itself, so the decrement adds no settlement step.
     queue = classified.then(() => undefined);
+    void classified.then(decrement, decrement);
+    inFlight += 1;
+    if (inFlight === 1) {
+      notify();
+    }
 
     return classified;
   };
-}
 
-/**
- * Count a switcher's switches in flight, for an adapter's `isPending`.
- *
- * @param run - The switcher `createLocaleSwitcher` made.
- * @param setPending - Updates the in-flight count (a React state setter).
- * @returns The switcher, counting each switch from its call until it settles; each switch's promise is `run`'s own.
- */
-export function countPending(
-  run: (locale: string) => Promise<SwitchOutcome>,
-  setPending: (update: (count: number) => number) => void
-): (locale: string) => Promise<SwitchOutcome> {
-  const decrement = (): void => {
-    setPending((count) => count - 1);
-  };
+  return {
+    switch: switchLocale,
+    subscribe: (listener) => {
+      listeners.add(listener);
 
-  return (locale) => {
-    const done = run(locale);
-    setPending((count) => count + 1);
-    void done.then(decrement, decrement);
-
-    // Returning `done` itself adds no settlement step after the switcher's classification; see the gap test.
-    return done;
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    isPending: () => inFlight > 0,
   };
 }

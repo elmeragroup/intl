@@ -1,5 +1,5 @@
-// The fake server the locale-switch tests hold requests on, and the settlement sweep every switchLocale an adapter
-// hands out must pass: the switcher's, the pending-counted one's, and each mounted hook's.
+// The fake server the locale-switch tests hold requests on, and the settlement sweep every public switchLocale must
+// pass, one target per path: createLocaleSwitcher's, Next's in each refresh mode, and Start's.
 import { expect, vi } from "vitest";
 
 import type { SwitchOutcome } from "@elmeragroup/intl/core";
@@ -103,7 +103,7 @@ export function fakeServer(script: RefreshScript = []) {
 }
 
 /** The fake server a test drives. */
-type FakeServer = ReturnType<typeof fakeServer>;
+export type FakeServer = ReturnType<typeof fakeServer>;
 
 /** A switchLocale under test, made against a fake server, and how to tear down what made it. */
 type SwitchUnderTest = {

@@ -65,8 +65,9 @@ What an app does not call itself, the React Server Components API Start has no u
 
 - `keyOf`, `serialize` and `SERIALIZER_VERSION` (`/core`): the source key, its serializer and its
   version, which the runtime and the tools compute for the app.
-- `resolveIntlConfig` and `createLocaleSwitcher` (`/core`), which `loadIntlConfig` and
-  `useLocaleSwitch` wrap.
+- `resolveIntlConfig` (`/core`), which `loadIntlConfig` wraps.
+- `createLocaleSwitcher` (`/core`), the standalone framework-free switch: each call makes its own
+  queue, which its caller owns (`useLocaleSwitch` shares one per router instead).
 - `loadCatalog`, `compileCatalog` and its `CatalogCompileError` (`/compile`), for Node without a
   bundler: every catalog here is a `*.po` import, which `intl()` compiles in the app and
   `intlCatalogs()` in Vitest. The [Effect example](../effect-example) loads its catalogs with
@@ -89,9 +90,9 @@ What an app does not call itself, the React Server Components API Start has no u
   page's state, so the state a switch must keep is the form on the switcher's own page: what the
   visitor typed survives the switch, under labels in the new language. The test alert (the API
   route) and Save (a server function) sit there too, keyed by the locale, so a switch clears an
-  answer given in the old language. The switch itself, `useLocaleSwitch` and its queue, is the
-  shell's (`LocaleSwitchProvider`): a Settings mounted again joins the same queue, so a switch held
-  from an earlier visit cannot land after a newer one.
+  answer given in the old language. The switcher calls `useLocaleSwitch` itself: every mount under
+  the router shares one switch queue, so a Settings mounted again joins the queue a switch held
+  from an earlier visit is in, shows it as busy, and that switch cannot land after a newer one.
 - **A server function or server route builds its translator in its handler**
   (`createIntl(await loadIntlConfig(...))`): extraction traces a translator only to a factory call in
   the same file. Save parses the draft it receives as unknown input, with one Zod schema

@@ -62,7 +62,8 @@ What an app does not call itself, and `/effect`, which has an example of its own
 
 - `keyOf`, `serialize` and `SERIALIZER_VERSION` (`/core`): the source key, its serializer and its
   version, which the runtime and the tools compute for the app.
-- `createLocaleSwitcher` (`/core`), the framework-free switch that `useLocaleSwitch` wraps.
+- `createLocaleSwitcher` (`/core`), the standalone framework-free switch: each call makes its own
+  queue, which its caller owns (`useLocaleSwitch` shares one per router instead).
 - `resolveIntlConfig` (`/core`), which `createRequestConfig` wraps; a route that rewrites its
   request's cookies calls it (the runtime README's Next notes).
 - `loadCatalog`, `compileCatalog` and its `CatalogCompileError` (`/compile`), for Node without a
@@ -88,9 +89,9 @@ What an app does not call itself, and `/effect`, which has an example of its own
   page's state, so the state a switch must keep is the form on the switcher's own page: what the
   visitor typed survives the switch, under labels in the new language. The test alert (the API
   route) and Save (a server action) sit there too, keyed by the locale, so a switch clears an answer
-  given in the old language. The switch itself, `useLocaleSwitch` and its queue, is the shell's
-  (`LocaleSwitchProvider`), so every switch the visitor makes joins one queue, however often
-  Settings mounts.
+  given in the old language. The switcher calls `useLocaleSwitch` itself: every mount under the
+  App Router shares one switch queue, so a Settings mounted again joins the queue a switch from
+  an earlier visit is still in.
 - **On a phone, the sidebar closes on every navigation.** Its Sheet closes in the render that shows
   the new page, the browser's Back and Forward included, so it never covers the page it led to.
 - **Fuse's strings are Fuse's.** The sidebar toggle, the table pagination and the chart tables read

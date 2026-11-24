@@ -18,7 +18,6 @@ import type { AppPage } from "./app-config";
 import { AppHeader } from "./app-header";
 import { AppSidebar } from "./app-sidebar";
 import { useCurrentPage } from "./current-page";
-import { LocaleSwitchProvider } from "./locale-switcher";
 import { SettingsDraftProvider } from "./settings-draft";
 
 // The id of the page content the skip link moves to.
@@ -116,36 +115,33 @@ export function AppShell({
             className="text-sm font-medium focus-visible:shadow-md sr-only focus-visible:not-sr-only focus-visible:fixed focus-visible:top-3 focus-visible:left-3 focus-visible:z-50 focus-visible:rounded-md focus-visible:bg-background focus-visible:px-3 focus-visible:py-2 focus-visible:outline-2 focus-visible:outline-ring">
             <T>Skip to content</T>
           </a>
-          {/* The app's one locale switch, outside the page, so a Settings mounted again joins the same queue. */}
-          <LocaleSwitchProvider>
-            <Sidebar.Provider
-              open={open}
-              onOpenChange={(next) => {
-                setOpen(next);
-                rememberSidebar(next);
-              }}
-              openMobile={mobileOpen}
-              onOpenMobileChange={setMobileOpen}>
-              <AppSidebar />
-              {/* From md the inset is a panel of the viewport's height that scrolls its page inside, as a desktop app
-                does. On a phone the document scrolls and the header sticks. */}
-              <Sidebar.Inset className="md:h-[calc(100svh-(--spacing(4)))] md:overflow-hidden">
-                <AppHeader />
-                <PageLinksWithoutScript current={page} />
-                {/* Keyed by the page, so each page opens at its top, as a new document would. The settings draft lives
-                  here, around the page: a failed reload renders the router's error component in the page's place, and
-                  the draft outlives it, as long as the visitor stays on the page, whatever case its path is typed in. */}
-                <div
-                  key={page?.id ?? "not-found"}
-                  ref={content}
-                  id={CONTENT_ID}
-                  tabIndex={-1}
-                  className="md:min-h-0 md:overflow-y-auto flex flex-1 flex-col outline-none">
-                  <SettingsDraftProvider>{children}</SettingsDraftProvider>
-                </div>
-              </Sidebar.Inset>
-            </Sidebar.Provider>
-          </LocaleSwitchProvider>
+          <Sidebar.Provider
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next);
+              rememberSidebar(next);
+            }}
+            openMobile={mobileOpen}
+            onOpenMobileChange={setMobileOpen}>
+            <AppSidebar />
+            {/* From md the inset is a panel of the viewport's height that scrolls its page inside, as a desktop app
+              does. On a phone the document scrolls and the header sticks. */}
+            <Sidebar.Inset className="md:h-[calc(100svh-(--spacing(4)))] md:overflow-hidden">
+              <AppHeader />
+              <PageLinksWithoutScript current={page} />
+              {/* Keyed by the page, so each page opens at its top, as a new document would. The settings draft lives
+                here, around the page: a failed reload renders the router's error component in the page's place, and
+                the draft outlives it, as long as the visitor stays on the page, whatever case its path is typed in. */}
+              <div
+                key={page?.id ?? "not-found"}
+                ref={content}
+                id={CONTENT_ID}
+                tabIndex={-1}
+                className="md:min-h-0 md:overflow-y-auto flex flex-1 flex-col outline-none">
+                <SettingsDraftProvider>{children}</SettingsDraftProvider>
+              </div>
+            </Sidebar.Inset>
+          </Sidebar.Provider>
           <Toast.Viewport aria-label={t("Notifications")} />
         </Toast.Provider>
       </Tooltip.Provider>

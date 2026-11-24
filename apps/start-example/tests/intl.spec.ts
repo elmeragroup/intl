@@ -485,36 +485,37 @@ test("shows how the latest switch ended, not an older one that failed after it s
   expect(saves).toBe(2);
 });
 
-// Every switch joins the shell's one queue, wherever the visitor has been meanwhile. A Swedish switch is held at the
-// server; the visitor leaves Settings, comes back and picks Finnish. The Swedish save answers only after any save sent
-// since has answered, so with a second queue, the Finnish switch would finish first and the Swedish answer would land
-// last, taking the page and the cookie back to Swedish.
-test("keeps the latest switch when an older one, held across a visit to another page, answers last", async ({
-  page,
-  context,
-}) => {
+// Every switcher under the router shares one queue, wherever the visitor has been meanwhile. A Swedish switch is held
+// at the server; the visitor leaves Settings, comes back and picks Finnish. The remounted switcher shows the held switch
+// as busy before the click, and the browser sends the Finnish save only after the Swedish answer reached it, so the
+// Finnish one cannot finish first and let the Swedish answer take the page and the cookie back to Swedish.
+test("waits for the held save before sending the remounted switcher's choice", async ({ page, context }) => {
   const releaseSwedish = deferred();
   const swedishSent = deferred();
-  const swedishAnswered = deferred();
-  const othersAnswered: Array<Promise<void>> = [];
+  // The browser's own request and response events, in the order the page saw them.
+  const saves: Array<string> = [];
+  const localeOf = (body: string): string | undefined =>
+    ["sv", "fi"].find((locale) => body.includes(`"${locale}"`));
+  page.on("request", (request) => {
+    const locale = request.method() === "POST" ? localeOf(request.postData() ?? "") : undefined;
+    if (locale !== undefined) {
+      saves.push(`${locale} sent`);
+    }
+  });
+  page.on("response", (response) => {
+    const request = response.request();
+    const locale = request.method() === "POST" ? localeOf(request.postData() ?? "") : undefined;
+    if (locale !== undefined) {
+      saves.push(`${locale} answered`);
+    }
+  });
   await page.route(isServerFunction, async (route) => {
     const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
+    if (request.method() === "POST" && localeOf(request.postData() ?? "") === "sv") {
+      swedishSent.settle();
+      await releaseSwedish.promise;
     }
-    if (!(request.postData() ?? "").includes('"sv"')) {
-      const answered = deferred();
-      othersAnswered.push(answered.promise);
-      await route.fulfill({ response: await route.fetch() });
-      answered.settle();
-      return;
-    }
-    swedishSent.settle();
-    await releaseSwedish.promise;
-    await Promise.all(othersAnswered);
-    await route.fulfill({ response: await route.fetch() });
-    swedishAnswered.settle();
+    await route.continue();
   });
   await page.goto("/settings");
   const sidebar = page.locator("[data-slot=sidebar][data-state]");
@@ -527,12 +528,11 @@ test("keeps the latest switch when an older one, held across a visit to another 
   await expect(page.locator("h1")).toHaveText(EXPECTED.en.overview);
   await sidebar.getByRole("link", { name: EXPECTED.en.settings, exact: true }).click();
   await expect(page.locator("h1")).toHaveText(EXPECTED.en.settings);
+  await expect(page.locator("nav[aria-busy=true] #locale-status")).toBeAttached();
   await page.getByRole("button", { name: EXPECTED.fi.language }).click();
-  // Frames enough for a Finnish save that goes out at once, as a second queue's would, to reach the route first.
-  await afterTwoFrames(page);
   releaseSwedish.settle();
-  await swedishAnswered.promise;
 
+  await expect.poll(() => saves).toEqual(["sv sent", "sv answered", "fi sent", "fi answered"]);
   await expect
     .poll(async () => (await context.cookies()).find(({ name }) => name === COOKIE)?.value)
     .toBe("fi");

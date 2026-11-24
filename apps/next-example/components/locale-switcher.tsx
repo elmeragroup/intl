@@ -1,9 +1,8 @@
 "use client";
-import { createContext, use, useState } from "react";
-import type { ReactNode } from "react";
+import { useState } from "react";
 
 import { Button } from "@elmeragroup/fuse/button";
-import type { LocaleSwitch, SwitchOutcome } from "@elmeragroup/intl/next";
+import type { SwitchOutcome } from "@elmeragroup/intl/next";
 import { useLocaleSwitch } from "@elmeragroup/intl/next";
 import { T, useIntl, useT } from "@elmeragroup/intl/react";
 
@@ -11,41 +10,16 @@ import { setLocale } from "../app/actions";
 import { LANGUAGES } from "../intl/locale";
 import { useHydrated } from "./use-hydrated";
 
-const LocaleSwitchContext = createContext<LocaleSwitch | undefined>(undefined);
-
 /**
- * Holds the app's one locale switch, for the switcher on Settings. `useLocaleSwitch` keeps its switches in one queue,
- * where the latest wins; a switcher that called it itself would start a second queue each time Settings mounted again,
- * and a switch still held in the old queue could then land after a newer one and take the page back to its language.
- * The shell mounts this once, outside the page, so every switch the visitor makes joins the same queue.
- *
- * @param props - The shell's content.
- */
-export function LocaleSwitchProvider({ children }: { readonly children: ReactNode }) {
-  const localeSwitch = useLocaleSwitch(setLocale, { refresh: "server-action" });
-
-  return <LocaleSwitchContext value={localeSwitch}>{children}</LocaleSwitchContext>;
-}
-
-function useAppLocaleSwitch(): LocaleSwitch {
-  const localeSwitch = use(LocaleSwitchContext);
-  if (localeSwitch === undefined) {
-    throw new Error("LocaleSwitcher needs a LocaleSwitchProvider above it: the shell mounts one.");
-  }
-
-  return localeSwitch;
-}
-
-/**
- * Switches the language in place through the shell's switch: the server action stores the choice and Next re-renders
- * the page in its response, so the server text, the shell around it and the provider's catalog change together, and
- * client state (the settings draft beside it) survives.
+ * Switches the language in place: the server action stores the choice and Next re-renders the page in its response, so
+ * the server text, the shell around it and the provider's catalog change together, and client state (the settings draft
+ * beside it) survives.
  */
 export function LocaleSwitcher() {
   const intl = useIntl();
   const t = useT();
   const hydrated = useHydrated();
-  const { switchLocale, isPending } = useAppLocaleSwitch();
+  const { switchLocale, isPending } = useLocaleSwitch(setLocale, { refresh: "server-action" });
 
   // How the latest switch ended, so a failed one says so. A switch a newer one replaced resolves `Superseded`, which
   // shows nothing, and every switch starts from a click, so every outcome can be shown as it arrives.
