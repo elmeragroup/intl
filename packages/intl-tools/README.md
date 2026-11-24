@@ -82,7 +82,7 @@ const CATALOGS = {
 } as const;
 ```
 
-Types: reference `@elmeragroup/intl-tools/po` once (`/// <reference types="@elmeragroup/intl-tools/po" />` in a `.d.ts`). Only the configured locales' POs compile; another `.po`, or a missing one, fails the build. Node scripts, tests and servers without a bundler call `loadCatalog(path, locale?)` (`/compile`) and pass the catalog to the provider (or `CurrentIntl`) like any other; [`apps/effect-example`](https://github.com/elmeragroup/intl/tree/main/apps/effect-example) loads its four catalogs this way when its server starts.
+Types: reference `@elmeragroup/intl-tools/po` once (`/// <reference types="@elmeragroup/intl-tools/po" />` in a `.d.ts`). Only the configured locales' POs compile; another `.po`, or a missing one, fails the build. Node scripts and tests without a bundler call `loadCatalog(path, locale?)` (`/compile`) and pass the catalog to the provider like any other.
 
 ## Hosts
 

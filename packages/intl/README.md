@@ -136,8 +136,3 @@ it is a defect, as on every host.
 
 A program with one locale (a worker, a CLI, a test) provides a fixed translator once:
 `program.pipe(Effect.provide(CurrentIntl.layer({ locale: "nb", catalog, timeZone: "Europe/Oslo" })))`.
-
-[`apps/effect-example`](https://github.com/elmeragroup/intl/tree/main/apps/effect-example) is a whole API on this,
-with no React and no bundler: `effect/http-api` endpoints behind an `HttpApiMiddleware` that provides `CurrentIntl`
-per request (the `lang` parameter, then Accept-Language), catalogs compiled once at start with `loadCatalog`, a typed
-error answered in the request's language, and HTTP tests in four languages against the running process.
