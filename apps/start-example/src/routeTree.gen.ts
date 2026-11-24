@@ -10,11 +10,29 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as InvoicesRouteImport } from './routes/invoices'
+import { Route as MeteringPointsRouteImport } from './routes/metering-points'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ApiGreetingRouteImport } from './routes/api/greeting'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InvoicesRoute = InvoicesRouteImport.update({
+  id: '/invoices',
+  path: '/invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MeteringPointsRoute = MeteringPointsRouteImport.update({
+  id: '/metering-points',
+  path: '/metering-points',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiGreetingRoute = ApiGreetingRouteImport.update({
@@ -25,27 +43,46 @@ const ApiGreetingRoute = ApiGreetingRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/invoices': typeof InvoicesRoute
+  '/metering-points': typeof MeteringPointsRoute
+  '/settings': typeof SettingsRoute
   '/api/greeting': typeof ApiGreetingRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/invoices': typeof InvoicesRoute
+  '/metering-points': typeof MeteringPointsRoute
+  '/settings': typeof SettingsRoute
   '/api/greeting': typeof ApiGreetingRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/invoices': typeof InvoicesRoute
+  '/metering-points': typeof MeteringPointsRoute
+  '/settings': typeof SettingsRoute
   '/api/greeting': typeof ApiGreetingRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/greeting'
+  fullPaths:
+    '/' | '/invoices' | '/metering-points' | '/settings' | '/api/greeting'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/greeting'
-  id: '__root__' | '/' | '/api/greeting'
+  to: '/' | '/invoices' | '/metering-points' | '/settings' | '/api/greeting'
+  id:
+    | '__root__'
+    | '/'
+    | '/invoices'
+    | '/metering-points'
+    | '/settings'
+    | '/api/greeting'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  InvoicesRoute: typeof InvoicesRoute
+  MeteringPointsRoute: typeof MeteringPointsRoute
+  SettingsRoute: typeof SettingsRoute
   ApiGreetingRoute: typeof ApiGreetingRoute
 }
 
@@ -56,6 +93,27 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invoices': {
+      id: '/invoices'
+      path: '/invoices'
+      fullPath: '/invoices'
+      preLoaderRoute: typeof InvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/metering-points': {
+      id: '/metering-points'
+      path: '/metering-points'
+      fullPath: '/metering-points'
+      preLoaderRoute: typeof MeteringPointsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/greeting': {
@@ -70,6 +128,9 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  InvoicesRoute: InvoicesRoute,
+  MeteringPointsRoute: MeteringPointsRoute,
+  SettingsRoute: SettingsRoute,
   ApiGreetingRoute: ApiGreetingRoute,
 }
 export const routeTree = rootRouteImport

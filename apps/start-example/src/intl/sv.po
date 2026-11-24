@@ -1,0 +1,883 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: sv\n"
+"X-Elmera-Serializer: 1\n"
+
+#: src/routes/index.tsx
+msgid "30-day average"
+msgstr "Snitt senaste 30 dagarna"
+
+#: src/components/app-config.ts
+msgid "Account"
+msgstr "Konto"
+
+#: src/components/user-menu.tsx
+msgid "Account menu for {name}"
+msgstr "Kontomeny för {name}"
+
+#: src/components/command-dialog.tsx
+msgid "Actions"
+msgstr "Åtgärder"
+
+#: src/intl/messages.ts
+msgid "Active"
+msgstr "Aktiv"
+
+#: src/routes/index.tsx
+msgid "Activity"
+msgstr "Aktivitet"
+
+#: src/components/metering-points-table.tsx
+msgid "Address"
+msgstr "Adress"
+
+#: src/components/settings-form.tsx
+msgid "Alert threshold, øre/kWh"
+msgstr "Larmgräns, öre/kWh"
+
+#: src/components/invoices-table.tsx
+msgid "All"
+msgstr "Alla"
+
+#: src/components/settings-form.tsx
+msgid "All changes saved"
+msgstr "Alla ändringar är sparade"
+
+#: src/components/invoice-detail.tsx
+#: src/components/invoices-table.tsx
+msgid "Amount"
+msgstr "Belopp"
+
+#: src/components/metering-points-table.tsx
+msgid "Annual use (kWh)"
+msgstr "Årsförbrukning (kWh)"
+
+#: src/components/metering-points-table.tsx
+msgid "Annual use, kWh"
+msgstr "Årsförbrukning, kWh"
+
+#: src/components/user-menu.tsx
+msgid "Appearance"
+msgstr "Utseende"
+
+#: src/components/metering-points-table.tsx
+msgid "Area"
+msgstr "Område"
+
+#: src/components/app-header.tsx
+#: src/components/app-sidebar.tsx
+msgid "Back office"
+msgstr "Kundcenter"
+
+#: src/server/portal.functions.ts
+msgid "Between {first, date, short} and {last, date, short}"
+msgstr "Mellan {first, date, short} och {last, date, short}"
+
+#: src/components/app-config.ts
+msgid "Billing"
+msgstr "Fakturering"
+
+#: src/routes/invoices.tsx
+msgid "Billing period"
+msgstr "Faktureringsperiod"
+
+#: src/intl/messages.ts
+msgid "Central Norway"
+msgstr "Mellersta Norge"
+
+#: src/components/metering-points-table.tsx
+msgid "City"
+msgstr "Ort"
+
+#: src/components/metering-points-table.tsx
+msgid "Clear search and filters"
+msgstr "Rensa sökning och filter"
+
+#: src/components/metering-points-table.tsx
+msgid "Clear selection"
+msgstr "Rensa markeringen"
+
+#: src/components/invoice-detail.tsx
+msgid "Close"
+msgstr "Stäng"
+
+#: src/routes/index.tsx
+msgid "Consumption"
+msgstr "Förbrukning"
+
+#: src/routes/index.tsx
+msgid "Consumption and solar production"
+msgstr "Förbrukning och solelsproduktion"
+
+#: src/routes/index.tsx
+msgid "Consumption and solar production per month, March 2025 to February 2026"
+msgstr "Förbrukning och solelsproduktion per månad, mars 2025 till februari 2026"
+
+#: src/routes/index.tsx
+msgid "Consumption per day"
+msgstr "Förbrukning per dag"
+
+#: src/routes/index.tsx
+msgid "Consumption per day, March 1 to 28"
+msgstr "Förbrukning per dag, 1 till 28 mars"
+
+#: src/routes/index.tsx
+msgid "Consumption per day, March 2026 against March 2025"
+msgstr "Förbrukning per dag, mars 2026 jämfört med mars 2025"
+
+#: src/components/metering-points-table.tsx
+msgid "Consumption per day, last 30 days, {customer}"
+msgstr "Förbrukning per dag, senaste 30 dagarna, {customer}"
+
+#: src/routes/index.tsx
+msgid "Consumption, March 1–28"
+msgstr "Förbrukning, 1–28 mars"
+
+#: src/components/app-config.ts
+msgid "Consumption, spot price and invoicing across the portfolio."
+msgstr "Förbrukning, spotpris och fakturering för hela portföljen."
+
+#: src/components/invoice-detail.tsx
+#: src/components/metering-points-table.tsx
+msgid "Contract"
+msgstr "Avtal"
+
+#: src/components/command-dialog.tsx
+msgid "Copy link to this page"
+msgstr "Kopiera länk till den här sidan"
+
+#: src/components/command-dialog.tsx
+msgid "Could not copy the link"
+msgstr "Det gick inte att kopiera länken"
+
+#: src/components/invoice-detail.tsx
+msgid "Credit note"
+msgstr "Kreditnota"
+
+#: src/intl/messages.ts
+msgid "Credited"
+msgstr "Krediterad"
+
+#: src/components/invoices-table.tsx
+#: src/components/metering-points-table.tsx
+msgid "Customer"
+msgstr "Kund"
+
+#: src/intl/messages.ts
+msgid "Customer operations"
+msgstr "Kundtjänst"
+
+#: src/components/settings-form.tsx
+msgid "Customers can change contract at any time."
+msgstr "Kunderna kan byta avtal när som helst."
+
+#: src/components/user-menu.tsx
+msgctxt "appearance"
+msgid "Dark"
+msgstr "Mörkt"
+
+#. <x0> = <time dateTime>
+#: src/routes/index.tsx
+msgid "Data as of <x0>{asOf}</x0>"
+msgstr "Data per <x0>{asOf}</x0>"
+
+#: src/components/settings-form.tsx
+msgid "Default contract"
+msgstr "Standardavtal"
+
+#: src/components/settings-form.tsx
+msgid "Discard changes"
+msgstr "Ignorera ändringar"
+
+#: src/intl/messages.ts
+msgid "Disconnected"
+msgstr "Frånkopplad"
+
+#: src/components/invoices-table.tsx
+#: src/routes/index.tsx
+#: src/routes/invoices.tsx
+msgid "Due"
+msgstr "Förfallodag"
+
+#: src/server/portal.functions.ts
+msgid "Due on {dueOn, date, short}"
+msgstr "Förfaller {dueOn, date, short}"
+
+#: src/intl/messages.ts
+msgid "Eastern Norway"
+msgstr "Östra Norge"
+
+#: src/server/portal.functions.ts
+msgid "Elhub delivered a reading for every point we supplied that day."
+msgstr "Elhub levererade en mätaravläsning för varje punkt vi levererade el till den dagen."
+
+#: src/components/settings-form.tsx
+msgid "Email"
+msgstr "E-post"
+
+#: src/components/invoice-detail.tsx
+msgid "Energy, {contract}"
+msgstr "Energi, {contract}"
+
+#: src/components/settings-form.tsx
+msgid "Enter a whole number of øre from 1 to 999."
+msgstr "Ange ett heltal öre från 1 till 999."
+
+#: src/components/settings-form.tsx
+msgid "Enter an email address such as name@example.com."
+msgstr "Ange en e-postadress, till exempel namn@example.com."
+
+#: src/components/settings-form.tsx
+msgid "Enter your name."
+msgstr "Ange ditt namn."
+
+#: src/routes/index.tsx
+msgid "Estimated invoicing per day, March 1 to 28"
+msgstr "Beräknad fakturering per dag, 1 till 28 mars"
+
+#: src/routes/index.tsx
+msgid "Estimated invoicing, March"
+msgstr "Beräknad fakturering, mars"
+
+#: src/server/portal.functions.ts
+msgid "Evening price peak in NO1"
+msgstr "Pristopp i kväll i NO1"
+
+#: src/components/app-config.ts
+msgid "Every point we supply, with its contract and its last 30 days."
+msgstr "Varje punkt vi levererar till, med avtalet och de senaste 30 dagarna."
+
+#: src/components/metering-points-table.tsx
+msgid "Export"
+msgstr "Exportera"
+
+#: src/components/metering-points-table.tsx
+msgid "Export {count, plural, one {# point} other {# points}}"
+msgstr "Exportera {count, plural, one {# punkt} other {# punkter}}"
+
+#: src/routes/index.tsx
+msgid "February invoices"
+msgstr "Fakturor för februari"
+
+#: src/server/portal.functions.ts
+msgid "February invoices sent"
+msgstr "Fakturorna för februari har skickats"
+
+#: src/components/app-config.ts
+msgid "February's invoices, their payments and what each one charged."
+msgstr "Februarifakturorna, betalningarna och vad var och en debiterade."
+
+#: src/intl/messages.ts
+msgid "Fixed price"
+msgstr "Fast pris"
+
+#: src/components/settings-form.tsx
+msgid "Full name"
+msgstr "Fullständigt namn"
+
+#: src/routes/index.tsx
+msgid "Hello {name}, you have {count, plural, =0 {no overdue invoices} one {# overdue invoice} other {# overdue invoices}}."
+msgstr "Hej {name}, du har {count, plural, =0 {inga förfallna fakturor} one {# förfallen faktura} other {# förfallna fakturor}}."
+
+#: src/intl/messages.ts
+msgid "High"
+msgstr "Högt"
+
+#: src/components/settings-form.tsx
+msgid "How long a new customer has to pay each invoice."
+msgstr "Hur lång tid en ny kund har på sig att betala varje faktura."
+
+#: src/components/settings-form.tsx
+msgid "How you appear to your team, and where your mail goes."
+msgstr "Så ser ditt team dig, och hit går din e-post."
+
+#: src/components/invoices-table.tsx
+msgid "Invoice"
+msgstr "Faktura"
+
+#: src/components/invoice-detail.tsx
+msgid "Invoice lines"
+msgstr "Fakturarader"
+
+#: src/routes/index.tsx
+#: src/routes/invoices.tsx
+msgid "Invoiced"
+msgstr "Fakturerat"
+
+#: src/components/app-config.ts
+#: src/components/invoices-table.tsx
+msgid "Invoices"
+msgstr "Fakturor"
+
+#: src/components/settings-form.tsx
+msgid "Invoicing"
+msgstr "Fakturering"
+
+#: src/components/invoice-detail.tsx
+msgid "Issued"
+msgstr "Utfärdad"
+
+#: src/routes/index.tsx
+msgid "Key figures"
+msgstr "Nyckeltal"
+
+#: src/components/locale-switcher.tsx
+#: src/routes/settings.tsx
+msgid "Language"
+msgstr "Språk"
+
+#: src/components/metering-points-table.tsx
+msgid "Last 30 days"
+msgstr "Senaste 30 dagarna"
+
+#: src/components/user-menu.tsx
+msgctxt "appearance"
+msgid "Light"
+msgstr "Ljust"
+
+#: src/components/invoice-detail.tsx
+msgid "Line"
+msgstr "Rad"
+
+#: src/components/command-dialog.tsx
+msgid "Link copied"
+msgstr "Länken har kopierats"
+
+#: src/intl/messages.ts
+msgid "Low"
+msgstr "Lågt"
+
+#: src/components/settings-form.tsx
+msgid "Mail me when NO1's spot price passes the threshold."
+msgstr "Mejla mig när spotpriset i NO1 passerar gränsen."
+
+#: src/routes/index.tsx
+msgid "March so far, against March last year, across every metering point."
+msgstr "Mars hittills, jämfört med mars i fjol, för alla mätpunkter."
+
+#: src/components/invoice-detail.tsx
+#: src/components/metering-points-table.tsx
+msgid "Metering point"
+msgstr "Mätpunkt"
+
+#: src/components/metering-points-table.tsx
+msgid "Metering point filters"
+msgstr "Filter för mätpunkter"
+
+#: src/components/app-config.ts
+msgid "Metering points"
+msgstr "Mätpunkter"
+
+#: src/components/invoice-detail.tsx
+msgid "Monthly fee"
+msgstr "Månadsavgift"
+
+#: src/intl/messages.ts
+msgid "Moving out"
+msgstr "Flyttar ut"
+
+#: src/routes/index.tsx
+msgid "NO1 by the quarter-hour, against the 30-day average."
+msgstr "NO1 per kvart, jämfört med snittet de senaste 30 dagarna."
+
+#: src/components/metering-points-table.tsx
+msgid "Name, address or metering point"
+msgstr "Namn, adress eller mätpunkt"
+
+#: src/components/metering-points-table.tsx
+msgid "No metering points match"
+msgstr "Inga mätpunkter matchar"
+
+#: src/components/command-dialog.tsx
+msgid "No page or action matches."
+msgstr "Ingen sida eller åtgärd matchar."
+
+#: src/intl/messages.ts
+msgid "Normal"
+msgstr "Normalt"
+
+#: src/intl/messages.ts
+msgid "Northern Norway"
+msgstr "Norra Norge"
+
+#: src/components/app-header.tsx
+msgid "Not found"
+msgstr "Hittades inte"
+
+#: src/components/app-shell.tsx
+#: src/components/settings-form.tsx
+msgid "Notifications"
+msgstr "Aviseringar"
+
+#: src/intl/messages.ts
+msgid "Onboarding"
+msgstr "Under uppstart"
+
+#: src/intl/messages.ts
+msgctxt "invoice state"
+msgid "Open"
+msgstr "Öppen"
+
+#: src/routes/index.tsx
+msgctxt "verb"
+msgid "Open"
+msgstr "Öppna"
+
+#: src/intl/messages.ts
+msgid "Overdue"
+msgstr "Förfallen"
+
+#: src/components/app-config.ts
+#: src/components/app-sidebar.tsx
+msgid "Overview"
+msgstr "Översikt"
+
+#: src/components/app-shell.tsx
+#: src/components/command-dialog.tsx
+msgid "Pages"
+msgstr "Sidor"
+
+#: src/intl/messages.ts
+msgid "Paid"
+msgstr "Betald"
+
+#: src/components/settings-form.tsx
+msgid "Payment terms"
+msgstr "Betalningsvillkor"
+
+#: src/server/portal.functions.ts
+msgid "Payments matched"
+msgstr "Inbetalningar avstämda"
+
+#: src/components/app-config.ts
+msgid "Portfolio"
+msgstr "Portfölj"
+
+#: src/components/app-sidebar.tsx
+msgid "Power retail"
+msgstr "Elhandel"
+
+#: src/components/settings-form.tsx
+msgid "Price alerts"
+msgstr "Prislarm"
+
+#: src/routes/index.tsx
+msgid "Price alerts go to your {channel, select, email {email} sms {phone} other {app}}."
+msgstr "Prislarm skickas till {channel, select, email {din e-post} sms {din telefon} other {appen}}."
+
+#: src/components/invoice-detail.tsx
+#: src/components/metering-points-table.tsx
+msgid "Price area"
+msgstr "Prisområde"
+
+#: src/routes/index.tsx
+msgid "Price areas"
+msgstr "Prisområden"
+
+#: src/components/settings-form.tsx
+msgid "Profile"
+msgstr "Profil"
+
+#: src/components/metering-points-table.tsx
+msgid "Reading reminders sent"
+msgstr "Påminnelser om mätaravläsning har skickats"
+
+#: src/server/portal.functions.ts
+msgid "Readings for {day, date, short} are in"
+msgstr "Mätvärdena för {day, date, short} har kommit in"
+
+#: src/components/command-menu.tsx
+msgid "Reload page"
+msgstr "Läs in sidan igen"
+
+#: src/components/invoice-detail.tsx
+msgid "Reminder sent"
+msgstr "Påminnelsen har skickats"
+
+#: src/components/settings-form.tsx
+msgid "Reports and price alerts go here."
+msgstr "Rapporter och prislarm skickas hit."
+
+#. <x0> = <Link to activeOptions>
+#: src/routes/index.tsx
+msgid "Review <x0>February's invoices</x0> before they fall due."
+msgstr "Gå igenom <x0>februarifakturorna</x0> innan de förfaller."
+
+#: src/components/settings-form.tsx
+msgid "Save settings"
+msgstr "Spara inställningarna"
+
+#: src/server/portal.functions.ts
+msgid "Saved: {contract} by default, {days}-day terms, {alerts, select, on {price alerts above {ore, number} øre/kWh} other {no price alerts}} and {report, select, on {a weekly report} other {no weekly report}}."
+msgstr "Sparat: {contract} som standard, {days} dagars betalningsvillkor, {alerts, select, on {prislarm över {ore, number} öre/kWh} other {inga prislarm}} och {report, select, on {veckorapport} other {ingen veckorapport}}."
+
+#: src/components/command-menu.tsx
+msgid "Search"
+msgstr "Sök"
+
+#: src/components/command-menu.tsx
+msgid "Search is unavailable"
+msgstr "Sökningen är inte tillgänglig"
+
+#: src/components/metering-points-table.tsx
+msgid "Search metering points"
+msgstr "Sök bland mätpunkter"
+
+#: src/components/command-dialog.tsx
+msgid "Search pages and actions"
+msgstr "Sök bland sidor och åtgärder"
+
+#: src/components/command-menu.tsx
+msgid "Search…"
+msgstr "Sök …"
+
+#: src/components/metering-points-table.tsx
+msgid "Select {customer}, {address}"
+msgstr "Välj {customer}, {address}"
+
+#: src/components/metering-points-table.tsx
+msgid "Selected metering points"
+msgstr "Valda mätpunkter"
+
+#: src/components/settings-form.tsx
+msgid "Send a test alert"
+msgstr "Skicka ett testlarm"
+
+#: src/components/metering-points-table.tsx
+msgid "Send reading reminder"
+msgstr "Skicka påminnelse om avläsning"
+
+#: src/components/invoice-detail.tsx
+msgid "Send reminder"
+msgstr "Skicka påminnelse"
+
+#: src/routes/index.tsx
+msgid "Sent"
+msgstr "Skickades"
+
+#: src/components/app-config.ts
+msgid "Settings"
+msgstr "Inställningar"
+
+#: src/components/invoices-table.tsx
+msgid "Show invoices"
+msgstr "Visa fakturor"
+
+#: src/components/user-menu.tsx
+msgid "Sign out"
+msgstr "Logga ut"
+
+#: src/components/user-menu.tsx
+msgid "Signed out"
+msgstr "Utloggad"
+
+#: src/components/app-shell.tsx
+msgid "Skip to content"
+msgstr "Hoppa till innehållet"
+
+#: src/routes/index.tsx
+msgid "Solar production"
+msgstr "Solelsproduktion"
+
+#: src/routes/index.tsx
+msgid "Solar production per day, March 1 to 28"
+msgstr "Solelsproduktion per dag, 1 till 28 mars"
+
+#: src/routes/index.tsx
+msgid "Solar production, March 1–28"
+msgstr "Solelsproduktion, 1–28 mars"
+
+#: src/intl/messages.ts
+msgid "Southern Norway"
+msgstr "Södra Norge"
+
+#: src/intl/messages.ts
+msgid "Spot"
+msgstr "Spotpris"
+
+#: src/server/portal.functions.ts
+msgid "Spot passes {ore, number} øre/kWh at {at, time, hourMinute}. Price alerts went to {customers, plural, one {# customer} other {# customers}}."
+msgstr "Spotpriset passerar {ore, number} öre/kWh kl. {at, time, hourMinute}. Prislarm gick till {customers, plural, one {# kund} other {# kunder}}."
+
+#: src/routes/index.tsx
+msgid "Spot plus markup, VAT included"
+msgstr "Spot plus påslag, inkl. moms"
+
+#: src/server/portal.functions.ts
+msgid "Spot price in NO1 per quarter-hour, {day, date, short}"
+msgstr "Spotpris i NO1 per kvart, {day, date, short}"
+
+#: src/routes/index.tsx
+msgid "Spot price now, NO1, excl. VAT"
+msgstr "Spotpris nu, NO1, exkl. moms"
+
+#: src/routes/index.tsx
+msgid "Spot price per quarter-hour today, so far"
+msgstr "Spotpris per kvart i dag hittills"
+
+#: src/routes/index.tsx
+msgid "Spot price today"
+msgstr "Spotpris i dag"
+
+#: src/routes/index.tsx
+msgid "Spot price, NO1"
+msgstr "Spotpris, NO1"
+
+#: src/components/invoices-table.tsx
+#: src/components/metering-points-table.tsx
+#, ignore-same
+msgid "Status"
+msgstr "Status"
+
+#: src/server/portal.functions.ts
+msgid "Supply starts on {startsOn, date, short} for {later, number} of them, and at once for {now, number}."
+msgstr "Leveransen startar {startsOn, date, short} för {later, number} av dem och direkt för {now, number}."
+
+#: src/components/command-dialog.tsx
+msgid "Switch to dark appearance"
+msgstr "Byt till mörkt utseende"
+
+#: src/components/command-dialog.tsx
+msgid "Switch to light appearance"
+msgstr "Byt till ljust utseende"
+
+#: src/components/user-menu.tsx
+msgctxt "appearance"
+msgid "System"
+msgstr "Som systemet"
+
+#: src/components/settings-form.tsx
+msgid "The defaults for customers who sign up from today."
+msgstr "Standardvalen för kunder som registrerar sig från och med i dag."
+
+#: src/routes/index.tsx
+msgid "The last twelve months. Heating peaks in winter, and the prosumers' solar in summer."
+msgstr "De senaste tolv månaderna. Uppvärmningen toppar på vintern och mikroproducenternas solel på sommaren."
+
+#: src/routes/index.tsx
+msgid "The latest from billing, metering and the market."
+msgstr "Det senaste från fakturering, mätning och marknaden."
+
+#: src/routes/index.tsx
+msgid "The month's invoice run, as it stands."
+msgstr "Månadens fakturakörning som den ser ut nu."
+
+#: src/routes/settings.tsx
+msgid "The portal's language, here and on every page. Your unsaved changes below stay as they are."
+msgstr "Portalens språk, här och på alla sidor. Dina osparade ändringar nedan ligger kvar."
+
+#: src/components/settings-form.tsx
+msgid "The portfolio's consumption and invoicing, every Monday."
+msgstr "Portföljens förbrukning och fakturering, varje måndag."
+
+#: src/components/answer-request.tsx
+msgid "The server did not answer. Try again."
+msgstr "Servern svarade inte. Försök igen."
+
+#: src/server/portal.functions.ts
+msgid "These settings were not saved: a field needs fixing."
+msgstr "Inställningarna sparades inte: ett fält behöver rättas."
+
+#: src/components/user-menu.tsx
+msgid "This example has no sign-in, so it opens again as {name}."
+msgstr "Det här exemplet har ingen inloggning, så det öppnas igen som {name}."
+
+#: src/server/portal.functions.ts
+msgid "This notice was translated in a route loader."
+msgstr "Det här meddelandet översattes i en ruttladdare."
+
+#: src/components/load-error.tsx
+msgid "This page could not be loaded."
+msgstr "Sidan kunde inte läsas in."
+
+#: src/routes/api/greeting.ts
+msgid "This test alert was translated by an API route."
+msgstr "Det här testlarmet översattes av en API-route."
+
+#: src/components/command-dialog.tsx
+msgid "Toggle sidebar"
+msgstr "Visa eller dölj sidopanelen"
+
+#: src/components/invoice-detail.tsx
+msgid "Total"
+msgstr "Totalt"
+
+#: src/components/load-error.tsx
+msgid "Try again"
+msgstr "Försök igen"
+
+#: src/components/metering-points-table.tsx
+msgid "Try another name or address, or take a filter away."
+msgstr "Prova ett annat namn eller en annan adress, eller ta bort ett filter."
+
+#: src/components/settings-form.tsx
+msgid "Unsaved changes"
+msgstr "Osparade ändringar"
+
+#: src/components/invoice-detail.tsx
+msgid "VAT, not charged in Northern Norway"
+msgstr "Moms, tas inte ut i Norra Norge"
+
+#: src/components/invoice-detail.tsx
+msgid "VAT, {rate, number, percent} of {subtotal, number, price}"
+msgstr "Moms, {rate, number, percent} av {subtotal, number, price}"
+
+#: src/intl/messages.ts
+msgid "Variable"
+msgstr "Rörligt pris"
+
+#: src/components/settings-form.tsx
+msgid "Weekly report"
+msgstr "Veckorapport"
+
+#: src/routes/index.tsx
+msgid "Welcome back"
+msgstr "Välkommen tillbaka"
+
+#: src/intl/messages.ts
+msgid "Western Norway"
+msgstr "Västra Norge"
+
+#: src/components/settings-form.tsx
+msgid "What we tell you about, and when."
+msgstr "Vad vi meddelar dig om, och när."
+
+#: src/components/locale-switcher.tsx
+msgid "Your language choice was not saved. Try again."
+msgstr "Ditt språkval sparades inte. Försök igen."
+
+#: src/components/locale-switcher.tsx
+msgid "Your language choice was saved. Reload the page to see it."
+msgstr "Ditt språkval har sparats. Ladda om sidan för att se det."
+
+#: src/components/app-config.ts
+msgid "Your profile, language, invoicing defaults and notifications."
+msgstr "Din profil, språk, standardval för fakturering och aviseringar."
+
+#: src/components/app-config.ts
+msgctxt "search words"
+msgid "bills payments overdue"
+msgstr "räkningar betalningar förfallna"
+
+#: src/components/command-dialog.tsx
+msgctxt "search words"
+msgid "collapse expand navigation"
+msgstr "dölj visa navigering meny"
+
+#: src/components/app-config.ts
+msgctxt "search words"
+msgid "customers meters gsrn elhub"
+msgstr "kunder mätare gsrn elhub"
+
+#: src/components/app-config.ts
+msgctxt "search words"
+msgid "dashboard home key figures"
+msgstr "instrumentpanel hem nyckeltal"
+
+#: src/components/app-config.ts
+msgctxt "search words"
+msgid "profile language preferences notifications"
+msgstr "profil språk inställningar aviseringar"
+
+#: src/components/command-dialog.tsx
+msgctxt "search words"
+msgid "theme color scheme mode"
+msgstr "tema färger mörk ljus läge"
+
+#: src/components/command-dialog.tsx
+msgctxt "search words"
+msgid "url share address"
+msgstr "url dela adress länk"
+
+#: src/components/metering-points-table.tsx
+#, ignore-same
+msgid "{address}, {city} · {area}"
+msgstr "{address}, {city} · {area}"
+
+#: src/components/metering-points-table.tsx
+#, ignore-same
+msgid "{area} {name}"
+msgstr "{area} {name}"
+
+#: src/components/invoice-detail.tsx
+#, ignore-same
+msgid "{area}, {name}"
+msgstr "{area}, {name}"
+
+#: src/routes/index.tsx
+msgid "{change, number, change} against last year"
+msgstr "{change, number, change} jämfört med i fjol"
+
+#: src/routes/index.tsx
+msgid "{change, number, change} against the 30-day average"
+msgstr "{change, number, change} jämfört med snittet för 30 dagar"
+
+#: src/components/metering-points-table.tsx
+msgid "{count, plural, one {# customer gets a reminder} other {# customers get a reminder}} to read their meter."
+msgstr "{count, plural, one {# kund får en påminnelse} other {# kunder får en påminnelse}} om att läsa av mätaren."
+
+#: src/routes/invoices.tsx
+msgid "{count, plural, one {# invoice} other {# invoices}} for {total, number, price}"
+msgstr "{count, plural, one {# faktura} other {# fakturor}} på {total, number, price}"
+
+#: src/components/metering-points-table.tsx
+msgid "{count, plural, one {# metering point} other {# metering points}}"
+msgstr "{count, plural, one {# mätpunkt} other {# mätpunkter}}"
+
+#: src/components/metering-points-table.tsx
+msgid "{count, plural, one {# metering point} other {# metering points}} of {total, number}"
+msgstr "{count, plural, one {# mätpunkt} other {# mätpunkter}} av {total, number}"
+
+#: src/components/app-sidebar.tsx
+msgid "{count, plural, one {# overdue invoice} other {# overdue invoices}}"
+msgstr "{count, plural, one {# förfallen faktura} other {# förfallna fakturor}}"
+
+#: src/components/metering-points-table.tsx
+msgid "{count, plural, one {# point selected} other {# points selected}}"
+msgstr "{count, plural, one {# punkt vald} other {# punkter valda}}"
+
+#: src/server/portal.functions.ts
+msgid "{customers, plural, one {# customer moved in} other {# customers moved in}}"
+msgstr "{customers, plural, one {# kund har flyttat in} other {# kunder har flyttat in}}"
+
+#: src/components/invoice-detail.tsx
+msgid "{customer} gets a reminder for {number}."
+msgstr "{customer} får en påminnelse om {number}."
+
+#: src/components/invoice-detail.tsx
+msgid "{customer}, February 2026. {total, number, price} due on {dueOn, date, short}."
+msgstr "{customer}, februari 2026. {total, number, price} förfaller {dueOn, date, short}."
+
+#: src/components/settings-form.tsx
+msgid "{days, plural, one {# day} other {# days}}"
+msgstr "{days, plural, one {# dag} other {# dagar}}"
+
+#: src/server/portal.functions.ts
+msgid "{invoices, plural, one {# invoice} other {# invoices}}, due {dueOn, date, short}, and {directDebitDueOn, date, short} for direct debit."
+msgstr "{invoices, plural, one {# faktura} other {# fakturor}}, förfaller {dueOn, date, short}, och {directDebitDueOn, date, short} för autogiro."
+
+#: src/components/invoice-detail.tsx
+msgid "{kwh, number} kWh × {price, number} øre"
+msgstr "{kwh, number} kWh × {price, number} öre"
+
+#: src/components/page-header.tsx
+msgid "{page} · Back office"
+msgstr "{page} · Kundcenter"
+
+#: src/server/portal.functions.ts
+msgid "{paid, plural, one {# February invoice is paid} other {# February invoices are paid}}. {overdue, plural, one {# is overdue} other {# are overdue}}."
+msgstr "{paid, plural, one {# februarifaktura är betald} other {# februarifakturor är betalda}}. {overdue, plural, one {# har förfallit} other {# har förfallit}}."
+
+#: src/routes/index.tsx
+msgid "{price, number, spot} øre/kWh"
+msgstr "{price, number, spot} öre/kWh"
+
+#: src/components/metering-points-table.tsx
+msgid "· {annual} kWh a year"
+msgstr "· {annual} kWh per år"
+
+#: src/components/metering-points-table.tsx
+msgid "· {count, plural, one {# more hidden by filters} other {# more hidden by filters}}"
+msgstr "· {count, plural, one {# till dold av filter} other {# till dolda av filter}}"

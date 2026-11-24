@@ -84,7 +84,7 @@ jobs:
       - name: Set up Playwright
         uses: ./.github/actions/setup-playwright
         with:
-          browsers: chromium
+          browsers: chromium webkit
 
       - name: turbo e2e
         run: pnpm test:e2e

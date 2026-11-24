@@ -17,9 +17,10 @@ behavior.
 - `packages/intl-e2e` holds the Next.js and TanStack Start fixture apps and their Playwright gates.
   Private; nothing depends on it, so its framework dependencies stay out of consumers' installs.
 - `apps/next-example` (Next.js App Router) and `apps/start-example` (TanStack Start) are the example
-  apps: the recommended setup of both packages on each host, in English and Norwegian Bokmål, each
-  with its own Playwright specs against its production build and its own Vitest unit tests. Private
-  and never published; nothing depends on or imports an app.
+  apps: the recommended setup of both packages on each host, each with its own Playwright specs
+  against its production build and its own Vitest unit tests. Both are the same customer portal on
+  Elmera's Fuse design system, in English, Norwegian Bokmål, Swedish and Finnish. Private and never
+  published; nothing depends on or imports an app.
 - `tooling/typescript` contains the shared TypeScript configuration.
 - `tooling/lint` holds this workspace's own contracts as lint: the `elmera-workspace` oxlint plugin
   and the manifest test for what lives in JSON and YAML. Private.

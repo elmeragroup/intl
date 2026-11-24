@@ -2,7 +2,7 @@
   "name": "@elmeragroup/start-example",
   "version": "0.0.0",
   "private": true,
-  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a TanStack Start app, in English and Norwegian Bokmål.",
+  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a TanStack Start app on Elmera's Fuse design system, in English, Norwegian Bokmål, Swedish and Finnish.",
   "type": "module",
   "scripts": {
     "build": "vite build",
@@ -19,9 +19,11 @@
     "test:run": "vitest run"
   },
   "dependencies": {
+    "@elmeragroup/fuse": "catalog:",
     "@elmeragroup/intl": "workspace:*",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
+    "@tanstack/react-table": "catalog:",
     "effect": "catalog:",
     "react": "catalog:react19",
     "react-dom": "catalog:react19"
@@ -30,11 +32,13 @@
     "@elmeragroup/intl-tools": "workspace:*",
     "@elmeragroup/typescript-config": "workspace:*",
     "@playwright/test": "catalog:",
+    "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:react19",
     "@types/react-dom": "catalog:react19",
     "@vitejs/plugin-react": "catalog:",
     "nitro": "catalog:",
+    "tailwindcss": "catalog:",
     "tsrs": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

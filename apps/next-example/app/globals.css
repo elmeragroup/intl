@@ -1,0 +1,8 @@
+/* Tailwind v4 with Fuse's components, its charts and its themes (Fuse's README, "Tailwind v4"; chart.css as Fuse's docs
+   import it beside the block). Fuse ships compiled class names in its package, which Tailwind scans only where @source
+   points: the installed package root, one directory up from here. */
+@import "tailwindcss";
+@import "@elmeragroup/fuse/css";
+@import "@elmeragroup/fuse/chart.css";
+@import "@elmeragroup/fuse/themes.css";
+@source "../node_modules/@elmeragroup/fuse";

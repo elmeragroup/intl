@@ -224,6 +224,15 @@
         "react/no-unstable-nested-components": "error"
       }
     },
+    // The Next example's root layout loads the app's global stylesheet (Tailwind and Fuse) for its effect, as Next has
+    // a layout do. It is the one file that imports a stylesheet unassigned: the Start example's root binds its URL
+    // (`styles.css?url`), so every other file keeps the rule whole.
+    {
+      "files": ["apps/next-example/app/layout.tsx"],
+      "rules": {
+        "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }]
+      }
+    },
     // @elmeragroup/intl and intl-tools are self-contained: they may import no other @elmeragroup package. Their source
     // implements the API the extraction contract restricts, and their tests break it on purpose.
     {

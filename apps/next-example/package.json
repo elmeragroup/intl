@@ -2,7 +2,7 @@
   "name": "@elmeragroup/next-example",
   "version": "0.0.0",
   "private": true,
-  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a Next.js App Router app, in English and Norwegian Bokmål.",
+  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a Next.js App Router app on Elmera's Fuse design system, in English, Norwegian Bokm\u00e5l, Swedish and Finnish.",
   "type": "module",
   "scripts": {
     "build": "elmera-intl check && next build",
@@ -21,7 +21,9 @@
     "test:run": "vitest run"
   },
   "dependencies": {
+    "@elmeragroup/fuse": "catalog:",
     "@elmeragroup/intl": "workspace:*",
+    "@tanstack/react-table": "catalog:",
     "effect": "catalog:",
     "next": "catalog:",
     "react": "catalog:react19",
@@ -31,9 +33,11 @@
     "@elmeragroup/intl-tools": "workspace:*",
     "@elmeragroup/typescript-config": "workspace:*",
     "@playwright/test": "catalog:",
+    "@tailwindcss/postcss": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:react19",
     "@types/react-dom": "catalog:react19",
+    "tailwindcss": "catalog:",
     "tsrs": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

@@ -180,11 +180,15 @@ describe("example apps", () => {
     ]);
   });
 
+  // "Ours" is a package this workspace holds; another @elmeragroup package (Fuse, the design system the Next example
+  // is built on) comes from npm through the catalog, as any other dependency does.
+  const WORKSPACE_NAMES = new Set(PACKAGES.map(({ manifest }) => manifest.name));
+
   it.each(APPS)(
     "$path is private, named @elmeragroup/<directory>, and takes our packages from the workspace",
     ({ path, manifest }) => {
       const ours = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).filter(
-        ([name]) => name.startsWith("@elmeragroup/")
+        ([name]) => WORKSPACE_NAMES.has(name)
       );
 
       expect(manifest.private).toBe(true);

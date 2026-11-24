@@ -67,6 +67,16 @@ catalog:
   rolldown: 1.2.13
   vite: 8.3.4
 
+  # The example apps' UI: Elmera's Fuse design system and its app-shell block, at the versions Fuse's own docs app
+  # (commit 9be80460) builds the block with. Fuse's data tables take @tanstack/react-table as a peer; tailwindcss and
+  # @tailwindcss/postcss build its stylesheet through Next's PostCSS, @tailwindcss/vite through the Start example's Vite.
+  # Bump the three Tailwind entries together.
+  "@elmeragroup/fuse": 0.1.0-canary.208
+  "@tailwindcss/postcss": 4.3.3
+  "@tailwindcss/vite": 4.3.3
+  "@tanstack/react-table": 9.2.4
+  tailwindcss: 4.3.3
+
 catalogs:
   react19:
     "@types/react": 19.3.0
