@@ -38,6 +38,18 @@
     "elmera/require-disable-reason": "error",
     "elmera-intl/extractable": "error",
     "elmera-workspace/export-prefixes": "error",
+    // The test corpus and the e2e fixture apps' copies of it: extraction reads only a fixture's own files, so each
+    // fixture keeps a real copy, and `pnpm lint:fix` rewrites it from the original.
+    "elmera-workspace/file-copies": [
+      "error",
+      {
+        "original": "packages/intl/test/fixtures.tsx",
+        "copies": [
+          "packages/intl-e2e/fixtures/next/components/corpus.tsx",
+          "packages/intl-e2e/fixtures/start/src/components/corpus.tsx"
+        ]
+      }
+    ],
     "elmera-workspace/global-names": "error",
     "elmera-workspace/import-boundaries": "error",
     "elmera-workspace/instance-names": "error",
@@ -268,9 +280,9 @@
         "anti-slop/no-unknown-parameters": "off"
       }
     },
-    // The workspace plugin's JSON and AST boundary: workspace.ts parses package.json and public-surface.json, the
-    // manifest test's config-files.ts parses the JSON and YAML configs it checks, and ast.ts tells string literals
-    // apart (oxc's one "Literal" type) and walks a node's unknown fields.
+    // The workspace plugin's JSON and AST boundary: workspace.ts parses package.json, public-surface.json and the
+    // file-copies option, the manifest test's config-files.ts parses the JSON and YAML configs it checks, and ast.ts
+    // tells string literals apart (oxc's one "Literal" type) and walks a node's unknown fields.
     {
       "files": [
         "tooling/lint/src/ast.ts",

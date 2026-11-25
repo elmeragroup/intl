@@ -3,6 +3,7 @@
 import type { Plugin } from "@oxlint/plugins";
 
 import { exportPrefixes } from "./rules/export-prefixes.ts";
+import { fileCopies } from "./rules/file-copies.ts";
 import { globalNames } from "./rules/global-names.ts";
 import { importBoundaries } from "./rules/import-boundaries.ts";
 import { instanceNames } from "./rules/instance-names.ts";
@@ -15,6 +16,7 @@ const plugin: Plugin = {
   meta: { name: "elmera-workspace" },
   rules: {
     "export-prefixes": exportPrefixes,
+    "file-copies": fileCopies,
     "global-names": globalNames,
     "import-boundaries": importBoundaries,
     "instance-names": instanceNames,

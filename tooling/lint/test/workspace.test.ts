@@ -1,12 +1,19 @@
 // The contracts that live in JSON and YAML, which oxlint does not read: package manifests, the dependency catalog, the
 // Node pin and the lint config itself. Fast and unbuilt, so it runs in the same feedback loop as lint.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
-import { catalogEntries, effectPresetFindings, lintConfigFindings, parseJsonc } from "./config-files.ts";
+import { parseFileCopies } from "../src/workspace.ts";
+import {
+  catalogEntries,
+  effectPresetFindings,
+  lintConfigFindings,
+  parseJsonc,
+  ruleSetting,
+} from "./config-files.ts";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -315,6 +322,45 @@ describe(".oxlintrc.json", () => {
 
   it("parses", () => {
     expect(parseJsonc(config)).toHaveProperty("rules");
+  });
+
+  // Unit under test: the setting .oxlintrc.json gives elmera-workspace/file-copies, parsed by the rule's own
+  // parseFileCopies, so this checks exactly the paths the rule matches. Oracle: the setting must be `error`, and the file
+  // system, by realpath: it gives back a path unchanged only when the file exists under that exact spelling with no
+  // symlink on the way (a case-only alias or a symlinked directory resolves elsewhere, a missing file throws). The rule
+  // holds the copies' content, and runs only when on and only on linted files whose paths match these; a level turned
+  // off or a mistyped path switches it off without a report, and a linked copy resolves its imports from the original's
+  // place, so the setting is held here.
+  it("holds each file elmera-workspace/file-copies names to a real file at its exact path, as an error", () => {
+    const setting = ruleSetting(config, "elmera-workspace/file-copies");
+
+    assert(setting !== undefined, "elmera-workspace/file-copies is not set in .oxlintrc.json's rules");
+    expect(setting.level, "elmera-workspace/file-copies' level").toBe("error");
+
+    const option = parseFileCopies(setting.options);
+
+    if (option._tag === "Invalid") {
+      assert.fail(`elmera-workspace/file-copies' option is invalid: ${option.reason}`);
+    }
+
+    const root = realpathSync.native(ROOT);
+    const problems = [option.files.original, ...option.files.copies].flatMap((path) => {
+      const configured = join(root, path);
+
+      try {
+        const resolved = realpathSync.native(configured);
+
+        if (resolved !== configured) {
+          return [`${path} resolves to ${relative(root, resolved)}`];
+        }
+
+        return statSync(resolved).isFile() ? [] : [`${path} is not a regular file`];
+      } catch (error) {
+        return [`${path} does not resolve: ${String(error)}`];
+      }
+    });
+
+    expect(problems).toEqual([]);
   });
 });
 

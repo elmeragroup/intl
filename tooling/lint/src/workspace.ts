@@ -1,8 +1,8 @@
-// The workspace as the rules see it: which package a linted file belongs to, read from the nearest package.json, and
-// the surface a published package commits. The plugin's one JSON boundary: manifests and surfaces are parsed here,
-// once each, into the fields the rules use.
+// The workspace as the rules see it: which package a linted file belongs to, read from the nearest package.json, the
+// surface a published package commits, the workspace root, and file-copies' option. The plugin's one JSON boundary:
+// manifests, surfaces and rule options are parsed here, manifests and surfaces once each, into the fields the rules use.
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
 /** The export condition that maps every workspace subpath to its source file. */
 export const SOURCE_CONDITION = "elmera-source";
@@ -176,4 +176,128 @@ export function readSurface(pkg: WorkspacePackage): Surface | undefined {
   surfaces.set(pkg.root, surface);
 
   return surface;
+}
+
+// The file that marks the workspace root.
+const WORKSPACE_MARKER = "pnpm-workspace.yaml";
+
+const rootByDirectory = new Map<string, string | undefined>();
+
+/**
+ * The workspace root above a file: the nearest directory holding `pnpm-workspace.yaml`. Found from the file, not from
+ * where lint started, so an editor or a run from a subdirectory sees the same root.
+ *
+ * @param filename - Absolute path of the linted file.
+ * @returns The root's absolute path, or `undefined` when no `pnpm-workspace.yaml` is above the file.
+ */
+export function workspaceRootOf(filename: string): string | undefined {
+  const directory = dirname(filename);
+
+  if (rootByDirectory.has(directory)) {
+    return rootByDirectory.get(directory);
+  }
+
+  const parent = dirname(directory);
+  const found = existsSync(join(directory, WORKSPACE_MARKER))
+    ? directory
+    : parent === directory
+      ? undefined
+      : workspaceRootOf(directory);
+
+  rootByDirectory.set(directory, found);
+
+  return found;
+}
+
+/** The `elmera-workspace/file-copies` option, canonical: one original and the distinct files that must equal it. */
+export type FileCopies = {
+  /** The original's path from the workspace root: `/` separators, normalized, inside the root. */
+  readonly original: string;
+  /** Each copy's path from the workspace root, in the same form; none is the original, and none is listed twice. */
+  readonly copies: ReadonlyArray<string>;
+};
+
+/** The rule's option, parsed: its canonical paths, or why it checks nothing. */
+export type FileCopiesOption =
+  | { readonly _tag: "Parsed"; readonly files: FileCopies }
+  | { readonly _tag: "Invalid"; readonly reason: string };
+
+type CanonicalPath =
+  | { readonly _tag: "Path"; readonly path: string }
+  | { readonly _tag: "Invalid"; readonly reason: string };
+
+// A configured path as the workspace-relative form files are matched in: `/` separators, a leading `./` and redundant
+// segments gone. A path that is absolute, or does not name a file inside the root, matches nothing.
+function canonicalPath(path: string): CanonicalPath {
+  if (posix.isAbsolute(path) || win32.isAbsolute(path)) {
+    return { _tag: "Invalid", reason: `"${path}" is absolute` };
+  }
+
+  const normal = posix.normalize(path);
+
+  if (normal === "." || normal === ".." || normal.startsWith("../") || normal.endsWith("/")) {
+    return { _tag: "Invalid", reason: `"${path}" does not name a file inside the workspace root` };
+  }
+
+  return { _tag: "Path", path: normal };
+}
+
+/**
+ * The rule's option, parsed from its configured options array (`[{ original, copies }]`). Complete on its own, so the
+ * config test can parse the committed setting as the rule does: exactly one option object with at least one copy, each
+ * path workspace-relative and inside the root, no copy the original, and no copy listed twice, once canonical. oxlint's
+ * schema check states the same structure to a user's config at load.
+ *
+ * @param options - The rule's options, as oxlint passes them.
+ * @returns The canonical paths, or the reason the option checks nothing.
+ */
+export function parseFileCopies(options: ReadonlyArray<unknown>): FileCopiesOption {
+  const [option] = options;
+  const notAnOption = { _tag: "Invalid", reason: "it is not one { original, copies } object" } as const;
+
+  if (options.length !== 1 || !isRecord(option)) {
+    return notAnOption;
+  }
+
+  const { original, copies } = option;
+
+  if (
+    typeof original !== "string" ||
+    !Array.isArray(copies) ||
+    !copies.every((copy) => typeof copy === "string")
+  ) {
+    return notAnOption;
+  }
+
+  if (copies.length === 0) {
+    return { _tag: "Invalid", reason: "it lists no copy" };
+  }
+
+  const canonicalOriginal = canonicalPath(original);
+
+  if (canonicalOriginal._tag === "Invalid") {
+    return canonicalOriginal;
+  }
+
+  const seen = new Set<string>();
+
+  for (const copy of copies) {
+    const canonical = canonicalPath(copy);
+
+    if (canonical._tag === "Invalid") {
+      return canonical;
+    }
+
+    if (canonical.path === canonicalOriginal.path) {
+      return { _tag: "Invalid", reason: `the copy "${copy}" is the original` };
+    }
+
+    if (seen.has(canonical.path)) {
+      return { _tag: "Invalid", reason: `the copy "${copy}" is listed twice` };
+    }
+
+    seen.add(canonical.path);
+  }
+
+  return { _tag: "Parsed", files: { original: canonicalOriginal.path, copies: [...seen] } };
 }

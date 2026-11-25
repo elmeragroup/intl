@@ -107,6 +107,14 @@ msgid "Open"
 msgstr "Åpne"
 
 #: components/corpus.tsx
+msgid "Pick {accent, select, é {A} other {B}}"
+msgstr "Velg {accent, select, é {A} other {B}}"
+
+#: components/corpus.tsx
+msgid "Pick {kind, select, 2 {it's '{'x'}'} 1 {#1} other {none}}"
+msgstr "Velg {kind, select, 2 {det er '{'x'}'} 1 {#1} other {ingen}}"
+
+#: components/corpus.tsx
 msgid "Price '<' 100 #1"
 msgstr "Pris '<' 100 #1"
 
@@ -140,6 +148,11 @@ msgstr "Tabulator her"
 #: components/corpus.tsx
 msgid "The <x0>players''</x0> cards"
 msgstr "<x0>Spillernes</x0> kort"
+
+#. <x0> = <b>
+#: components/corpus.tsx
+msgid "There are orders sold for this {subject, select, company {company} private {person} other {customer}} <x0>{searchInterval, select, lastWeek {in the last week} lastMonth {in the last month} lastYear {in the last year} other {other}}</x0>."
+msgstr "Det er solgt ordrer for {subject, select, company {dette selskapet} private {denne personen} other {denne kunden}} <x0>{searchInterval, select, lastWeek {i løpet av den siste uken} lastMonth {i løpet av den siste måneden} lastYear {i løpet av det siste året} other {annet}}</x0>."
 
 #: components/corpus.tsx
 msgid "Two ''' apostrophes"

@@ -26,6 +26,34 @@ export function parseJsonc(text: string): unknown {
   return value;
 }
 
+/** A rule's top-level setting in `.oxlintrc.json`: its level and the options that follow it. */
+export type RuleSetting = {
+  /** The level, `"error"` or `"off"` as the conventions allow, or whatever else is written there. */
+  readonly level: unknown;
+  /** The options after the level, as oxlint passes them to the rule (`[]` for a bare level). */
+  readonly options: ReadonlyArray<unknown>;
+};
+
+/**
+ * A rule's setting in `.oxlintrc.json`'s top-level `rules`.
+ *
+ * @param text - The file's text.
+ * @param id - The rule id, such as `elmera-workspace/file-copies`.
+ * @returns Its level and options, or `undefined` when the rule is not set there.
+ */
+export function ruleSetting(text: string, id: string): RuleSetting | undefined {
+  const root = parseTree(text, [], JSONC_OPTIONS);
+  const node = root === undefined ? undefined : findNodeAtLocation(root, ["rules", id]);
+
+  if (node === undefined) {
+    return undefined;
+  }
+
+  const value: unknown = getNodeValue(node);
+
+  return Array.isArray(value) ? { level: value[0], options: value.slice(1) } : { level: value, options: [] };
+}
+
 /** One `name: version` entry of the pnpm catalogs. */
 export type CatalogEntry = { readonly name: string; readonly version: string };
 

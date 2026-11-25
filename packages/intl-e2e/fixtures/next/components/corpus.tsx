@@ -1,8 +1,13 @@
-// A copy of packages/intl/test/fixtures.tsx: extraction reads only the fixture's own files, so the fixture keeps its
-// own copy. Keep the entries in step with the original.
+// The test corpus: `<T>` usages, each with a hand-written Key and English render, so the oracle is independent of the
+// serializer. The runtime tests render it and the extractor reads it, so the runtime Key and the extracted Key face the
+// same expectation. Each e2e fixture app keeps a byte-for-byte copy, which it extracts, translates and renders on its
+// Host; elmera-workspace/file-copies (configured in .oxlintrc.json) holds the copies equal to the original in
+// packages/intl/test. Edit only the original. A new entry: add it there; run `pnpm lint:fix`, then `pnpm lint`; after
+// `pnpm build`, run `pnpm exec ../../node_modules/.bin/elmera-intl extract` in each fixture app's directory and
+// translate the new message; add its row to packages/intl-e2e/tests/corpus-expectations.ts.
 import type { ReactNode } from "react";
 
-import { Plural, T, Val } from "@elmeragroup/intl/react";
+import { Plural, Select, T, Val } from "@elmeragroup/intl/react";
 
 function Link({ href, children }: { readonly href: string; readonly children?: ReactNode }) {
   return <a href={href}>{children}</a>;
@@ -10,6 +15,10 @@ function Link({ href, children }: { readonly href: string; readonly children?: R
 
 const name = "Ada";
 const count = 2;
+const subject = "private";
+const searchInterval = "lastMonth";
+const kind = "1";
+const accent = "e\u0301";
 
 /** One `<T>` usage, its expected catalog key and its expected English render. */
 export type Fixture = { readonly el: ReactNode; readonly key: string; readonly html: string };
@@ -39,4 +48,9 @@ export const fixtures: ReadonlyArray<Fixture> = [
   { el: <T>100&nbsp;kr</T>, key: "100\u00A0kr", html: "100\u00A0kr" },
   { el: <T>Item '#1' or a'|b</T>, key: "Item ''#1' or a''|b", html: "Item &#x27;#1&#x27; or a&#x27;|b" },
   { el: <T>Got <Plural count={count} one="# user's {name}" other="# users' <b>{x}</b>" /></T>, key: "Got {count, plural, one {# user's '{'name'}'} other {# users' '<'b'>{'x'}<'/b'>'}}", html: "Got 2 users&#x27; &lt;b&gt;{x}&lt;/b&gt;" },
+  // An adopting app's message shape: a select inside a tag. Branches keep their written order, `other` last.
+  { el: <T>There are orders sold for this <Select subject={subject} _company="company" _private="person" other="customer" /> <b><Select searchInterval={searchInterval} _lastWeek="in the last week" _lastMonth="in the last month" _lastYear="in the last year" other="other" /></b>.</T>, key: "There are orders sold for this {subject, select, company {company} private {person} other {customer}} <x0>{searchInterval, select, lastWeek {in the last week} lastMonth {in the last month} lastYear {in the last year} other {other}}</x0>.", html: "There are orders sold for this person <b>in the last month</b>." },
+  { el: <T>Pick <Select kind={kind} _2="it's {x}" _1="#1" other="none" /></T>, key: "Pick {kind, select, 2 {it's '{'x'}'} 1 {#1} other {none}}", html: "Pick #1" },
+  // A decomposed `é` (e + U+0301) is a valid ICU key, kept unnormalized.
+  { el: <T>Pick <Select accent={accent} _é="A" other="B" /></T>, key: "Pick {accent, select, e\u0301 {A} other {B}}", html: "Pick A" },
 ];
