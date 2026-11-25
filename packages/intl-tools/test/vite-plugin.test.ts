@@ -1,7 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -63,13 +64,8 @@ function watches(): number {
   return process.getActiveResourcesInfo().filter((name) => name === "FSEventWrap").length;
 }
 
-// The hooks called here return nothing, (configureServer) a function Vite calls after its middlewares, or (load) a
-// module.
-type HookResult =
-  | void
-  | (() => void)
-  | Rolldown.LoadResult
-  | Promise<void | (() => void) | Rolldown.LoadResult>;
+// The two hooks called here return nothing, or (configureServer) a function Vite calls after its middlewares.
+type HookResult = void | (() => void) | Promise<void | (() => void)>;
 
 // A plugin hook's function, whether the plugin gave it bare or as `{ handler }`.
 function handlerOf<F extends (...args: never) => HookResult>(
@@ -423,23 +419,43 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
 
   // Unit under test: `intl()`'s dev server, loading a PO import before and after one edit. Oracle: Intl rejects the
   // currency "NOKK", which only the edit makes reachable: a PO load re-runs on a save of the formats module, and on a
-  // save of the config that names another one.
+  // save of the config that names another one, also when the config is a symlink to a file outside the root (the
+  // watcher reports the file's realpath). Each row prepares the project and returns its edit.
   it.for([
     {
       edited: "formats module",
-      edit: (project: Project) => {
+      prepare: () => (project: Project) => {
         project.write("intl-formats.ts", moneyFormats("NOKK"));
       },
     },
     {
       edited: "config, switched to another formats module",
-      edit: (project: Project) => {
+      prepare: () => (project: Project) => {
         project.write("intl-formats-next.ts", moneyFormats("NOKK"));
         project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats-next.ts" }));
       },
     },
-  ])("loads a catalog with the edited $edited during dev", async ({ edit }, { project }) => {
+    {
+      edited: "config through a symlink, switched to another formats module",
+      prepare: (project: Project) => {
+        const outside = mkdtempSync(join(tmpdir(), "elmera-intl-vite-outside-"));
+        project.defer(() => {
+          rmSync(outside, { recursive: true, force: true });
+        });
+        const target = join(outside, "elmera-intl.json");
+        writeFileSync(target, project.read("elmera-intl.json"));
+        rmSync(project.path("elmera-intl.json"));
+        symlinkSync(target, project.path("elmera-intl.json"));
+
+        return (edited: Project) => {
+          edited.write("intl-formats-next.ts", moneyFormats("NOKK"));
+          writeFileSync(target, JSON.stringify({ ...CONFIG, formats: "intl-formats-next.ts" }));
+        };
+      },
+    },
+  ])("loads a catalog with the edited $edited during dev", async ({ prepare }, { project }) => {
     await useMoneyFormats(project, "NOK");
+    const edit = prepare(project);
     const server = await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
     const load = async () => {
       try {
@@ -827,41 +843,37 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     });
   });
 
-  // Unit under test: the load hook alone, called as Vite calls it, since Vite's resolver rejects a missing file before
-  // `load` in a build or a dev server. Oracle: the same rule's text as above: the PO is read only once its locale is
-  // known, so a missing PO of no configured locale fails as not configured, not as a missing file.
+  // Unit under test: the `*.po` load hook, through a dev server's plugin container, since Vite's resolver rejects a
+  // missing file before `load` in a build or a module load. Oracle: the same rule's text as above: the PO is read only
+  // once its locale is known, so a missing PO of no configured locale fails as not configured, not as a missing file.
   it("fails a missing PO of no configured locale as not configured", async ({ project }) => {
-    const load = handlerOf(intlCatalogs().load);
-    const context = {
-      environment: { config: { root: project.root } },
-      addWatchFile: () => undefined,
-      error: (message: string) => {
-        throw new Error(message);
-      },
-    };
-    // SAFETY: the load hook reads only the environment's root, addWatchFile and error, which this context has.
-    const loading = Promise.resolve(load?.call(context as never, project.path("messages/sv.po")));
+    const server = await devServer(project, { plugins: [intlCatalogs()], server: { watch: null } });
+    const loading = server.environments.ssr.pluginContainer.load(join(server.config.root, "messages/sv.po"));
 
-    await expect(loading).rejects.toThrow(
-      new Error("elmera-intl: messages/sv.po is not a configured catalog (messages/{locale}.po, nb)")
+    await expect(loading).rejects.toHaveProperty(
+      "message",
+      "elmera-intl: messages/sv.po is not a configured catalog (messages/{locale}.po, nb)"
     );
   });
 
-  // Oracle: the config problem's printed form (problem.ts): its path (under the root, which Vite resolves to its
-  // realpath), the ConfigInvalid code and why, then its fix on the next line. The import depends on the missing config,
-  // and the build still fails on it.
+  // Oracle: the config problem's printed form (problem.ts), written out: its path (under the root, which Vite resolves
+  // to its realpath), the ConfigInvalid code and why, then the fix naming an example config. The import depends on the
+  // missing config, and the build still fails on it; its `errors` hold the plugin's own error.
   it("fails the import when the config is missing", async ({ project }) => {
     rmSync(project.path("elmera-intl.json"));
     const config = join(realpathSync(project.root), "elmera-intl.json");
-    // The build's error names the plugin, then its own error's message.
-    const problem = new RegExp(
-      `\\[plugin elmera-intl:catalogs\\]\\nRolldownError: ${RegExp.escape(`${config}: ConfigInvalid: ${config} not found`)}\\n  fix: `,
-      "u"
-    );
+    const example =
+      '{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }';
 
-    await expect(buildCatalogs(project, `export { default } from "../messages/nb.po";\n`)).rejects.toThrow(
-      problem
-    );
+    await expect(
+      buildCatalogs(project, `export { default } from "../messages/nb.po";\n`)
+    ).rejects.toMatchObject({
+      errors: [
+        {
+          message: `${config}: ConfigInvalid: ${config} not found\n  fix: write elmera-intl.json as ${example}`,
+        },
+      ],
+    });
   });
 
   it("fails the import of a configured locale's missing PO", async ({ project }) => {

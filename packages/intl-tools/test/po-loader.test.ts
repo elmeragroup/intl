@@ -34,8 +34,8 @@ const it = test.extend("project", ({ task }, { onCleanup }) => {
 type Loaded = {
   readonly error: Error | null;
   readonly code: string | undefined;
-  /** Each `addDependency` path, in order. */
-  readonly dependencies: ReadonlyArray<string>;
+  /** The paths `addDependency` was given by the time the callback ran: Turbopack reads them there. */
+  readonly dependencies: ReadonlySet<string>;
 };
 
 // Turbopack's webpack-loader call: the loader's options, the file, and its result through `async()`.
@@ -51,7 +51,7 @@ async function load(project: Project, resource: string): Promise<Loaded> {
         dependencies.push(file);
       },
       async: () => (error, code) => {
-        done.resolve({ error, code, dependencies });
+        done.resolve({ error, code, dependencies: new Set(dependencies) });
       },
     },
     PO
@@ -80,7 +80,7 @@ function useMoney(project: Project, currency: string): void {
 
 // Unit under test: the Turbopack loader, through the webpack-loader API it implements. Oracle: Intl's own nb currency
 // format, and its rejection of the currency "NOKK", which only the formats module the config names makes reachable;
-// a load depends on the config and on that module, whether it compiles or fails on it, so saving either reruns it.
+// by its callback, a load has registered the config and that module as dependencies, whether it compiles or fails.
 it("compiles the PO with the config's formats module, and fails a style only its edited content makes invalid", async ({
   project,
 }) => {
@@ -91,7 +91,7 @@ it("compiles the PO with the config's formats module, and fails a style only its
   // SAFETY: the loader's module default is the compiled catalog this test renders; a wrong value fails the render.
   const catalog = exported as Catalog;
   const formats = { number: { money: { style: "currency", currency: "NOK" } } } as const;
-  const both = [project.path("elmera-intl.json"), project.path("formats.ts")];
+  const both = new Set([project.path("elmera-intl.json"), project.path("formats.ts")]);
 
   expect(error).toBeNull();
   expect(createIntl({ locale: "nb", catalog, timeZone: "UTC", formats }).t(SOURCE, { n: 1234.5 })).toBe(
@@ -109,21 +109,23 @@ it("compiles the PO with the config's formats module, and fails a style only its
 
 // Unit under test: the loader on a PO no configured locale's catalog is. Oracle: the one rule for the text a PO of no
 // configured locale fails with on every host (`elmera-intl:`, the PO's path relative to the config, the catalogs
-// pattern and the locales), written out for this fixture; and the config is the only file whose edit can repair it.
+// pattern and the locales), written out for this fixture; and by its callback the load has registered the config, the
+// only file whose edit can repair it, as a dependency.
 it("fails a PO of no configured locale, depending on the config", async ({ project }) => {
   useMoney(project, "NOK");
   const { error, dependencies } = await load(project, "intl/sv.po");
 
   expect(error?.message).toBe("elmera-intl: intl/sv.po is not a configured catalog (intl/{locale}.po, nb)");
-  expect(dependencies).toEqual([project.path("elmera-intl.json")]);
+  expect(dependencies).toEqual(new Set([project.path("elmera-intl.json")]));
 });
 
 // Unit under test: the loader under a config that does not parse. Oracle: the config is the only file whose edit can
-// repair the load, so the failed load depends on it. The failure's text is load-graph.test.ts's.
+// repair the load, so by its callback the failed load has registered it as a dependency. The failure's text is
+// load-graph.test.ts's.
 it("fails under an invalid config, depending on the config", async ({ project }) => {
   project.write("elmera-intl.json", "{");
   const { error, dependencies } = await load(project, "intl/nb.po");
 
   expect(error).not.toBeNull();
-  expect(dependencies).toEqual([project.path("elmera-intl.json")]);
+  expect(dependencies).toEqual(new Set([project.path("elmera-intl.json")]));
 });

@@ -1,6 +1,6 @@
 // What one `*.po` import compiles to, what it depends on and what it fails with, for every host: Next's po-loader and
-// Vite's `load` each only map it onto their loader context. A leaf for loader workers: it loads the config, the formats
-// module and the compiler, never the extractor, the commands, the watcher or Effect.
+// Vite's `load` each only map it onto their loader context. A synchronous compile with no project-services runtime, for
+// loader workers: the extractor, the commands and the watcher stay outside its import graph.
 import { relative } from "node:path";
 
 import type { Catalog } from "@elmeragroup/intl/internal/catalog";
@@ -24,8 +24,9 @@ export type CatalogImportRequest = {
   readonly source: boolean;
 };
 
-/** What the import compiles to, and the files whose change must compile it again. */
+/** What the import compiles to, and the files it depends on. */
 export type CatalogImport = {
+  /** The paths the adapter reports to its host as the import's dependencies, failed or not. */
   readonly dependencies: ReadonlyArray<string>;
   readonly outcome:
     | { readonly _tag: "Module"; readonly code: string }
@@ -34,13 +35,13 @@ export type CatalogImport = {
 
 /**
  * Compile one imported PO to the module exporting its catalog, for the locale its path names (or English, with
- * `source`), with the app's `formats`. The config is always a dependency, so editing it compiles the import again,
- * failed or not; the formats module is one too once the PO is a configured locale's catalog, so saving a repaired
- * module reruns an import that failed on it. A PO of no configured locale fails with one text on every host; a catalog
- * that does not compile fails with the `CatalogCompileError` itself.
+ * `source`), with the app's `formats`. The dependencies are the config, on every outcome, and the formats module once
+ * the PO is a configured locale's catalog: the paths the adapter reports to its host, which decides what a change to
+ * one of them reruns. A PO of no configured locale fails with one text on every host; a catalog that does not compile
+ * fails with the `CatalogCompileError` itself.
  *
  * @param request - The import.
- * @returns The module's code or the failure, with the files the import depends on.
+ * @returns The module's code or the failure, with the paths the import depends on.
  */
 export function compileCatalogImport(request: CatalogImportRequest): CatalogImport {
   const loaded = loadConfig(request.config);

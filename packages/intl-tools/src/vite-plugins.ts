@@ -249,9 +249,12 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
           source: new URLSearchParams(query).has("source"),
         });
 
-        // Failed or not, so editing what the import depends on loads it again.
+        // Failed or not, each by the realpath the watcher reports (a config or formats module may be a symlink). Vite
+        // watches a path as soon as it is added, but ties a load's dependencies to its module only when the hook
+        // returns: an edit reloads a compiled import, while a failed one is simply loaded again on the next request (a
+        // module that imported it keeps its own cached error until it is itself reloaded).
         for (const dependency of dependencies) {
-          this.addWatchFile(dependency);
+          this.addWatchFile(canonical(dependency));
         }
 
         if (outcome._tag === "Failed") {
