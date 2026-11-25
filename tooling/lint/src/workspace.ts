@@ -2,7 +2,7 @@
 // surface a published package commits, the workspace root, and file-copies' option. The plugin's one JSON boundary:
 // manifests, surfaces and rule options are parsed here, manifests and surfaces once each, into the fields the rules use.
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, posix, relative, resolve, sep, win32 } from "node:path";
 
 /** The export condition that maps every workspace subpath to its source file. */
 export const SOURCE_CONDITION = "elmera-source";
@@ -209,42 +209,90 @@ export function workspaceRootOf(filename: string): string | undefined {
   return found;
 }
 
-/** The `elmera-workspace/file-copies` option: one original and the files that must equal it, workspace-relative. */
+/** The `elmera-workspace/file-copies` option, canonical: one original and the distinct files that must equal it. */
 export type FileCopies = {
-  /** The original's path from the workspace root, with `/` separators. */
+  /** The original's path from the workspace root: `/` separators, normalized, inside the root. */
   readonly original: string;
-  /** Each copy's path from the workspace root, with `/` separators; never empty. */
+  /** Each copy's path from the workspace root, in the same form; none is the original, and none is listed twice. */
   readonly copies: ReadonlyArray<string>;
 };
 
-function isPath(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+/** The rule's option, parsed: its canonical paths, or why it checks nothing. */
+export type FileCopiesOption =
+  | { readonly _tag: "Parsed"; readonly files: FileCopies }
+  | { readonly _tag: "Invalid"; readonly reason: string };
+
+type CanonicalPath =
+  | { readonly _tag: "Path"; readonly path: string }
+  | { readonly _tag: "Invalid"; readonly reason: string };
+
+// A configured path as the workspace-relative form files are matched in: `/` separators, a leading `./` and redundant
+// segments gone. A path that is absolute, or does not name a file inside the root, matches nothing.
+function canonicalPath(path: string): CanonicalPath {
+  if (posix.isAbsolute(path) || win32.isAbsolute(path)) {
+    return { _tag: "Invalid", reason: `"${path}" is absolute` };
+  }
+
+  const normal = posix.normalize(path);
+
+  if (normal === "." || normal === ".." || normal.startsWith("../") || normal.endsWith("/")) {
+    return { _tag: "Invalid", reason: `"${path}" does not name a file inside the workspace root` };
+  }
+
+  return { _tag: "Path", path: normal };
 }
 
 /**
- * The rule's option, parsed from its configured options array (`[{ original, copies }]`).
+ * The rule's option, parsed from its configured options array (`[{ original, copies }]`). oxlint's schema check holds
+ * the option's structure; this narrows its type and owns what a JSON schema cannot state: each path is
+ * workspace-relative and inside the root, no copy is the original, and no copy is listed twice, once canonical.
  *
  * @param options - The rule's options, as oxlint passes them.
- * @returns The original and its copies, or `undefined` when the options are not exactly one such object with at least
- *   one copy.
+ * @returns The canonical paths, or the reason the option checks nothing.
  */
-export function parseFileCopies(options: ReadonlyArray<unknown>): FileCopies | undefined {
+export function parseFileCopies(options: ReadonlyArray<unknown>): FileCopiesOption {
   const [option] = options;
+  const notAnOption = { _tag: "Invalid", reason: "it is not one { original, copies } object" } as const;
 
-  if (options.length !== 1 || !isRecord(option)) {
-    return undefined;
+  if (!isRecord(option)) {
+    return notAnOption;
   }
 
   const { original, copies } = option;
 
   if (
-    !isPath(original) ||
+    typeof original !== "string" ||
     !Array.isArray(copies) ||
-    copies.length === 0 ||
-    !copies.every((copy) => isPath(copy))
+    !copies.every((copy) => typeof copy === "string")
   ) {
-    return undefined;
+    return notAnOption;
   }
 
-  return { original, copies };
+  const canonicalOriginal = canonicalPath(original);
+
+  if (canonicalOriginal._tag === "Invalid") {
+    return canonicalOriginal;
+  }
+
+  const seen = new Set<string>();
+
+  for (const copy of copies) {
+    const canonical = canonicalPath(copy);
+
+    if (canonical._tag === "Invalid") {
+      return canonical;
+    }
+
+    if (canonical.path === canonicalOriginal.path) {
+      return { _tag: "Invalid", reason: `the copy "${copy}" is the original` };
+    }
+
+    if (seen.has(canonical.path)) {
+      return { _tag: "Invalid", reason: `the copy "${copy}" is listed twice` };
+    }
+
+    seen.add(canonical.path);
+  }
+
+  return { _tag: "Parsed", files: { original: canonicalOriginal.path, copies: [...seen] } };
 }

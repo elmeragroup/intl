@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { RuleTester } from "oxlint/plugins-dev";
+import { afterAll, expect, it } from "vitest";
 
 import { fileCopies } from "../src/rules/file-copies.ts";
-import { parseFileCopies } from "../src/workspace.ts";
 import { createTester } from "./rule-tester.ts";
 
 // Unit under test: elmera-workspace/file-copies. Oracle: the literal texts below, written to a temporary workspace (a
@@ -15,26 +15,33 @@ const ORIGINAL = `// The corpus ©.\nexport const accent = "e\u0301";\n`;
 // The same text with the accent composed (U+00E9): equal to the eye, different in bytes.
 const DRIFTED = `// The corpus ©.\nexport const accent = "\u00E9";\n`;
 const BOM = "\uFEFF";
+// A file whose byte 0xFF is not UTF-8, and the text a lossy decode makes of it (U+FFFD in its place).
+const INVALID_UTF8 = Buffer.concat([Buffer.from("// The corpus "), Buffer.from([0xff]), Buffer.from(".\n")]);
+const LOSSY = "// The corpus \uFFFD.\n";
 
 const workspace = realpathSync(mkdtempSync(join(tmpdir(), "elmera-file-copies-")));
-// No pnpm-workspace.yaml is above this one.
-const outside = realpathSync(mkdtempSync(join(tmpdir(), "elmera-file-copies-outside-")));
 
 afterAll(() => {
   rmSync(workspace, { recursive: true, force: true });
-  rmSync(outside, { recursive: true, force: true });
 });
 
-function write(root: string, path: string, text: string): void {
-  mkdirSync(dirname(join(root, path)), { recursive: true });
-  writeFileSync(join(root, path), text);
+function write(path: string, contents: string | Buffer): void {
+  mkdirSync(dirname(join(workspace, path)), { recursive: true });
+  writeFileSync(join(workspace, path), contents);
 }
 
 writeFileSync(join(workspace, "pnpm-workspace.yaml"), "packages: []\n");
-write(workspace, "lib/original.ts", ORIGINAL);
-write(workspace, "a/copy.ts", ORIGINAL);
-write(workspace, "b/copy.ts", DRIFTED);
-write(workspace, "bom/original.ts", `${BOM}${ORIGINAL}`);
+write("lib/original.ts", ORIGINAL);
+write("a/copy.ts", ORIGINAL);
+write("b/copy.ts", DRIFTED);
+write("bom/original.ts", `${BOM}${ORIGINAL}`);
+write("src/corpus.ts", ORIGINAL);
+write("fixture/src/corpus.ts", DRIFTED);
+write("bad/original.ts", INVALID_UTF8);
+write("bad/copy.ts", INVALID_UTF8);
+mkdirSync(join(workspace, "link"));
+symlinkSync("../lib/original.ts", join(workspace, "link/copy.ts"));
+mkdirSync(join(workspace, "dir/copy.ts"), { recursive: true });
 
 const pair = { original: "lib/original.ts", copies: ["a/copy.ts", "b/copy.ts"] };
 const inWorkspace = (path: string) => join(workspace, path);
@@ -98,12 +105,33 @@ createTester().run("file-copies", fileCopies, {
       output: ORIGINAL,
     },
     {
+      name: "Paths written with a leading ./ match the same files",
+      code: DRIFTED,
+      filename: inWorkspace("b/copy.ts"),
+      options: [{ original: "./lib/original.ts", copies: ["./b/copy.ts"] }],
+      errors: [{ messageId: "copyDiffers", data: { original: "lib/original.ts" } }],
+      output: ORIGINAL,
+    },
+    {
+      name: "A copy whose path ends with the original's path is checked as the copy",
+      code: DRIFTED,
+      filename: inWorkspace("fixture/src/corpus.ts"),
+      options: [{ original: "src/corpus.ts", copies: ["fixture/src/corpus.ts"] }],
+      errors: [{ messageId: "copyDiffers", data: { original: "src/corpus.ts" } }],
+      output: ORIGINAL,
+    },
+    {
       name: "The original names each copy that differs or is missing, and fixes nothing",
       code: ORIGINAL,
       filename: inWorkspace("lib/original.ts"),
       options: [{ original: "lib/original.ts", copies: ["a/copy.ts", "b/copy.ts", "gone/copy.ts"] }],
       errors: [
-        { messageId: "copyStale", data: { copy: "b/copy.ts" }, line: 1, column: 0 },
+        {
+          messageId: "copyStale",
+          data: { copy: "b/copy.ts", original: "lib/original.ts" },
+          line: 1,
+          column: 0,
+        },
         {
           messageId: "copyMissing",
           data: { copy: "gone/copy.ts", original: "lib/original.ts" },
@@ -111,6 +139,25 @@ createTester().run("file-copies", fileCopies, {
           column: 0,
         },
       ],
+      output: null,
+    },
+    {
+      name: "The original names each copy that is a symlink or a directory",
+      code: ORIGINAL,
+      filename: inWorkspace("lib/original.ts"),
+      options: [{ original: "lib/original.ts", copies: ["link/copy.ts", "dir/copy.ts"] }],
+      errors: [
+        { messageId: "copyNotRegularFile", data: { copy: "link/copy.ts", original: "lib/original.ts" } },
+        { messageId: "copyNotRegularFile", data: { copy: "dir/copy.ts", original: "lib/original.ts" } },
+      ],
+      output: null,
+    },
+    {
+      name: "A copy that is a symlink to the original is not a copy, and is not fixed",
+      code: ORIGINAL,
+      filename: inWorkspace("link/copy.ts"),
+      options: [{ original: "lib/original.ts", copies: ["link/copy.ts"] }],
+      errors: [{ messageId: "notRegularFile", data: { original: "lib/original.ts", copy: "link/copy.ts" } }],
       output: null,
     },
     {
@@ -122,16 +169,70 @@ createTester().run("file-copies", fileCopies, {
       output: null,
     },
     {
+      name: "An original that is not valid UTF-8 is unreadable, and no fix is offered from it",
+      code: LOSSY,
+      filename: inWorkspace("bad/copy.ts"),
+      options: [{ original: "bad/original.ts", copies: ["bad/copy.ts"] }],
+      errors: [{ messageId: "originalUnreadable", data: { original: "bad/original.ts" } }],
+      output: null,
+    },
+    {
+      name: "A copy that is not valid UTF-8 is reported from the original",
+      code: LOSSY,
+      filename: inWorkspace("bad/original.ts"),
+      options: [{ original: "bad/original.ts", copies: ["bad/copy.ts"] }],
+      errors: [{ messageId: "copyUnreadable", data: { copy: "bad/copy.ts", original: "bad/original.ts" } }],
+      output: null,
+    },
+    {
       name: "The rule turned on with no option checks nothing, so every file reports it",
       code: ORIGINAL,
       filename: inWorkspace("lib/other.ts"),
-      errors: [{ messageId: "options" }],
+      errors: [{ messageId: "options", data: { reason: "it is not one { original, copies } object" } }],
+      output: null,
+    },
+    {
+      name: "An option path that leaves the workspace",
+      code: ORIGINAL,
+      filename: inWorkspace("lib/other.ts"),
+      options: [{ original: "lib/original.ts", copies: ["../copy.ts"] }],
+      errors: [
+        {
+          messageId: "options",
+          data: { reason: '"../copy.ts" does not name a file inside the workspace root' },
+        },
+      ],
+      output: null,
+    },
+    {
+      name: "An absolute option path",
+      code: ORIGINAL,
+      filename: inWorkspace("lib/other.ts"),
+      options: [{ original: "lib/original.ts", copies: ["/abs/copy.ts"] }],
+      errors: [{ messageId: "options", data: { reason: '"/abs/copy.ts" is absolute' } }],
+      output: null,
+    },
+    {
+      name: "A copy that is the original",
+      code: ORIGINAL,
+      filename: inWorkspace("lib/other.ts"),
+      options: [{ original: "lib/original.ts", copies: ["./lib/original.ts"] }],
+      errors: [{ messageId: "options", data: { reason: 'the copy "./lib/original.ts" is the original' } }],
+      output: null,
+    },
+    {
+      name: "Two copies that are the same file",
+      code: ORIGINAL,
+      filename: inWorkspace("lib/other.ts"),
+      options: [{ original: "lib/original.ts", copies: ["a/copy.ts", "a/./copy.ts"] }],
+      errors: [{ messageId: "options", data: { reason: 'the copy "a/./copy.ts" is listed twice' } }],
       output: null,
     },
     {
       name: "A listed file with no workspace root above it",
       code: ORIGINAL,
-      filename: join(outside, "a/copy.ts"),
+      // A filename RuleTester need not find on disk, in a directory under the filesystem root that no workspace holds.
+      filename: resolve("/", "elmera-file-copies-no-workspace-root", "a/copy.ts"),
       options: [pair],
       errors: [{ messageId: "noRoot", data: { path: "a/copy.ts" } }],
       output: null,
@@ -139,51 +240,41 @@ createTester().run("file-copies", fileCopies, {
   ],
 });
 
-// The same copy, linted twice in one process with its original changed on disk in between: each run reads the
-// original afresh, so the second sees the change. Each case writes the original it expects before it runs.
-const fresh = { original: "fresh/original.ts", copies: ["fresh/copy.ts"] };
+// Runs RuleTester's cases now, inside the calling test: its describe and it hooks call their callbacks synchronously,
+// and are restored afterwards, so a case's failure (or oxlint's throw) surfaces here.
+function runNow(tests: RuleTester.TestCases): void {
+  const { describe: describeHook, it: itHook } = RuleTester;
 
-createTester().run("file-copies, peers read afresh", fileCopies, {
-  valid: [
-    {
-      name: "The first run, against an equal original",
-      code: ORIGINAL,
-      filename: inWorkspace("fresh/copy.ts"),
-      options: [fresh],
-      before: () => {
-        write(workspace, fresh.original, ORIGINAL);
-      },
-    },
-  ],
-  invalid: [
-    {
-      name: "The second run sees the original changed on disk",
-      code: ORIGINAL,
-      filename: inWorkspace("fresh/copy.ts"),
-      options: [fresh],
-      before: () => {
-        write(workspace, fresh.original, DRIFTED);
-      },
-      errors: [{ messageId: "copyDiffers" }],
-      output: DRIFTED,
-    },
-  ],
+  RuleTester.describe = (_text, fn) => {
+    fn();
+  };
+  RuleTester.it = (_text, fn) => {
+    fn();
+  };
+
+  try {
+    createTester().run("file-copies", fileCopies, tests);
+  } finally {
+    RuleTester.describe = describeHook;
+    RuleTester.it = itHook;
+  }
+}
+
+it("rejects an option with no copies by its schema, before the rule runs", () => {
+  const options = [{ original: "lib/original.ts", copies: [] }];
+
+  expect(() => {
+    runNow({ valid: [{ code: ORIGINAL, filename: inWorkspace("a/copy.ts"), options }], invalid: [] });
+  }).toThrow(/Options validation failed/u);
 });
 
-// A malformed option never reaches the rule through oxlint, whose schema check throws first; the rule's own parser is the
-// second line, for an option that check lets through. It admits exactly one object, a non-empty original and at least
-// one copy; anything else checks nothing, and the rule reports `options` for it (the RuleTester case above).
-describe("parseFileCopies", () => {
-  it("parses the one option object", () => {
-    expect(parseFileCopies([pair])).toEqual(pair);
-  });
+it("reads the original afresh each time it lints the same copy", () => {
+  const fresh = { original: "fresh/original.ts", copies: ["fresh/copy.ts"] };
+  const copy = { code: ORIGINAL, filename: inWorkspace("fresh/copy.ts"), options: [fresh] };
 
-  it.each([
-    ["two options", [pair, pair]],
-    ["no copies", [{ original: "lib/original.ts", copies: [] }]],
-    ["an empty path", [{ original: "", copies: ["a/copy.ts"] }]],
-    ["a path that is not a string", [{ original: "lib/original.ts", copies: [1] }]],
-  ])("rejects %s", (_name, options) => {
-    expect(parseFileCopies(options)).toBeUndefined();
-  });
+  write(fresh.original, ORIGINAL);
+  runNow({ valid: [copy], invalid: [] });
+
+  write(fresh.original, DRIFTED);
+  runNow({ valid: [], invalid: [{ ...copy, errors: [{ messageId: "copyDiffers" }], output: DRIFTED }] });
 });
