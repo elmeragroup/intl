@@ -153,9 +153,9 @@ const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
 });
 
 /**
- * A catalog's text as a watch reads it to classify a change: a catalog deleted or replaced by a directory reads as
- * changed (undefined). Synchronous: it opens the path without waiting for a FIFO's writer, and reads it only when it is
- * a regular file.
+ * A catalog's text as a watched sync's record is captured and compared with: undefined for a catalog deleted or
+ * replaced by a directory. Synchronous: it opens the path without waiting for a FIFO's writer, and reads it only when
+ * it is a regular file.
  *
  * @param path - The catalog.
  * @returns Its text; undefined when it is absent, not a regular file, or cannot be opened or read.

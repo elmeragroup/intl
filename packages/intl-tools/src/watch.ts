@@ -308,8 +308,8 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
     // (and a catalog it could not read is not read again here).
     yield* Ref.set(pipeline.record, result._tag === "Synced" ? result.left : NO_RECORD);
 
-    // Not left to the save's own change: a save back to text this watch wrote reads as our own write, and the change
-    // that started this sync would be lost.
+    // A superseded sync queues its retry itself, without waiting for another file event: the save that stopped it may
+    // be judged the sync's own by the record, and then no event would start the retry.
     if (result._tag === "Synced" && result.superseded) {
       yield* Queue.offer(pipeline.triggers, undefined);
     }
@@ -345,8 +345,8 @@ function alters(pipeline: Pipeline, record: CatalogRecord, change: Change): bool
 }
 
 // Classification, from the first sync on: every change admitted since the last one, under one permit (so never while a
-// sync runs, and a catalog's change is compared with what its path read back after the last sync), queues one trigger when any can alter a
-// catalog. A burst is one classification and one trigger.
+// sync runs, and a catalog's change is judged by asking the last sync's record), queues one trigger when any can alter
+// a catalog. A burst is one classification and one trigger.
 const classifier = /* @__PURE__ */ Effect.fnUntraced(function* (pipeline: Pipeline) {
   yield* Deferred.await(pipeline.firstSynced);
 

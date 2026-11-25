@@ -209,15 +209,13 @@ function isOwnWrite(own: OwnWrites, snapshot: string | undefined, text: string |
 type Ending = "completed" | "superseded";
 
 /**
- * The record a clean sync leaves: each catalog path's own text, seeded from the plan's snapshots with its writes over
- * them, then, when it wrote anything, what each path reads back right after the writes (no file event is classified in
- * between), where that is a text of the sync's own for the path (`isOwnWrite`, the write guard's own definition, over
- * the sync's own index): links name one file, so an earlier locale's path reads the last locale's write. A read-back
- * that is anything else (a save, a copy that landed since the writes) leaves the path's record as it was, so it is a
- * change. A superseded sync records only the paths it wrote: the others' snapshots may be stale, and the retry it
- * queued reads them again. A catalog is then untouched when its path reads exactly its own text: links that name one
- * file read back the last of their writes on each path (#15), and a catalog copied onto another later reads as none of
- * the other's.
+ * The record a clean sync leaves: each catalog path's own text, in one pass over its paths. A path's text is what it
+ * reads back right after the writes, when the sync wrote anything and that is a text of the sync's own for the path
+ * (`isOwnWrite`, the write guard's own definition, over the sync's own index); else the text the sync wrote to that
+ * path; else, when the sync completed, its snapshot. The read-back is taken because links name one file, so an earlier
+ * locale's path reads the last locale's write; no file event is classified in between. A read-back that is anything
+ * else (a save, a copy that landed since the writes) leaves the path's text as it was, so it is a change. A superseded
+ * sync considers only the paths it wrote: the others' snapshots may be stale, and the retry it queued reads them again.
  *
  * @param sync - What the sync read (every configured path, absent ones included, in the config's order), what it
  *   wrote, its index of its own writes, and how it ended.

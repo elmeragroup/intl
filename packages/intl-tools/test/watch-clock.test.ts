@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 
 import { NO_RECORD, syncCatalogs } from "../src/catalog-sync";
 import type { ProjectConfig } from "../src/project-config";
-import type { WatchMode } from "../src/watch";
+import type { SyncResult, WatchMode } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import type { DeliveredEvents } from "./watch-project";
@@ -448,15 +448,28 @@ describe("extract --watch on the test clock", () => {
 
   // A catalog saved right after the sync wrote it, before the sync takes its record (a tap on the storage's write):
   // the record is the text the sync wrote, not what the file holds when it is read back, so the save is a change, and
-  // its problem is reported.
+  // its problem is reported: the malformed catalog, CatalogUnreadable for messages/nb.po.
   it.effect("syncs a catalog saved right after the sync wrote it", ({ project }) =>
     Effect.gen(function* () {
+      const results: Array<SyncResult> = [];
       const files = afterCatalogWrite(project.path("messages/nb.po"), () => {
         project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
       });
-      const { reports } = yield* startWatch(project, { files });
+      yield* startWatch(project, {
+        files,
+        report: (result) =>
+          Effect.sync(() => {
+            results.push(result);
+          }),
+      });
       yield* TestClock.adjust("1 second");
-      expect(reports).toEqual(["Written", "Failed"]);
+      expect(
+        results.map((result) =>
+          result._tag === "Failed"
+            ? { failed: result.problems.map(({ code, file }) => ({ code, file })) }
+            : result._tag
+        )
+      ).toEqual(["Written", { failed: [{ code: "CatalogUnreadable", file: "messages/nb.po" }] }]);
     })
   );
 

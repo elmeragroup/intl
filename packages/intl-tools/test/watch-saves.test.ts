@@ -153,11 +153,12 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   );
 
   // A translator seeds sv from nb, copying nb's catalog onto sv's after the sync wrote nb and before it writes sv. sv
-  // then holds a text the sync wrote, but to another file: the sync's write of sv finds it changed and stops, and the
-  // next sync merges the copy.
+  // then holds a text the sync wrote, but to another file: the sync's write of sv finds it changed and stops, having
+  // written nb alone, and the next sync merges the copy, writing sv alone.
   it.effect("keeps a catalog copied onto another while the sync writes the one it copies", ({ project }) =>
     Effect.gen(function* () {
       project.write("elmera-intl.json", TWO_LOCALES);
+      const reports = recorded(project);
       let copied = false;
       const files = afterCatalogWrite(
         project.path("messages/nb.po"),
@@ -167,15 +168,20 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
         },
         (text) => text.includes(`msgid "Ready"`)
       );
-      const { reports } = yield* startWatch(project, { files });
+      yield* startWatch(project, { files, report: reports.report });
       translate(project, "messages/nb.po", "Hei");
       yield* TestClock.adjust("1 second");
       project.write("src/ready.tsx", component("Ready"));
       yield* TestClock.adjust("1 second");
 
-      expect({ copied, reports }).toEqual({
+      expect({ copied, lines: reports.lines }).toEqual({
         copied: true,
-        reports: ["Written", "Unchanged", "Written", "Written"],
+        lines: [
+          "wrote messages/nb.po, messages/sv.po",
+          "Unchanged",
+          "wrote messages/nb.po",
+          "wrote messages/sv.po",
+        ],
       });
       expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
     })
@@ -277,7 +283,8 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   // sync before it writes sv or da; halfway through the retry's debounce, a change event arrives for one catalog. Oracle:
   // the contract by hand: the retry runs 100 ms after the last change. An event for nb, the sync's own write, is no
   // change, so the retry runs at its deadline, 100 ms after the superseded sync; an event for da, which it did not write,
-  // is one, so at that deadline only the superseded sync is reported, and the retry follows 50 ms later.
+  // is one, so at that deadline only the superseded sync is reported, and the retry follows 50 ms later. The retry then
+  // completes, and nb.po, which it left as its snapshot, is its own: a second event for nb.po starts no sync.
   it.effect.each([
     {
       changed: "nb.po, which the sync wrote",
@@ -331,11 +338,15 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
         yield* TestClock.adjust("50 millis");
         const atDeadline = reports.lines.slice(started);
         yield* TestClock.adjust("50 millis");
+        const after = reports.lines.slice(started);
+        events.listener(project.path("messages")).change("change", "nb.po");
+        yield* TestClock.adjust("1 second");
 
-        expect({ superseded, atDeadline, after: reports.lines.slice(started) }).toEqual({
+        expect({ superseded, atDeadline, after, settled: reports.lines.slice(started) }).toEqual({
           superseded: ["wrote messages/nb.po"],
           atDeadline: atRetryDue,
           after: ["wrote messages/nb.po", "wrote messages/sv.po, messages/da.po"],
+          settled: ["wrote messages/nb.po", "wrote messages/sv.po, messages/da.po"],
         });
       })
   );
