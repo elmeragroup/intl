@@ -151,6 +151,38 @@ export function wrapped(
 }
 
 /**
+ * Node's catalog files, running `after` once, right after the first write to `path` that lands (`"written"`) with a text
+ * `matches` accepts: inside the sync, after that write and before the sync takes its record.
+ *
+ * @param path - The catalog.
+ * @param after - What the test does then, given the text written.
+ * @param matches - Which written text it waits for; any unless given.
+ * @returns A `CatalogFiles` layer running it.
+ */
+export function afterCatalogWrite(
+  path: string,
+  after: (text: string) => void,
+  matches: (text: string) => boolean = () => true
+): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> {
+  let done = false;
+
+  return wrapped((live) => ({
+    ...live,
+    write: (target, text, guard) =>
+      live.write(target, text, guard).pipe(
+        Effect.tap((outcome) =>
+          Effect.sync(() => {
+            if (!done && outcome === "written" && target === path && matches(text)) {
+              done = true;
+              after(text);
+            }
+          })
+        )
+      ),
+  }));
+}
+
+/**
  * A failure of the commands' I/O as the watch's `CatalogSync` reports it, for a test's own sync step.
  *
  * @param failure - The failure.

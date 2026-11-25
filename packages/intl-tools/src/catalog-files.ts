@@ -154,10 +154,12 @@ const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
 
 /**
  * A catalog's text as a watch reads it to classify a change: a catalog deleted or replaced by a directory reads as
- * changed (undefined). Synchronous, and never blocks.
+ * changed (undefined). Synchronous: it opens the path without waiting for a FIFO's writer, and reads it only when it is
+ * a regular file.
  *
  * @param path - The catalog.
- * @returns Its text; undefined when it is absent, not a regular file, or cannot be read.
+ * @returns Its text; undefined when it is absent, not a regular file, or cannot be opened or read.
+ * @throws When closing the file's descriptor fails (`closeSync`), a defect of whatever step read it.
  */
 export function readRegularText(path: string): string | undefined {
   let fd: number;
@@ -229,8 +231,8 @@ export class CatalogFiles
       /** A catalog's text; a catalog that does not exist fails as its read did. */
       readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
       /**
-       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfHoldsOneOf`)
-       * holds none of the texts the guard allows. One operation: its read, its comparison and its write never yield to
+       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfHolds`) what it
+       * holds fails the guard's `holds`. One operation: its read, its comparison and its write never yield to
        * another fiber in between, so a save made from this process meanwhile is either seen or lands after the write.
        */
       readonly write: (

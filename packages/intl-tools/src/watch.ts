@@ -227,8 +227,8 @@ type Pipeline = {
   readonly config: ProjectConfig;
   readonly catalogs: ReadonlySet<string>;
   readonly includeRoots: ReadonlyArray<string>;
-  // What the last sync left in the catalogs (`CatalogRecord`), every configured path, written or left as it was. A
-  // change is our own write only when its path is `untouched`.
+  // The last sync's record of what it left in the catalogs (`CatalogRecord`), opaque to the watch: classification asks
+  // it, under the permit, whether a changed catalog is `untouched`, and only then takes the change for our own write.
   readonly record: Ref.Ref<CatalogRecord>;
   // Each admitted change, for classification.
   readonly intake: Queue.Queue<Change>;

@@ -17,6 +17,7 @@ import type { TreeListener } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import type { DeliveredEvents } from "./watch-project";
 import {
+  afterCatalogWrite,
   component,
   deliveredEvents,
   it,
@@ -26,7 +27,6 @@ import {
   syncing,
   wake,
   woken,
-  wrapped,
 } from "./watch-project";
 
 // The watch's timing on the test clock: it polls a real tree every 50 ms, so a change is seen at the next poll and its
@@ -348,23 +348,16 @@ describe("extract --watch on the test clock", () => {
   // delivers: the restored catalog keeps its size, so a poll would see it only by its timestamp.
   it.effect("syncs a catalog saved back to its earlier text right after the sync wrote it", ({ project }) =>
     Effect.gen(function* () {
-      const nb = project.path("messages/nb.po");
       let before = "";
       let restored = false;
-      const files = wrapped((live) => ({
-        ...live,
-        write: (path, text, guard) =>
-          live.write(path, text, guard).pipe(
-            Effect.tap((outcome) =>
-              Effect.sync(() => {
-                if (!restored && outcome === "written" && path === nb && text.includes(`msgid "A"`)) {
-                  restored = true;
-                  project.write("messages/nb.po", before);
-                }
-              })
-            )
-          ),
-      }));
+      const files = afterCatalogWrite(
+        project.path("messages/nb.po"),
+        () => {
+          restored = true;
+          project.write("messages/nb.po", before);
+        },
+        (text) => text.includes(`msgid "A"`)
+      );
       const events = deliveredEvents();
       const { reports } = yield* startWatch(project, { files, mode: NATIVE, events: events.layer });
       before = project.read("messages/nb.po");
@@ -458,22 +451,9 @@ describe("extract --watch on the test clock", () => {
   // its problem is reported.
   it.effect("syncs a catalog saved right after the sync wrote it", ({ project }) =>
     Effect.gen(function* () {
-      const nb = project.path("messages/nb.po");
-      let saved = false;
-      const files = wrapped((live) => ({
-        ...live,
-        write: (path, text, guard) =>
-          live.write(path, text, guard).pipe(
-            Effect.tap((outcome) =>
-              Effect.sync(() => {
-                if (!saved && outcome === "written" && path === nb) {
-                  saved = true;
-                  project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
-                }
-              })
-            )
-          ),
-      }));
+      const files = afterCatalogWrite(project.path("messages/nb.po"), () => {
+        project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
+      });
       const { reports } = yield* startWatch(project, { files });
       yield* TestClock.adjust("1 second");
       expect(reports).toEqual(["Written", "Failed"]);

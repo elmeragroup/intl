@@ -1,7 +1,8 @@
 // A Catalog sync: what it read, what it may write over, what it wrote, what it left behind, and whether a catalog still
-// reads as that. It never writes over a translator's save, and never takes its own write for a save. Two entry points,
-// one per caller, over one core: `extractCatalogs` (`elmera-intl extract`) and `syncCatalogs` (each sync of a watch).
-// What it decides from what it read is pure, in `catalog-plan.ts`; its file-system edges are `catalog-files.ts`'s.
+// reads as that. Two entry points, one per caller, over one plan: `extractCatalogs` (`elmera-intl extract`), the
+// developer's own command, writes over whatever a catalog holds; `syncCatalogs` (each sync of a watch) never writes over
+// a translator's save, and never takes its own write for a save. What each decides from what it read is pure, in
+// `catalog-plan.ts`; its file-system edges are `catalog-files.ts`'s.
 import * as Effect from "effect/Effect";
 
 import { CatalogFiles, readCatalog, readRegularText } from "./catalog-files";
@@ -10,7 +11,6 @@ import { mergeCatalogs } from "./catalog-plan";
 import type { UnusedEntries } from "./po";
 import type { Problem } from "./problem";
 import { scanProject } from "./project";
-import { catalogPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 
 /** What a one-shot extract did. */
@@ -49,28 +49,12 @@ export type CatalogSyncResult =
       readonly left: CatalogRecord;
     };
 
-/** How a sync merges, one per entry point. Its scan reuses the runtime's parse cache (`SourceCaches`). */
-type ExtractOptions = {
-  /** Whether entries no source uses any more are dropped (`extract`) or kept (`extract --watch`). */
-  readonly unused: UnusedEntries;
-  /**
-   * What a PO saved between its read and the write does: `overwrite` writes over it (`extract`), `yield` writes
-   * nothing more so the next sync merges the save (`extract --watch`, where a translator saves while a sync runs).
-   */
-  readonly concurrentSave: "overwrite" | "yield";
-};
-
-const ONE_SHOT: ExtractOptions = { unused: "drop", concurrentSave: "overwrite" };
-const WATCHED: ExtractOptions = { unused: "keep", concurrentSave: "yield" };
-
-/** What `writeCatalogs` did: the plan's problems and message count, with each written file's text. */
-type ExtractResult = {
-  readonly problems: ReadonlyArray<Problem>;
-  readonly messages: number;
+/** What `writeGuarded` did: each file written with its text, and what the guard judged them by. */
+type GuardedWrites = {
   readonly written: ReadonlyArray<WrittenCatalog>;
   /**
-   * A PO changed after it was read, so (under `yield`) the sync stopped before writing it: `written` holds what it
-   * wrote before, nothing when the change was there before the first write.
+   * A PO changed after it was read, so the sync stopped before writing it: `written` holds what it wrote before,
+   * nothing when the change was there before the first write.
    */
   readonly superseded: boolean;
   /** Each catalog path's text as the plan read it (undefined: absent), by the exact path read and written. */
@@ -91,17 +75,27 @@ type ExtractResult = {
 export const extractCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.extractCatalogs")(function* (
   config: ProjectConfig
 ) {
-  const { problems, messages, written } = yield* writeCatalogs(
-    yield* planCatalogs(config, ONE_SHOT),
-    ONE_SHOT
-  );
+  const { problems, messages, outputs } = yield* planCatalogs(config, "drop");
 
-  return { problems, messages, written: written.map(({ path }) => path) } satisfies ExtractReport;
+  if (problems.length > 0) {
+    return { problems, messages, written: [] } satisfies ExtractReport;
+  }
+
+  // Each output over whatever its path holds, skipping one whose text is unchanged (its mtime stays).
+  const files = yield* CatalogFiles;
+  const written: Array<string> = [];
+  for (const output of outputs) {
+    if ((yield* files.write(output.path, output.text, { _tag: "Overwrite" })) === "written") {
+      written.push(output.path);
+    }
+  }
+
+  return { problems, messages, written } satisfies ExtractReport;
 });
 
 /**
  * One sync of a watch: keeps entries no source uses, and never writes over a catalog saved since it was read. A clean
- * sync takes its record after its last write, reading back each configured catalog.
+ * sync takes its record after its last write, reading back each catalog it read (each it wrote, when superseded).
  *
  * @param config - The project config.
  * @returns `Failed` with the problems, or `Synced` with the files written, whether a save superseded it, and the record
@@ -110,19 +104,19 @@ export const extractCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.extractCat
 export const syncCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.syncCatalogs")(function* (
   config: ProjectConfig
 ) {
-  const result = yield* writeCatalogs(yield* planCatalogs(config, WATCHED), WATCHED);
+  const plan = yield* planCatalogs(config, "keep");
 
-  if (result.problems.length > 0) {
-    return { _tag: "Failed", problems: result.problems } satisfies CatalogSyncResult;
+  if (plan.problems.length > 0) {
+    return { _tag: "Failed", problems: plan.problems } satisfies CatalogSyncResult;
   }
 
-  const catalogs = new Set(config.locales.map((locale) => catalogPath(config, locale)));
+  const writes = yield* writeGuarded(plan);
 
   return {
     _tag: "Synced",
-    written: result.written.map(({ path }) => path),
-    superseded: result.superseded,
-    left: recordOf(ownTexts(catalogs, result)),
+    written: writes.written.map(({ path }) => path),
+    superseded: writes.superseded,
+    left: recordOf(ownTexts(writes)),
   } satisfies CatalogSyncResult;
 });
 
@@ -140,15 +134,16 @@ const snapshotCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (config: Pr
 });
 
 /**
- * Scan the sources, read each PO and merge: every catalog `writeCatalogs` would write, and the POs it read.
+ * Scan the sources, read each PO and merge: every catalog a sync would write, and the POs it read. Its scan reuses the
+ * runtime's parse cache (`SourceCaches`).
  *
  * @param config - The project config.
- * @param options - Merge mode.
+ * @param unused - Whether entries no source uses any more are dropped (`extract`) or kept (`extract --watch`).
  * @returns The problems (if any), the message count, the POs read and the outputs.
  */
 const planCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (
   config: ProjectConfig,
-  options: ExtractOptions
+  unused: UnusedEntries
 ) {
   const scanned = yield* scanProject(config);
 
@@ -165,53 +160,27 @@ const planCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (
     } satisfies CatalogPlan;
   }
 
-  return mergeCatalogs(yield* snapshotCatalogs(config), scanned.messages, options.unused);
+  return mergeCatalogs(yield* snapshotCatalogs(config), scanned.messages, unused);
 });
 
 /**
- * Write a plan's catalogs, skipping each whose text is unchanged. Writes nothing when the plan has problems. Under
- * `yield`, writes nothing when a PO changed after the plan read it, and stops before a target that changed since (one
- * saved while an earlier catalog was written): each write checks its target in the same storage operation.
+ * Write a clean plan's catalogs, skipping each whose text is unchanged. Writes nothing when a PO changed after the plan
+ * read it, and stops before a target that changed since (one saved while an earlier catalog was written): each write
+ * checks its target in the same storage operation.
  *
- * @param plan - What `planCatalogs` read and would write.
- * @param options - What a concurrent save does.
- * @returns The plan's problems and message count, and each file written with its text.
+ * @param plan - What `planCatalogs` read and would write, with no problems.
+ * @returns Each file written with its text, whether a save superseded the sync, and what the guard judged them by.
  */
-const writeCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (
-  plan: CatalogPlan,
-  options: ExtractOptions
-) {
-  const { problems, messages } = plan;
+const writeGuarded = /* @__PURE__ */ Effect.fnUntraced(function* (plan: CatalogPlan) {
   // Filled as writes succeed: the one index the guard below and the watch's record judge a text by.
   const own = new Map<string | undefined, Set<string>>();
-
-  if (problems.length > 0) {
-    return {
-      problems,
-      messages,
-      written: [],
-      superseded: false,
-      read: plan.read,
-      own,
-    } satisfies ExtractResult;
-  }
-
   const files = yield* CatalogFiles;
 
   // Before the first write, every distinct path against its own snapshot: a save to any of them since the plan read it
   // supersedes the sync with nothing written, whichever file it names now.
-  if (options.concurrentSave === "yield") {
-    for (const [path, text] of plan.read) {
-      if ((yield* files.read(path)) !== text) {
-        return {
-          problems,
-          messages,
-          written: [],
-          superseded: true,
-          read: plan.read,
-          own,
-        } satisfies ExtractResult;
-      }
+  for (const [path, text] of plan.read) {
+    if ((yield* files.read(path)) !== text) {
+      return { written: [], superseded: true, read: plan.read, own } satisfies GuardedWrites;
     }
   }
 
@@ -220,16 +189,13 @@ const writeCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (
   const written: Array<WrittenCatalog> = [];
   for (const output of plan.outputs) {
     const snapshot = plan.read.get(output.path);
-    const outcome = yield* files.write(
-      output.path,
-      output.text,
-      options.concurrentSave === "yield"
-        ? { _tag: "IfHolds", holds: (current) => current === snapshot || isOwnWrite(own, snapshot, current) }
-        : { _tag: "Overwrite" }
-    );
+    const outcome = yield* files.write(output.path, output.text, {
+      _tag: "IfHolds",
+      holds: (current) => current === snapshot || isOwnWrite(own, snapshot, current),
+    });
 
     if (outcome === "changed") {
-      return { problems, messages, written, superseded: true, read: plan.read, own } satisfies ExtractResult;
+      return { written, superseded: true, read: plan.read, own } satisfies GuardedWrites;
     }
 
     if (outcome === "written") {
@@ -238,7 +204,7 @@ const writeCatalogs = /* @__PURE__ */ Effect.fnUntraced(function* (
     }
   }
 
-  return { problems, messages, written, superseded: false, read: plan.read, own } satisfies ExtractResult;
+  return { written, superseded: false, read: plan.read, own } satisfies GuardedWrites;
 });
 
 /** The texts one sync wrote, by the snapshot the path each went to held at the read (undefined: absent). */
@@ -267,31 +233,32 @@ function isOwnWrite(own: OwnWrites, snapshot: string | undefined, text: string |
   );
 }
 
-// The record a clean sync leaves: each catalog path's own text, seeded from the plan's snapshots (`result.read`) with
+// The record a clean sync leaves: each catalog path's own text, seeded from the plan's snapshots (`writes.read`) with
 // its writes over them, then, when it wrote anything, what each path reads back right after the writes (no file event
 // is classified in between), where that is a text of the sync's own for the path (`isOwnWrite`, the write guard's own
 // definition, over the sync's own index): links name one file, so an earlier locale's path reads the last locale's
 // write. A read-back that is anything else (a save, a copy that landed since the writes) leaves the path's record as it
 // was, so it is a change. A superseded sync records only the paths it wrote: the others' snapshots may be stale, and
 // the retry it queued reads them again.
-function ownTexts(catalogs: ReadonlySet<string>, result: ExtractResult): ReadonlyMap<string, string> {
+function ownTexts(writes: GuardedWrites): ReadonlyMap<string, string> {
   const record = new Map<string, string>();
-  if (!result.superseded) {
-    for (const [path, text] of result.read) {
+  if (!writes.superseded) {
+    for (const [path, text] of writes.read) {
       if (text !== undefined) {
         record.set(path, text);
       }
     }
   }
-  for (const { path, text } of result.written) {
+  for (const { path, text } of writes.written) {
     record.set(path, text);
   }
 
-  if (result.written.length > 0) {
-    for (const path of result.superseded ? result.written.map((output) => output.path) : catalogs) {
+  if (writes.written.length > 0) {
+    // A clean plan read every configured path, absent ones included, in the config's order.
+    for (const path of writes.superseded ? writes.written.map((output) => output.path) : writes.read.keys()) {
       const back = readRegularText(path);
 
-      if (back !== undefined && isOwnWrite(result.own, result.read.get(path), back)) {
+      if (back !== undefined && isOwnWrite(writes.own, writes.read.get(path), back)) {
         record.set(path, back);
       }
     }

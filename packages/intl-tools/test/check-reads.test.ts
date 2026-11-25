@@ -137,6 +137,7 @@ describe("extract writes over a catalog saved while it runs", () => {
     Effect.gen(function* () {
       yield* run(project, "extract", CatalogFiles.layer());
       project.write("src/ready.tsx", component("Ready"));
+      let saved = "";
       const { exit } = yield* run(
         project,
         "extract",
@@ -145,15 +146,14 @@ describe("extract writes over a catalog saved while it runs", () => {
             "messages/nb.po",
             project.read("messages/nb.po").replace(`msgid "Hello"\nmsgstr ""`, `msgid "Hello"\nmsgstr "Hei"`)
           );
+          saved = project.read("messages/nb.po");
         })
       );
       const nb = project.read("messages/nb.po");
 
-      expect({ exit, saved: nb.includes(`msgstr "Hei"`), ready: nb.includes(`msgid "Ready"`) }).toEqual({
-        exit: Exit.succeed("ok"),
-        saved: false,
-        ready: true,
-      });
+      expect(saved).toContain(`msgid "Hello"\nmsgstr "Hei"`);
+      expect(exit).toEqual(Exit.succeed("ok"));
+      expect(nb).toMatch(/msgid "Hello"\nmsgstr ""\n[\s\S]*msgid "Ready"\nmsgstr ""/u);
     })
   );
 });
