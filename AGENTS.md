@@ -122,8 +122,8 @@ Each kind of test lives with its owner:
 - Runtime behavior: `packages/intl/test/*.test.{ts,tsx}`.
 - next-intl conformance: `packages/intl/test/conformance/`, with its ledger in that directory's
   README. Port a case with its expected output verbatim; count every source case once.
-- Type-level contracts: `packages/intl/test/types.tsx`, `@ts-expect-error` lines that the
-  type-check runs and never executes.
+- Type-level contracts: `packages/intl/test/types.tsx` and `packages/intl-tools/test/types.ts`,
+  `@ts-expect-error` lines that the type-check runs and never executes.
 - Tools behavior, the extraction ↔ runtime differential corpus, the serializer fuzz and the lint
   rule's RuleTester cases: `packages/intl-tools/test/`.
 - The workspace's own lint rules (RuleTester cases) and manifest checks: `tooling/lint/test/`.

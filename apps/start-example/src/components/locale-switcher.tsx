@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import { useHydrated } from "@tanstack/react-router";
 
@@ -19,11 +19,9 @@ export function LocaleSwitcher() {
   const hydrated = useHydrated();
   const { switchLocale, isPending } = useLocaleSwitch((locale) => setLocale({ data: locale }));
 
-  // How the latest switch ended, so a failed one says so. Only the latest attempt speaks: an older one can still fail
-  // (`PersistFailed`) after a newer one started, and that failure is no longer the visitor's choice
-  // (#22: the hook should report it as `Superseded`).
+  // How the latest switch ended, so a failed one says so. A switch a newer one replaced resolves `Superseded`, which
+  // shows nothing, and every switch starts from a click, so every outcome can be shown as it arrives.
   const [outcome, setOutcome] = useState<SwitchOutcome | undefined>(undefined);
-  const latestAttempt = useRef(0);
 
   return (
     <nav aria-label={t("Language")} aria-busy={isPending}>
@@ -35,14 +33,8 @@ export function LocaleSwitcher() {
           aria-pressed={intl.locale === locale}
           disabled={!hydrated}
           onClick={() => {
-            latestAttempt.current += 1;
-            const attempt = latestAttempt.current;
             setOutcome(undefined);
-            void switchLocale(locale).then((ended) => {
-              if (attempt === latestAttempt.current) {
-                setOutcome(ended);
-              }
-            });
+            void switchLocale(locale).then(setOutcome);
           }}>
           {name}
         </button>

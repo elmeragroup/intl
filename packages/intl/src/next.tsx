@@ -32,7 +32,9 @@ export type LocaleSwitchOptions = {
  * Switch the locale without a navigation: form state and scroll survive. `persist` stores the choice where the
  * server adapter's `resolveLocale` reads it, typically a Server Action setting a cookie. Then the server tree
  * re-renders (in the Server Action's response, or through `router.refresh()`), whose layout passes the new
- * `{ locale, catalog }` to `<IntlProvider>`, so the provider and the server content change in one commit.
+ * `{ locale, catalog }` to `<IntlProvider>`, so the provider and the server content change in one commit. Latest switch
+ * wins: a switch resolves `Superseded` when a later switch started before it ended, so only the latest switch reports
+ * `Switched`, `PersistFailed` or `RefreshFailed`, and outcomes resolve in call order.
  *
  * @param persist - Stores the locale. A new function each render is fine: switches call the latest committed one,
  * and the switch queue lives as long as the router and the refresh mode.
