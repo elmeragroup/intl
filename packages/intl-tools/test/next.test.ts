@@ -129,11 +129,6 @@ it.each([
   ]);
 });
 
-// Turbopack resolves no file outside its root, so such a catalog could never load.
-it("rejects catalogs outside the Turbopack root", () => {
-  expect(() => rulePaths("../messages/{locale}.po", "apps/web")).toThrow(/outside the Turbopack root/u);
-});
-
 // Unit under test: withIntl inside a next.config.mjs, loaded by Next's own loadConfig as `next build apps/web` does,
 // with Next installed only in the app and the intl config named by absolute path, so only Next's resolution depends on
 // the launch directory. Oracle: the rule matches the catalog's one path below the workspace root (its

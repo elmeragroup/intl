@@ -17,6 +17,16 @@ void withIntl({}, options);
 const annotated: NextConfig = { reactStrictMode: true };
 void withIntl(annotated, options);
 void withIntl({ turbopack: { debugIds: true } } satisfies NextConfig, options);
+// `experimental` with none of the fields withIntl reads, and with its additional roots.
+void withIntl({ experimental: { agentFeedback: true } } satisfies NextConfig, options);
+void withIntl(
+  {
+    experimental: { turbopackAdditionalRoots: { shared: { path: "../shared", ignoreIfMissing: true } } },
+  } satisfies NextConfig,
+  options
+);
+// A deployment adapter.
+void withIntl({ adapterPath: "./adapter.mjs" } satisfies NextConfig, options);
 
 // Another wrapper generic over NextConfig composes with it.
 export const withApp = <T extends NextConfig>(config: T): T => withIntl(config, options);

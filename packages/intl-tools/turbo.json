@@ -3,14 +3,19 @@
   "extends": ["//"],
   "tasks": {
     // The public-surface tests and the CLI and watch tests (through bin/elmera-intl.js) read dist. An override replaces the root's dependsOn, so ^build is listed again.
+    // withIntl reads TURBOPACK, NEXT_RSPACK, NEXT_ADAPTER_PATH and __NEXT_DEV_SERVER, which Next or the shell sets in its
+    // process before Next loads next.config; the tests stub them, so they pass through to them without entering the hash.
     "test": {
-      "dependsOn": ["build", "^build"]
+      "dependsOn": ["build", "^build"],
+      "passThroughEnv": ["TURBOPACK", "NEXT_RSPACK", "NEXT_ADAPTER_PATH", "__NEXT_DEV_SERVER"]
     },
     "test:run": {
-      "dependsOn": ["build", "^build"]
+      "dependsOn": ["build", "^build"],
+      "passThroughEnv": ["TURBOPACK", "NEXT_RSPACK", "NEXT_ADAPTER_PATH", "__NEXT_DEV_SERVER"]
     },
     "ci:checks": {
-      "dependsOn": ["build", "^build"]
+      "dependsOn": ["build", "^build"],
+      "passThroughEnv": ["TURBOPACK", "NEXT_RSPACK", "NEXT_ADAPTER_PATH", "__NEXT_DEV_SERVER"]
     }
   }
 }

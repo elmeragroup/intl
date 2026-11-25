@@ -3,12 +3,11 @@
 // (`elmera-intl check && next build`, `extract --watch` beside `next dev`), because Next loads its config in more than
 // one process.
 import { statSync } from "node:fs";
-import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
+import { catalogPathBelowRoot, isBelow } from "./turbopack-roots";
 
 /** Options for `withIntl`. */
 export type WithIntlOptions = {
@@ -45,6 +44,10 @@ export type IntlNextConfig = {
       /** Module aliases, by specifier; withIntl adds the request module's. */
       readonly resolveAlias?: object;
     };
+  /** Next's experimental settings, of which withIntl reads `turbopackAdditionalRoots` and `adapterPath`. */
+  readonly experimental?: object;
+  /** The deployment adapter, whose `modifyConfig` Next runs after this config: withIntl then checks no placement. */
+  readonly adapterPath?: string;
 };
 
 /** What the loader receives as options: JSON only. */
@@ -79,12 +82,16 @@ const DEFAULT_REQUEST = "./intl/request.ts";
  * @param options - The project directory, where `elmera-intl.json` lives, and the request module.
  * @returns The config with the rule and the alias, typed as the config passed: the Turbopack rule and alias entries
  *   withIntl writes are Next's to read, not part of this API.
- * @throws When `elmera-intl.json` is missing or invalid, its catalogs lie outside Turbopack's root (Next cannot load
- *   them), `request` names the project directory or one above it, or a `turbopack.resolveAlias` key (exact, or a
- *   wildcard whose pattern matches) already maps the request module: anything but an exact key to withIntl's own
- *   target, or any key when withIntl aliases nothing. Also when the config or its `turbopack` is not a plain object
- *   (a phase function, a thenable, an array, a class instance or an object inheriting its settings), whose settings a
- *   spread would drop or Next would replace.
+ * @throws When `elmera-intl.json` is missing or invalid; when, where Turbopack compiles (Next's CLI running `next
+ *   build` without `--webpack` and in no `generate` or `generate-env` mode, or the `next dev` child or a dev custom
+ *   server, with `TURBOPACK` set, Rspack not selected and no adapter selected by `adapterPath`,
+ *   `experimental.adapterPath` or `NEXT_ADAPTER_PATH`), `elmera-intl.json` or the formats module it names lies outside
+ *   Turbopack's root and its `experimental.turbopackAdditionalRoots`, or its catalogs lie outside Turbopack's root
+ *   (Turbopack loads none of them, and a config outside fails every catalog import); when `request` names the project
+ *   directory or one above it, or a `turbopack.resolveAlias` key (exact, or a wildcard whose pattern matches) already
+ *   maps the request module: anything but an exact key to withIntl's own target, or any key when withIntl aliases
+ *   nothing. Also when the config or its `turbopack` is not a plain object (a phase function, a thenable, an array, a
+ *   class instance or an object inheriting its settings), whose settings a spread would drop or Next would replace.
  */
 export function withIntl<C extends object & IntlNextConfig>(
   config: C & PlainObject,
@@ -102,8 +109,13 @@ export function withIntl<C extends object & IntlNextConfig>(
     throw new Error(`withIntl: ${loaded.problem.message}; ${loaded.problem.fix}`);
   }
 
-  const root = turbopackRoot(config, options.dir);
-  const path = catalogPathPattern(loaded.config, root);
+  const catalogs = catalogPathBelowRoot(config, loaded.config, configPath, options.dir);
+
+  if (catalogs._tag === "OutsideTurbopackRoots") {
+    throw new Error(`withIntl: ${catalogs.problem.message}; ${catalogs.problem.fix}`);
+  }
+
+  const path = catalogPathPattern(catalogs.path);
   const aliases = requestAliases(config, options);
   const existing = new Map<string, unknown>(Object.entries(config.turbopack?.rules ?? {})).get(PO_GLOB);
   const ours = [poRule(path, configPath, true), poRule(path, configPath, false)];
@@ -280,59 +292,17 @@ function poRule(path: RegExp, config: string, source: boolean) {
   };
 }
 
-// Turbopack's root as Next 16.4 sets it (server/config.js): `outputFileTracingRoot`, else `turbopack.root`, else Next's
-// own detection from the project directory (lib/find-root.js: the topmost workspace marker or lockfile, bounded by
-// the git repository and the home directory), called rather than ported so the root always matches the installed Next.
-// Relative settings resolve against the working directory, as Next's do (a bare `resolve()`). Next's private
-// NEXT_PRIVATE_OUTPUT_TRACE_ROOT override, which replaces the detection, is left out: no build here sets it.
-function turbopackRoot(config: IntlNextConfig, app: string): string {
-  const configured = [config.outputFileTracingRoot, config.turbopack?.root].find(
-    (root) => root !== undefined && root !== ""
-  );
-
-  if (configured !== undefined) {
-    return resolve(configured);
-  }
-
-  // SAFETY: Next's own module (unexported, so untyped), present in every Next >= 16.4 that runs this config; the
-  // next.test.ts root cases go red if its shape changes.
-  const { findRootDirAndLockFiles } = createRequire(join(app, "package.json"))(
-    "next/dist/lib/find-root.js"
-  ) as {
-    readonly findRootDirAndLockFiles: (dir: string) => { readonly rootDir: string };
-  };
-
-  return findRootDirAndLockFiles(app).rootDir;
-}
-
-// The catalogs pattern as a RegExp over the path Turbopack matches: the catalog's path relative to its root, with
-// `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not RegExp.escape's hex
-// escapes): Turbopack evaluates the pattern in its own engine.
-function catalogPathPattern(config: ProjectConfig, root: string): RegExp {
-  const catalogs = resolve(config.root, config.catalogs);
-
-  if (!isBelow(root, catalogs)) {
-    throw new Error(
-      `withIntl: the catalogs ${config.catalogs} are outside the Turbopack root ${root}, which resolves no file outside it; set turbopack.root to a directory that holds both the app and the catalogs`
-    );
-  }
-
-  const pattern = relative(root, catalogs)
-    .split(sep)
-    .join("/")
+// The catalogs pattern as a RegExp over the path Turbopack matches: the catalog's `/`-separated path relative to its
+// root, with `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not
+// RegExp.escape's hex escapes): Turbopack evaluates the pattern in its own engine.
+function catalogPathPattern(catalogs: string): RegExp {
+  const pattern = catalogs
     .split("{locale}")
     .map((part) => escape(part))
     .join("[^/]+");
 
   // oxlint-disable-next-line require-unicode-regexp -- Turbopack evaluates this pattern's source in its own engine, not as a JS RegExp, so a JS flag is not part of what it reads
   return new RegExp(`^${pattern}$`);
-}
-
-// Whether a path lies in a directory, or is it.
-function isBelow(directory: string, path: string): boolean {
-  const below = relative(directory, path);
-
-  return below !== ".." && !below.startsWith(`..${sep}`) && !isAbsolute(below);
 }
 
 function escape(text: string): string {
