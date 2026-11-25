@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -7,7 +9,12 @@ import { expect, test } from "vitest";
 
 import type { OneShotOutcome } from "../src/command-run";
 import { runOnceInProcess } from "../src/command-run";
+import type { ProjectServices } from "../src/project-services";
+import { projectServices } from "../src/project-services";
 import { intl } from "../src/vite";
+import type { SyncServices, WatchServices } from "../src/watch";
+import { CatalogSync } from "../src/watch";
+import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 
@@ -313,6 +320,44 @@ export async function devServer(project: Project, config: InlineConfig): Promise
   return server;
 }
 
+/** The plugins' real services, their runtimes counted. */
+export type CountedServices = {
+  /** The services, for `intlPlugins`. */
+  readonly layer: Layer.Layer<WatchServices | ProjectServices>;
+  /** `[built, disposed]`: each session's runtime builds its services once and disposes them once. */
+  readonly counts: () => ReadonlyArray<number>;
+};
+
+/**
+ * The plugins' real services, their runtimes counted: each session's runtime builds its services once and disposes
+ * them once, so `[built, disposed]` counts the sessions begun and ended.
+ *
+ * @param sync - The watch's sync step; `CatalogSync.layer()` unless a test holds it.
+ * @returns The services and their counts.
+ */
+export function countedServices(
+  sync: Layer.Layer<CatalogSync, never, SyncServices> = CatalogSync.layer()
+): CountedServices {
+  const counts = { built: 0, disposed: 0 };
+  const layer = Layer.mergeAll(
+    Layer.provideMerge(sync, projectServices()),
+    FileEvents.layer(),
+    Layer.effectDiscard(
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          counts.built += 1;
+        }),
+        () =>
+          Effect.sync(() => {
+            counts.disposed += 1;
+          })
+      )
+    )
+  );
+
+  return { layer, counts: () => [counts.built, counts.disposed] };
+}
+
 /**
  * Writes `text` to `file` (relative to the root, under every watcher's watch), again each probe interval, until each
  * watcher reports it. Rolldown registers a run's watch files after the run, with no event for it, and never reports a
@@ -351,14 +396,20 @@ export async function untilReported(
  * @param project - The project.
  * @param file - The source, relative to the root.
  * @param message - The message it declares.
+ * @param catalog - The PO, relative to the root.
  */
-export async function untilSynced(project: Project, file: string, message: string): Promise<void> {
+export async function untilSynced(
+  project: Project,
+  file: string,
+  message: string,
+  catalog = "messages/nb.po"
+): Promise<void> {
   await expect
     .poll(
       () => {
         project.write(file, component(message));
 
-        return project.read("messages/nb.po");
+        return project.read(catalog);
       },
       { ...project.guard(), interval: PROBE_INTERVAL_MS }
     )

@@ -1,5 +1,3 @@
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,11 +10,8 @@ import { describe, expect } from "vitest";
 import type { Catalog } from "@elmeragroup/intl/core";
 import { createIntl } from "@elmeragroup/intl/core";
 
-import { projectServices } from "../src/project-services";
 import { intl, intlCatalogs } from "../src/vite";
 import { intlPlugins } from "../src/vite-plugins";
-import { CatalogSync } from "../src/watch";
-import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import type { DevEdit } from "./vite-project";
 import {
@@ -24,6 +19,7 @@ import {
   BUILD_WATCH,
   component,
   CONFIG,
+  countedServices,
   devServer,
   extractAndTranslate,
   it,
@@ -64,29 +60,6 @@ function devContext(server: ViteDevServer): Rolldown.PluginContext {
 }
 // SAFETY: the check's buildStart reads no build options; Rolldown's normalized options are not constructible here.
 const BUILD_OPTIONS = {} as Rolldown.NormalizedInputOptions;
-
-// The plugins' real services, their runtimes counted: each session's runtime builds its services once and disposes them
-// once, so `[built, disposed]` counts the sessions begun and ended.
-function countedServices() {
-  const counts = { built: 0, disposed: 0 };
-  const layer = Layer.mergeAll(
-    Layer.provideMerge(CatalogSync.layer(), projectServices()),
-    FileEvents.layer(),
-    Layer.effectDiscard(
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          counts.built += 1;
-        }),
-        () =>
-          Effect.sync(() => {
-            counts.disposed += 1;
-          })
-      )
-    )
-  );
-
-  return { layer, counts: () => [counts.built, counts.disposed] };
-}
 
 // The plugin's own hooks, to call them as Vite does.
 function hooksOf(name: "elmera-intl:watch" | "elmera-intl:check") {

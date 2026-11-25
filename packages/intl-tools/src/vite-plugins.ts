@@ -5,7 +5,7 @@ import type * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { Environment, Plugin, ResolvedConfig } from "vite";
+import type { Environment, Plugin, ResolvedConfig, ViteDevServer } from "vite";
 
 import { CATALOG_UPDATE_EVENT } from "@elmeragroup/intl/internal/catalog";
 
@@ -18,7 +18,9 @@ import { catalogPath } from "./project-catalogs";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ProjectServices } from "./project-services";
 import { Reporter } from "./reporter";
-import type { WatchMode, WatchServices } from "./watch";
+import type { ConfigFollow } from "./vite-config-follow";
+import { followConfig } from "./vite-config-follow";
+import type { SyncResult, WatchMode, WatchServices } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchProject } from "./watch";
 import { nearestExisting } from "./watch-trees";
 
@@ -53,24 +55,29 @@ export function intlPlugins(
   // close (its watch, then its runtime), keyed by its resolved config (a restart's replacement has its own) and stored
   // as soon as its start begins, so a server that closes while it is still starting stops it there.
   const servers = new WeakMap<ResolvedConfig, () => Promise<void>>();
+  // Each dev server's follow of its project config, by its resolved config (see `followConfig` in vite-config-follow.ts).
+  const followers = new WeakMap<ResolvedConfig, ConfigFollow>();
   // Each build's runtime, keyed by the environment that builds: a builder with `sharedConfigBuild` shares one
   // top-level config between its environments.
   const buildSessions = hostSessions<Environment, PluginServices>(services);
 
   return [
-    intlCatalogs(options),
+    // A PO save's notice held while its server's config follow will send one.
+    catalogPlugin(options, (server) => followers.get(server.config)?.holdsNotice() === true),
     {
       name: `${NAME}:watch`,
       apply: "serve",
       async configureServer(server) {
         const { logger, root } = server.config;
-        const loaded = loadConfig(configPath(root));
-
-        if (loaded._tag === "ConfigInvalid") {
-          logger.error(describeProblem(loaded.problem));
-
-          return;
-        }
+        const config = configPath(root);
+        // Vite's watcher covers the root. A file outside it (`options.config`, or a config link's target) is reported
+        // only once added; one inside is not added again, since chokidar reports an added link as created under
+        // `followSymlinks: false`.
+        const watch = (file: string) => {
+          if (!isWithin(root, file)) {
+            server.watcher.add(file);
+          }
+        };
 
         // The dev server's own watch setting: an app that polls (`server.watch.usePolling`) polls here too.
         const { watch: serverWatch } = server.config.server;
@@ -89,41 +96,83 @@ export function intlPlugins(
             : polled._tag === "PollIntervalOutOfRange"
               ? { _tag: "poll", intervalMs: DEFAULT_POLL_MS }
               : polled;
+        const report = (result: SyncResult) => {
+          if (result._tag === "Written") {
+            logger.info(`${NAME}: wrote ${result.files.map((file) => relative(root, file)).join(", ")}`);
+          } else if (result._tag === "Failed") {
+            result.problems.forEach((problem) => {
+              logger.error(describeProblem(problem));
+            });
+          }
+        };
+        // Every watch the follow starts runs on the server's one runtime.
         const runtime = ManagedRuntime.make(services);
-        const watcher = watchProject(
-          runtime,
-          loaded.config,
-          (result) => {
-            if (result._tag === "Written") {
-              logger.info(`${NAME}: wrote ${result.files.map((file) => relative(root, file)).join(", ")}`);
-            } else if (result._tag === "Failed") {
-              result.problems.forEach((problem) => {
-                logger.error(describeProblem(problem));
+        const followed = followConfig(
+          {
+            root,
+            logger,
+            watch,
+            // With HMR on, Vite restarts the server for a change it reports at a dependency of its config (recorded
+            // canonical, with `/` separators, as Vite's `normalizePath` reports a change on every host).
+            restartsFor: (path) =>
+              server.config.server.hmr !== false &&
+              server.config.configFileDependencies.includes(path.split(sep).join("/")),
+            invalidate: () => {
+              invalidateCatalogs(server);
+            },
+            notify: () => {
+              server.environments.client.hot.send({
+                type: "custom",
+                event: CATALOG_UPDATE_EVENT,
+                data: { file: config },
               });
-            }
+            },
           },
-          mode
+          config,
+          (loaded) => watchProject(runtime, loaded, report, mode)
         );
+        // Both stored before anything can fail: a server that starts on an invalid or missing config follows it into a
+        // watch once it is fixed, and one that closes while it is still starting stops the start there.
         servers.set(server.config, async () => {
           try {
-            await watcher.close();
+            await followed.close();
           } finally {
             await runtime.dispose();
           }
         });
+        followers.set(server.config, followed);
 
         try {
-          await watcher.started;
+          await followed.started;
         } catch (error) {
           // The failed start fails createServer, and Vite closes no plugin of a server it never made: this server's
-          // runtime goes here, its watchers already closed by the start.
+          // follow and runtime go here, the failed watch's watchers already closed by its start. The start's failure is
+          // the one createServer reports, so the follow's close reports none.
+          await followed.close().catch(() => undefined);
           await runtime.dispose();
           throw error;
         }
       },
-      // Once per environment as the dev server closes, in parallel: each asks the watch to stop at once, a start still
-      // pending included, and waits for its one ordered shutdown (the first close reports how it ended); then the
-      // runtime goes (disposing it again waits for the first disposal), with anything a stop did not reach.
+      // A change Vite's watcher reports to the project config, from watchChange: Vite awaits it before it handles the
+      // change (`hotUpdate`), and runs it with HMR off too. The change is the config's when it is reported at its path,
+      // or at its realpath when it links to one (Vite reports the target's edits there); the follow decides whether
+      // Vite's own restart owns it (see `followConfig`).
+      async watchChange(id) {
+        const top = this.environment.getTopLevelConfig();
+        const followed = followers.get(top);
+
+        // The config's path and its realpath, with `/` separators, as Vite reports a change on every host (its
+        // `normalizePath`).
+        const paths = watchedPaths(configPath(top.root)).map((path) => path.split(sep).join("/"));
+
+        if (followed === undefined || !paths.includes(id)) {
+          return;
+        }
+
+        await followed.follow(id);
+      },
+      // Once per environment as the dev server closes, in parallel: every call waits for the server's one close (see
+      // `followConfig`), which stops its watch, a start still pending included, and then disposes its runtime.
       async closeBundle() {
         await servers.get(this.environment.getTopLevelConfig())?.();
       },
@@ -187,6 +236,19 @@ export function intlPlugins(
       },
     },
   ];
+}
+
+// Invalidates every compiled catalog in every environment.
+function invalidateCatalogs(server: ViteDevServer): void {
+  for (const environment of Object.values(server.environments)) {
+    for (const [file, modules] of environment.moduleGraph.fileToModulesMap) {
+      if (isCatalog(file)) {
+        modules.forEach((module) => {
+          environment.moduleGraph.invalidateModule(module);
+        });
+      }
+    }
+  }
 }
 
 // The CLI's own check, so the build fails with exactly what `elmera-intl check` prints, and the source files it read.
@@ -283,13 +345,19 @@ function catalogInputs(config: string): Array<string> {
  * @returns The plugin.
  */
 export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
+  return catalogPlugin(options, () => false);
+}
+
+// The catalog plugin, with a PO save's notice to open tabs held while `holds` says so for the server (its modules are
+// invalidated all the same).
+function catalogPlugin(options: IntlPluginOptions, holds: (server: ViteDevServer) => boolean): Plugin {
   return {
     name: `${NAME}:catalogs`,
     enforce: "pre",
     load(id) {
       const [file = "", query = ""] = id.split("?", 2);
 
-      if (!file.endsWith(".po")) {
+      if (!isCatalog(file)) {
         return null;
       }
 
@@ -322,7 +390,7 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
     },
     hotUpdate({ file, server }) {
       // Once per save: hotUpdate runs per environment, and the client one exists in every dev server.
-      if (!file.endsWith(".po") || this.environment.name !== "client") {
+      if (!isCatalog(file) || this.environment.name !== "client") {
         return;
       }
 
@@ -331,12 +399,18 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
           environment.moduleGraph.invalidateModule(module);
         });
       }
-      this.environment.hot.send({ type: "custom", event: CATALOG_UPDATE_EVENT, data: { file } });
+      if (!holds(server)) {
+        this.environment.hot.send({ type: "custom", event: CATALOG_UPDATE_EVENT, data: { file } });
+      }
 
       // No client module imports a PO (the server loads the catalog), so nothing to hot-swap in the browser.
       return [];
     },
   };
+}
+
+function isCatalog(file: string): boolean {
+  return file.endsWith(".po");
 }
 
 // A catalog import's dependency as the watcher may report its change: the configured path (a change to a symlink itself,
