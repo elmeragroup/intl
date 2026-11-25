@@ -1,7 +1,7 @@
-// The app's `formats` module, loaded as the runtime gets it. A leaf, so the loaders (Next's po-loader, Vite's `load`)
-// compile a catalog with the app's formats without loading the extractor or Effect. Its evaluation, retry and memo
-// (`loadSnapshot`) are shared with `ProjectFormats` (project-formats-service.ts), which reads the module through
-// `FileSystem` for the hosts' Effect runtimes; each owns only its read and how it runs.
+// The app's `formats` module, loaded as the runtime gets it. A leaf, so a catalog import (catalog-import.ts, which
+// Next's po-loader and Vite's `load` share) compiles with the app's formats without loading the extractor or Effect.
+// Its evaluation, retry and memo (`loadSnapshot`) are shared with `ProjectFormats` (project-formats-service.ts), which
+// reads the module through `FileSystem` for the hosts' Effect runtimes; each owns only its read and how it runs.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";

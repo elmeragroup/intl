@@ -1,6 +1,7 @@
-// The one catalog compiler: PO text and a locale in, the runtime's compiled catalog out. The Turbopack and Vite
-// loaders, `loadCatalog` and `check` all call `compileCatalog`, so dev, build, tests and scripts compile alike, and
-// nothing is written to disk: the PO is the only checked-in catalog, so no task needs a generate step ordered first.
+// The one catalog compiler: PO text and a locale in, the runtime's compiled catalog out. A catalog import on every host
+// (catalog-import.ts), `loadCatalog` and `check` all call `compileCatalog`, so dev, build, tests and scripts compile
+// alike, and nothing is written to disk: the PO is the only checked-in catalog, so no task needs a generate step
+// ordered first.
 //
 // The artifact is validated, not the parse: every emitted entry goes through JSON as it ships, decodes back to the
 // parsed AST, and is dry-formatted from the decoded form through the runtime's own `formatAst` (node pass, then branch

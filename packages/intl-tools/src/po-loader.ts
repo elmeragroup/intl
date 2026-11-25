@@ -1,13 +1,8 @@
-// The Turbopack (webpack-loader API) loader `withIntl` registers on `*.po`: compile the imported catalog.
-import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
-
-import { catalogModule } from "./catalog-module";
-import { compileCatalog } from "./compile";
+// The Turbopack (webpack-loader API) loader `withIntl` registers on `*.po`: compile the imported catalog
+// (catalog-import.ts), mapped onto the loader context.
+import type { CatalogImport } from "./catalog-import";
+import { compileCatalogImport } from "./catalog-import";
 import type { PoLoaderOptions } from "./next";
-import { describeProblem } from "./problem";
-import { catalogLocale } from "./project-catalogs";
-import { loadConfig } from "./project-config";
-import { loadFormats } from "./project-formats";
 
 /** The part of Turbopack's webpack-loader context the loader uses. */
 type LoaderContext = {
@@ -27,63 +22,44 @@ export default function poLoader(this: LoaderContext, po: string): void {
   void run(this, po, this.async());
 }
 
-// Calls the callback exactly once: with the module, or with the failure the import reports. A throw (a defect, or I/O
-// this does not classify) is passed on as loader-runner passes a synchronous throw after `this.async()`, as an Error
-// even when the thrown value is not one, so a `throw null` cannot read as success. The compile is synchronous: a loader
-// worker has no Effect runtime, so it reads the config and the formats module with Node's sync fs and keeps the formats
-// memo for the worker's life (project-formats.ts).
+// Calls the callback exactly once: with the module, or with the failure the import reports (a CatalogCompileError as
+// it is, with every problem in its message). A throw (a defect) is passed on as loader-runner passes a synchronous
+// throw after `this.async()`, as an Error even when the thrown value is not one, so a `throw null` cannot read as
+// success. The compile is synchronous: a loader worker has no Effect runtime, so it reads the config and the formats
+// module with Node's sync fs and keeps the formats memo for the worker's life (project-formats.ts).
 async function run(
   context: LoaderContext,
   po: string,
   callback: (error: Error | null, code?: string) => void
 ): Promise<void> {
-  let code: string;
+  let outcome: CatalogImport["outcome"];
   try {
-    code = await Promise.try(compile, context, po);
+    outcome = await Promise.try(compile, context, po);
   } catch (error) {
     callback(error instanceof Error ? error : new Error(String(error)));
     return;
   }
-  callback(null, code);
+
+  if (outcome._tag === "Failed") {
+    callback(outcome.error);
+  } else {
+    callback(null, outcome.code);
+  }
 }
 
-// The catalog module's code; throws the error the import fails with.
-function compile(context: LoaderContext, po: string): string {
-  const { config: configPath, source } = context.getOptions();
-  const loaded = loadConfig(configPath);
+// The import's outcome, every dependency it reports registered first, failed or not.
+function compile(context: LoaderContext, po: string): CatalogImport["outcome"] {
+  const { config, source } = context.getOptions();
+  const { dependencies, outcome } = compileCatalogImport({
+    config,
+    file: context.resourcePath,
+    readPo: () => po,
+    source,
+  });
 
-  if (loaded._tag === "ConfigInvalid") {
-    throw new Error(describeProblem(loaded.problem));
+  for (const dependency of dependencies) {
+    context.addDependency(dependency);
   }
 
-  const { config } = loaded;
-  const locale = catalogLocale(config, context.resourcePath);
-
-  if (locale === undefined) {
-    throw new Error(
-      `elmera-intl: ${context.resourcePath} is not a configured catalog (${config.catalogs}, ${config.locales.join(", ")})`
-    );
-  }
-
-  // Before loading, so saving a repaired formats module reruns a load that failed on it.
-  context.addDependency(configPath);
-
-  if (config.formats !== undefined) {
-    context.addDependency(config.formats);
-  }
-
-  const formats = loadFormats(config);
-
-  if (formats._tag === "ConfigInvalid") {
-    throw new Error(describeProblem(formats.problem));
-  }
-
-  const compiled = compileCatalog(po, source ? SOURCE_LOCALE : locale, { formats: formats.formats });
-
-  if (compiled._tag === "CatalogCompileError") {
-    // The CatalogCompileError itself, with every problem in its message.
-    throw compiled;
-  }
-
-  return catalogModule(compiled.catalog);
+  return outcome;
 }

@@ -7,17 +7,15 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Environment, Plugin, ResolvedConfig } from "vite";
 
-import { CATALOG_UPDATE_EVENT, SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
+import { CATALOG_UPDATE_EVENT } from "@elmeragroup/intl/internal/catalog";
 
-import { catalogModule } from "./catalog-module";
+import { compileCatalogImport } from "./catalog-import";
 import { oneShot } from "./command-run";
-import { compileCatalog } from "./compile";
 import type { HostSessions } from "./host-sessions";
 import { hostSessions } from "./host-sessions";
 import { describeProblem } from "./problem";
-import { catalogLocale, catalogPath } from "./project-catalogs";
+import { catalogPath } from "./project-catalogs";
 import { CONFIG_FILE, loadConfig } from "./project-config";
-import { loadFormats } from "./project-formats";
 import type { ProjectServices } from "./project-services";
 import { Reporter } from "./reporter";
 import type { WatchMode, WatchServices } from "./watch";
@@ -239,47 +237,28 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
         return null;
       }
 
-      // A Promise for each catalog (every other id stays a synchronous null); the compile is synchronous, as the loader's:
-      // `intlCatalogs` also runs alone (a Vitest config), with no session runtime, so it reads the config and the
-      // formats module with Node's sync fs and the process's formats memo. Promise.try turns this.error's throw into
-      // the hook's rejection.
+      // A Promise for each catalog (every other id stays a synchronous null); the compile (catalog-import.ts) is
+      // synchronous, as the loader's: `intlCatalogs` also runs alone (a Vitest config), with no session runtime, so it
+      // reads the config and the formats module with Node's sync fs and the process's formats memo. Promise.try turns
+      // this.error's throw, and an unreadable PO's, into the hook's rejection.
       return Promise.try(() => {
-        const loaded = loadConfig(resolve(this.environment.config.root, options.config ?? CONFIG_FILE));
-
-        if (loaded._tag === "ConfigInvalid") {
-          this.error(describeProblem(loaded.problem));
-        }
-
-        const { config } = loaded;
-        const locale = catalogLocale(config, file);
-
-        if (locale === undefined) {
-          this.error(
-            `${relative(config.root, file)} is not a configured catalog (${config.catalogs}, ${config.locales.join(", ")})`
-          );
-        }
-
-        // Before loading, so saving a repaired formats module reloads an import that failed on it.
-        if (config.formats !== undefined) {
-          this.addWatchFile(config.formats);
-        }
-
-        const formats = loadFormats(config);
-
-        if (formats._tag === "ConfigInvalid") {
-          this.error(describeProblem(formats.problem));
-        }
-
-        const source = new URLSearchParams(query).has("source");
-        const compiled = compileCatalog(readFileSync(file, "utf8"), source ? SOURCE_LOCALE : locale, {
-          formats: formats.formats,
+        const { dependencies, outcome } = compileCatalogImport({
+          config: resolve(this.environment.config.root, options.config ?? CONFIG_FILE),
+          file,
+          readPo: () => readFileSync(file, "utf8"),
+          source: new URLSearchParams(query).has("source"),
         });
 
-        if (compiled._tag === "CatalogCompileError") {
-          this.error(compiled.message);
+        // Failed or not, so editing what the import depends on loads it again.
+        for (const dependency of dependencies) {
+          this.addWatchFile(dependency);
         }
 
-        return { code: catalogModule(compiled.catalog), map: null };
+        if (outcome._tag === "Failed") {
+          this.error(outcome.error.message);
+        }
+
+        return { code: outcome.code, map: null };
       });
     },
     hotUpdate({ file, server }) {
