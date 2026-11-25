@@ -36,6 +36,11 @@ new RuleTester({ languageOptions: { sourceType: "module", parserOptions: { lang:
         code: `import i18next from "i18next";\nconst fake = { t: (s: string) => s };\nexport const x = [fake.t("a"), i18next.t("b")];`,
         filename: "g.ts",
       },
+      // Another library's translator, rooted in an npm import, in a file that does not import the package.
+      {
+        code: `import { useTranslation } from "react-i18next";\nexport function A() { const { t } = useTranslation(); return t("k"); }`,
+        filename: "i18next.tsx",
+      },
       // The Effect service read as the contract allows: `yield* CurrentIntl`, destructured.
       {
         code: `${preEffect}export const f = Effect.gen(function* () { const { t } = yield* CurrentIntl; return t("Hello"); });`,
@@ -74,6 +79,19 @@ new RuleTester({ languageOptions: { sourceType: "module", parserOptions: { lang:
             message:
               "cannot trace `intl` to useIntl(), getIntl(), createIntl() or `yield* CurrentIntl` in this file, so `.t(…)` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with `.t.from`",
             line: 2,
+            column: 9,
+          },
+        ],
+      },
+      // A file that never names the package still runs the rule: a translator may come from an app module (#30).
+      {
+        code: `import { translator } from "../shared/wrap";\nexport async function Page() {\n  const t = await translator();\n  return t("Hello through a wrapper");\n}\n`,
+        filename: "page.tsx",
+        errors: [
+          {
+            message:
+              "cannot trace `t` to useT() or getT(), or to the `.t` of an IntlInstance from useIntl(), getIntl(), createIntl() or `yield* CurrentIntl`, in this file; it comes from `../shared/wrap`, so `t(…)` is not extracted; bind it here (`const t = useT()`, `const t = await getT()`, or an instance's `const { t } = await getIntl()`), or translate `msg()` descriptors with `t.from(descriptor)` / `.t.from`. If this `t` is another library's translator (an app module wrapping it while the app migrates), rename it in this file, or, if this file's only i18n is this legacy translator, list this file in `exclude` and turn `elmera-intl/extractable` off for it (see the README's migration section)",
+            line: 4,
             column: 9,
           },
         ],

@@ -139,6 +139,7 @@ type CheckReport = {
     readonly message: string;
     readonly key?: string;
     readonly fix: string;
+    readonly file?: string;
   }>;
   readonly unreachable: ReadonlyArray<object>;
 };
@@ -1346,5 +1347,108 @@ describe("bin", BIN_TEST, () => {
       });
     });
     expect([code, stderr]).toEqual([1, ""]);
+  });
+});
+
+// The built oxlint executable and the plugin as a consumer's `.oxlintrc.json` loads it: lint's file overrides are applied
+// by oxlint itself, which RuleTester does not run.
+const OXLINT = fileURLToPath(new URL("../node_modules/.bin/oxlint", import.meta.url));
+const OXLINT_PLUGIN = fileURLToPath(new URL("../dist/oxlint.js", import.meta.url));
+// A Next.js dynamic segment: both tools read `[lng]` as a glob class matching one letter, so the configs escape its `[`.
+const LEGACY = "src/app/[lng]/page.tsx";
+const LEGACY_GLOB = "src/app/[[]lng]/page.tsx";
+// Beside the legacy file, and the path the unescaped class `[lng]` matches instead of it.
+const SIBLINGS = ["src/app/[lng]/current.tsx", "src/app/l/page.tsx"];
+
+/** One oxlint run: its exit code and the files it reported, sorted. */
+type OxlintRun = { readonly code: number; readonly reported: ReadonlyArray<string> };
+
+function oxlint(
+  project: Project,
+  overrides: ReadonlyArray<{ readonly files: ReadonlyArray<string>; readonly rules: Record<string, string> }>
+): OxlintRun {
+  project.write(
+    ".oxlintrc.json",
+    JSON.stringify({
+      // Only this rule reports, so every reported file is one extraction rejects.
+      categories: { correctness: "off" },
+      plugins: [],
+      jsPlugins: [{ name: "elmera-intl", specifier: OXLINT_PLUGIN }],
+      rules: { "elmera-intl/extractable": "error" },
+      overrides,
+    })
+  );
+  const run = spawnSync(OXLINT, ["-c", ".oxlintrc.json", "-f", "unix"], {
+    cwd: project.root,
+    encoding: "utf8",
+    ...project.spawnGuard(),
+  });
+  const reported = new Set(
+    run.stdout.split("\n").flatMap((line) => /^(.+?):\d+:\d+: /u.exec(line)?.[1] ?? [])
+  );
+
+  return { code: run.status ?? Number.NaN, reported: [...reported].toSorted() };
+}
+
+// Unit under test: a bare `t(…)` whose translator comes from an app module (#30), through the `elmera-intl` executable
+// and the `oxlint` executable. Oracle: the exit codes, and the file, line and specifier each failure must name, written
+// out per case: a page that calls such a `t` extracts nothing from it, so it fails wherever the module lives.
+describe("a bare t from an app module", BIN_TEST, () => {
+  it("fails the including page when the wrapper module is outside include", ({ project }) => {
+    project.write(
+      "src/page.tsx",
+      `import { translator } from "../shared/wrap";\nexport async function Page() {\n  const t = await translator();\n  return t("Hello through a wrapper");\n}\n`
+    );
+    project.write(
+      "shared/wrap.ts",
+      `import { getT } from "@elmeragroup/intl/server";\nexport async function translator() {\n  return getT();\n}\n`
+    );
+    const extracted = bin(project, "extract");
+    const checked = bin(project, "check");
+
+    expect([extracted.code, checked.code]).toEqual([1, 1]);
+    for (const run of [extracted, checked]) {
+      expect(run.stderr).toContain(
+        "src/page.tsx:4:9: ExtractFailed: cannot trace `t` to useT() or getT(), or to the `.t` of an IntlInstance from useIntl(), getIntl(), createIntl() or `yield* CurrentIntl`, in this file; it comes from `../shared/wrap`, so `t(…)` is not extracted"
+      );
+    }
+  });
+
+  // The README's migration remedy for a file still on another library: list it in `exclude` and turn the rule off for it,
+  // which leaves the files beside it and the one an unescaped bracket would match checked, by lint and by `check` alike.
+  it("passes a legacy file excluded from extraction and lint, and still lints its siblings", async ({
+    project,
+  }) => {
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, exclude: [LEGACY_GLOB] }));
+    project.write(
+      LEGACY,
+      `import { useTranslation } from "../../i18n";\nexport default async function Page({ lng }: { lng: string }) {\n  const { t } = await useTranslation(lng);\n  return <h1>{t("legacy.title")}</h1>;\n}\n`
+    );
+    project.write(
+      "src/i18n.ts",
+      `import i18next from "i18next";\nexport async function useTranslation(lng: string) {\n  return { t: i18next.getFixedT(lng) };\n}\n`
+    );
+    // The fixture's page too: no file holds a message, so the catalog needs no translations.
+    for (const clean of ["src/page.tsx", ...SIBLINGS]) {
+      project.write(clean, "export const x = 1;\n");
+    }
+    await cli(project, "extract");
+    const off = [{ files: [LEGACY_GLOB], rules: { "elmera-intl/extractable": "off" } }];
+
+    expect(oxlint(project, [])).toEqual({ code: 1, reported: [LEGACY] });
+    expect([oxlint(project, off), bin(project, "check").code]).toEqual([{ code: 0, reported: [] }, 0]);
+    for (const sibling of SIBLINGS) {
+      project.write(
+        sibling,
+        `export function f(intl: { t(s: string): string }) {\n  return intl.t("P");\n}\n`
+      );
+    }
+    const checked = await check(project);
+    const extractFailed = checked.report.problems.flatMap((problem) =>
+      problem.code === "ExtractFailed" && problem.file !== undefined ? [problem.file] : []
+    );
+
+    expect(oxlint(project, off)).toEqual({ code: 1, reported: SIBLINGS });
+    expect([checked.code, extractFailed.toSorted()]).toEqual([1, SIBLINGS]);
   });
 });
