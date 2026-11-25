@@ -10,14 +10,14 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 
-import type { ExtractOptions } from "../src/commands";
-import { extractCatalogs } from "../src/commands";
+import { NO_RECORD, syncCatalogs } from "../src/catalog-sync";
 import type { ProjectConfig } from "../src/project-config";
-import type { WatchMode } from "../src/watch";
+import type { SyncResult, WatchMode } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import type { DeliveredEvents } from "./watch-project";
 import {
+  afterCatalogWrite,
   component,
   deliveredEvents,
   it,
@@ -38,13 +38,14 @@ describe("extract --watch on the test clock", () => {
   // Native file events, which a test delivers itself through `deliveredEvents`.
   const NATIVE: WatchMode = { _tag: "native" };
 
-  // The sync step: `extractCatalogs`, its `hold`th call waiting for `gate` after its writes. `calls()` counts the calls.
+  // The sync step: `syncCatalogs`, its `hold`th call waiting for `gate` after its writes and the record it takes, so a
+  // held sync has already recorded what it left. `calls()` counts the calls.
   function holding(gate: Deferred.Deferred<void>, hold = 2) {
     let calls = 0;
     const layer = syncing(
-      Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+      Effect.fnUntraced(function* (config: ProjectConfig) {
         calls += 1;
-        const result = yield* extractCatalogs(config, options);
+        const result = yield* syncCatalogs(config);
 
         if (calls === hold) {
           yield* Deferred.await(gate);
@@ -80,24 +81,24 @@ describe("extract --watch on the test clock", () => {
     return { clock, sleeps: () => sleeps };
   });
 
-  // The sync step: `extractCatalogs`, dying on its `call`th call.
+  // The sync step: `syncCatalogs`, dying on its `call`th call.
   function dying(call: number) {
     let calls = 0;
 
-    return syncing((config, options) => {
+    return syncing((config) => {
       calls += 1;
 
-      return calls === call ? Effect.die(new Error("extract died")) : extractCatalogs(config, options);
+      return calls === call ? Effect.die(new Error("extract died")) : syncCatalogs(config);
     });
   }
 
-  // The sync step: `extractCatalogs`, counting its calls.
+  // The sync step: `syncCatalogs`, counting its calls.
   function counted() {
     let calls = 0;
-    const layer = syncing((config, options) => {
+    const layer = syncing((config) => {
       calls += 1;
 
-      return extractCatalogs(config, options);
+      return syncCatalogs(config);
     });
 
     return { layer, calls: () => calls };
@@ -161,11 +162,11 @@ describe("extract --watch on the test clock", () => {
       let overlapped = false;
       const { reports } = yield* startWatch(project, {
         layer: syncing(
-          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+          Effect.fnUntraced(function* (config: ProjectConfig) {
             calls += 1;
             overlapped ||= running > 0;
             running += 1;
-            const result = yield* extractCatalogs(config, options);
+            const result = yield* syncCatalogs(config);
 
             // The second sync holds, after its writes, until the test releases it.
             if (calls === 2) {
@@ -206,19 +207,12 @@ describe("extract --watch on the test clock", () => {
     Effect.gen(function* () {
       let calls = 0;
       const { reports } = yield* startWatch(project, {
-        layer: syncing((config, options) => {
+        layer: syncing((config) => {
           calls += 1;
 
           return calls === 1
-            ? Effect.succeed({
-                problems: [],
-                messages: 0,
-                written: [],
-                superseded: true,
-                read: new Map(),
-                own: new Map(),
-              })
-            : extractCatalogs(config, options);
+            ? Effect.succeed({ _tag: "Synced", written: [], superseded: true, left: NO_RECORD } as const)
+            : syncCatalogs(config);
         }),
       });
       yield* TestClock.adjust("99 millis");
@@ -251,9 +245,9 @@ describe("extract --watch on the test clock", () => {
       let calls = 0;
       const { reports } = yield* startWatch(project, {
         layer: syncing(
-          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+          Effect.fnUntraced(function* (config: ProjectConfig) {
             calls += 1;
-            const result = yield* extractCatalogs(config, options);
+            const result = yield* syncCatalogs(config);
 
             if (calls === 1) {
               project.write("src/during.tsx", component("During"));
@@ -277,14 +271,14 @@ describe("extract --watch on the test clock", () => {
       let calls = 0;
       const { reports, stop, watching } = yield* startWatch(project, {
         layer: syncing(
-          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+          Effect.fnUntraced(function* (config: ProjectConfig) {
             calls += 1;
 
             if (calls === 2) {
               yield* Deferred.await(gate);
             }
 
-            return yield* extractCatalogs(config, options);
+            return yield* syncCatalogs(config);
           })
         ),
       });
@@ -331,7 +325,8 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
-  // A sync held after its writes: what the poll sees meanwhile is classified only once the sync has recorded its writes.
+  // A sync held after its writes and the record it takes: what the poll sees meanwhile is classified only once the sync
+  // has ended and given up the permit.
   it.effect("starts no sync for its own write while a sync is held", ({ project }) =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
@@ -347,21 +342,31 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
-  // A translator's editor saves the catalog back to its text from before the held sync: compared with what the last
-  // sync wrote, that is a change, so the message the held sync added comes back.
-  it.effect("syncs a catalog saved back to its earlier text while a sync is held", ({ project }) =>
+  // A translator's editor saves the catalog back to its text from before the sync, right after the sync wrote it and
+  // before the sync takes its record. The write guard accepts that text (the path's own snapshot); the record does not:
+  // compared with what the sync wrote, it is a change, so the message the sync added comes back. Native events the test
+  // delivers: the restored catalog keeps its size, so a poll would see it only by its timestamp.
+  it.effect("syncs a catalog saved back to its earlier text right after the sync wrote it", ({ project }) =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>();
-      const sync = holding(gate);
-      const { reports } = yield* startWatch(project, { layer: sync.layer });
-      const before = project.read("messages/nb.po");
+      let before = "";
+      let restored = false;
+      const files = afterCatalogWrite(
+        project.path("messages/nb.po"),
+        () => {
+          restored = true;
+          project.write("messages/nb.po", before);
+        },
+        (text) => text.includes(`msgid "A"`)
+      );
+      const events = deliveredEvents();
+      const { reports } = yield* startWatch(project, { files, mode: NATIVE, events: events.layer });
+      before = project.read("messages/nb.po");
       project.write("src/a.tsx", component("A"));
-      yield* TestClock.adjust("150 millis");
-      expect(project.read("messages/nb.po")).toContain(`msgid "A"`);
-
-      project.write("messages/nb.po", before);
+      events.listener(project.root).change("rename", "src/a.tsx");
       yield* TestClock.adjust("1 second");
-      yield* woken(Deferred.succeed(gate, undefined));
+      expect({ restored, reports }).toEqual({ restored: true, reports: ["Written", "Written"] });
+
+      events.listener(project.root).change("change", "messages/nb.po");
       yield* TestClock.adjust("1 second");
       expect(reports).toEqual(["Written", "Written", "Written"]);
       expect(project.read("messages/nb.po")).toContain(`msgid "A"`);
@@ -441,27 +446,30 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
-  // A catalog saved right after the sync wrote it, inside the sync step: the record is the text the sync wrote, not
-  // what the file holds once the step returns, so the save is a change, and its problem is reported.
+  // A catalog saved right after the sync wrote it, before the sync takes its record (a tap on the storage's write):
+  // the record is the text the sync wrote, not what the file holds when it is read back, so the save is a change, and
+  // its problem is reported: the malformed catalog, CatalogUnreadable for messages/nb.po.
   it.effect("syncs a catalog saved right after the sync wrote it", ({ project }) =>
     Effect.gen(function* () {
-      let calls = 0;
-      const { reports } = yield* startWatch(project, {
-        layer: syncing(
-          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-            calls += 1;
-            const result = yield* extractCatalogs(config, options);
-
-            if (calls === 1) {
-              project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
-            }
-
-            return result;
-          })
-        ),
+      const results: Array<SyncResult> = [];
+      const files = afterCatalogWrite(project.path("messages/nb.po"), () => {
+        project.write("messages/nb.po", `${project.read("messages/nb.po")}msgid "Broken\n`);
+      });
+      yield* startWatch(project, {
+        files,
+        report: (result) =>
+          Effect.sync(() => {
+            results.push(result);
+          }),
       });
       yield* TestClock.adjust("1 second");
-      expect(reports).toEqual(["Written", "Failed"]);
+      expect(
+        results.map((result) =>
+          result._tag === "Failed"
+            ? { failed: result.problems.map(({ code, file }) => ({ code, file })) }
+            : result._tag
+        )
+      ).toEqual(["Written", { failed: [{ code: "CatalogUnreadable", file: "messages/nb.po" }] }]);
     })
   );
 
@@ -470,10 +478,10 @@ describe("extract --watch on the test clock", () => {
   it.effect("drops a pending sync when a write fails for good", ({ project }) =>
     Effect.gen(function* () {
       let calls = 0;
-      const layer = syncing((config, options) => {
+      const layer = syncing((config) => {
         calls += 1;
 
-        return extractCatalogs(config, options);
+        return syncCatalogs(config);
       });
       const { watching } = yield* startWatch(project, {
         layer,

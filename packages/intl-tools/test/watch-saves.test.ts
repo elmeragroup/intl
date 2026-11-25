@@ -7,12 +7,18 @@ import { existsSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync
 import { relative } from "node:path";
 
 import { CatalogFiles, NODE_CATALOG_FILES } from "../src/catalog-files";
-import type { ExtractOptions } from "../src/commands";
-import { extractCatalogs, planCatalogs, writeCatalogs } from "../src/commands";
-import type { ProjectConfig } from "../src/project-config";
+import { formatPo } from "../src/po";
 import type { SyncResult, WatchMode } from "../src/watch";
 import type { Project } from "./project-fixture";
-import { CONFIG, component, deliveredEvents, it, startWatch, syncing, wrapped } from "./watch-project";
+import {
+  afterCatalogWrite,
+  CONFIG,
+  component,
+  deliveredEvents,
+  it,
+  startWatch,
+  wrapped,
+} from "./watch-project";
 
 // The saves the watch keeps: a translator's editor saves a catalog while a sync runs, and the sync never writes over it;
 // the next sync merges it. Unit under test: `watchCatalogs` with the real `CatalogSync`, on the test clock, its catalogs
@@ -54,54 +60,43 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
 
   // Node's catalog files, saving sv's "Hello" right after the sync writes nb with "Ready" in it.
   const savingAfterNb = (project: Project) => {
-    const nb = project.path("messages/nb.po");
     let saved = false;
-    const layer = wrapped((live) => ({
-      ...live,
-      write: (path, text, guard) =>
-        live.write(path, text, guard).pipe(
-          Effect.tap((outcome) =>
-            Effect.sync(() => {
-              if (!saved && outcome === "written" && path === nb && text.includes(`msgid "Ready"`)) {
-                saved = true;
-                translate(project, "messages/sv.po", "Hej");
-              }
-            })
-          )
-        ),
-    }));
+    const layer = afterCatalogWrite(
+      project.path("messages/nb.po"),
+      () => {
+        saved = true;
+        translate(project, "messages/sv.po", "Hej");
+      },
+      (text) => text.includes(`msgid "Ready"`)
+    );
 
     return { layer, saved: () => saved };
   };
 
-  // A save that lands right after the sync's writes, inside the sync step: the next sync merges it rather than writing
-  // the PO it read before.
+  // A save that lands right after the sync's writes, before the sync takes its record (a tap on the storage's write):
+  // it is no text of the sync's own, so it starts a sync of its own, which merges it rather than writing the PO it read
+  // before.
   it.effect("keeps a msgstr saved right after the sync that added its message", ({ project }) =>
     Effect.gen(function* () {
-      const po = project.path("messages/nb.po");
       let saved = false;
-      yield* startWatch(project, {
-        layer: syncing(
-          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-            const result = yield* extractCatalogs(config, options);
-            const added = result.written.find(
-              ({ path, text }) => path === po && text.includes(`msgid "Ready"`)
-            );
-
-            if (!saved && added !== undefined) {
-              saved = true;
-              project.write(
-                "messages/nb.po",
-                added.text.replace(`msgid "Ready"\nmsgstr ""`, `msgid "Ready"\nmsgstr "Klar"`)
-              );
-            }
-
-            return result;
-          })
-        ),
-      });
+      const files = afterCatalogWrite(
+        project.path("messages/nb.po"),
+        (text) => {
+          saved = true;
+          project.write(
+            "messages/nb.po",
+            text.replace(`msgid "Ready"\nmsgstr ""`, `msgid "Ready"\nmsgstr "Klar"`)
+          );
+        },
+        (text) => text.includes(`msgid "Ready"`)
+      );
+      const { reports } = yield* startWatch(project, { files });
       project.write("src/ready.tsx", component("Ready"));
       yield* TestClock.adjust("1 second");
+      expect({ saved, reports: [...reports] }).toEqual({
+        saved: true,
+        reports: ["Written", "Written", "Unchanged"],
+      });
       expect(project.read("messages/nb.po")).toContain(`msgid "Ready"\nmsgstr "Klar"`);
 
       project.write("src/after.tsx", component("After"));
@@ -111,28 +106,27 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     })
   );
 
-  // A save that lands after a sync read the PO and before it writes: the sync yields, and the next one merges the save.
+  // A save that lands after a sync read the PO and before it writes (a tap on the storage's first read of nb once the
+  // new source exists, the sync's snapshot): the sync yields, and the next one merges the save.
   it.effect("keeps a msgstr saved while a sync runs", ({ project }) =>
     Effect.gen(function* () {
       const po = project.path("messages/nb.po");
       let saved = false;
-      yield* startWatch(project, {
-        layer: syncing(
-          Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-            const plan = yield* planCatalogs(config, options);
-
-            if (
-              !saved &&
-              plan.outputs.some(({ path, text }) => path === po && text.includes(`msgid "Ready"`))
-            ) {
-              saved = true;
-              translate(project, "messages/nb.po", "Hei");
-            }
-
-            return yield* writeCatalogs(plan, options);
-          })
-        ),
-      });
+      const files = wrapped((live) => ({
+        ...live,
+        read: (path) =>
+          live.read(path).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (!saved && path === po && existsSync(project.path("src/ready.tsx"))) {
+                  saved = true;
+                  translate(project, "messages/nb.po", "Hei");
+                }
+              })
+            )
+          ),
+      }));
+      yield* startWatch(project, { files });
       project.write("src/ready.tsx", component("Ready"));
       yield* TestClock.adjust("1 second");
       expect(project.read("messages/nb.po")).toContain(`msgid "Hello"\nmsgstr "Hei"`);
@@ -159,36 +153,35 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
   );
 
   // A translator seeds sv from nb, copying nb's catalog onto sv's after the sync wrote nb and before it writes sv. sv
-  // then holds a text the sync wrote, but to another file: the sync's write of sv finds it changed and stops, and the
-  // next sync merges the copy.
+  // then holds a text the sync wrote, but to another file: the sync's write of sv finds it changed and stops, having
+  // written nb alone, and the next sync merges the copy, writing sv alone.
   it.effect("keeps a catalog copied onto another while the sync writes the one it copies", ({ project }) =>
     Effect.gen(function* () {
       project.write("elmera-intl.json", TWO_LOCALES);
-      const nb = project.path("messages/nb.po");
+      const reports = recorded(project);
       let copied = false;
-      const files = wrapped((live) => ({
-        ...live,
-        write: (path, text, guard) =>
-          live.write(path, text, guard).pipe(
-            Effect.tap((outcome) =>
-              Effect.sync(() => {
-                if (!copied && outcome === "written" && path === nb && text.includes(`msgid "Ready"`)) {
-                  copied = true;
-                  project.write("messages/sv.po", project.read("messages/nb.po"));
-                }
-              })
-            )
-          ),
-      }));
-      const { reports } = yield* startWatch(project, { files });
+      const files = afterCatalogWrite(
+        project.path("messages/nb.po"),
+        () => {
+          copied = true;
+          project.write("messages/sv.po", project.read("messages/nb.po"));
+        },
+        (text) => text.includes(`msgid "Ready"`)
+      );
+      yield* startWatch(project, { files, report: reports.report });
       translate(project, "messages/nb.po", "Hei");
       yield* TestClock.adjust("1 second");
       project.write("src/ready.tsx", component("Ready"));
       yield* TestClock.adjust("1 second");
 
-      expect({ copied, reports }).toEqual({
+      expect({ copied, lines: reports.lines }).toEqual({
         copied: true,
-        reports: ["Written", "Unchanged", "Written", "Written"],
+        lines: [
+          "wrote messages/nb.po, messages/sv.po",
+          "Unchanged",
+          "wrote messages/nb.po",
+          "wrote messages/sv.po",
+        ],
       });
       expect(project.read("messages/sv.po")).toMatch(/msgid "Hello"\nmsgstr "Hei"[\s\S]*msgid "Ready"/u);
     })
@@ -285,31 +278,77 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
       })
   );
 
-  // Every catalog the superseded sync wrote is reported and recorded as the watch's own: nb's own change event,
-  // delivered only after the follow-up sync, starts no sync.
-  it.effect("reports and records what a superseded sync wrote", ({ project }) =>
-    Effect.gen(function* () {
-      project.write("elmera-intl.json", TWO_LOCALES);
-      const events = deliveredEvents();
-      const reports = recorded(project);
-      yield* startWatch(project, {
-        files: savingAfterNb(project).layer,
-        mode: NATIVE,
-        events: events.layer,
-        report: reports.report,
-      });
-      project.write("src/ready.tsx", component("Ready"));
-      events.listener(project.root).change("rename", "src/ready.tsx");
-      yield* TestClock.adjust("1 second");
-      events.listener(project.root).change("change", "messages/nb.po");
-      yield* TestClock.adjust("1 second");
+  // A superseded sync records what it wrote as its own, and vouches for nothing else: the others' snapshots may be
+  // stale, and through a link a catalog it never wrote may hold its write. nb is written, then sv's save supersedes the
+  // sync before it writes sv or da; halfway through the retry's debounce, a change event arrives for one catalog. Oracle:
+  // the contract by hand: the retry runs 100 ms after the last change. An event for nb, the sync's own write, is no
+  // change, so the retry runs at its deadline, 100 ms after the superseded sync; an event for da, which it did not write,
+  // is one, so at that deadline only the superseded sync is reported, and the retry follows 50 ms later. The retry then
+  // completes, and nb.po, which it left as its snapshot, is its own: a second event for nb.po starts no sync.
+  it.effect.each([
+    {
+      changed: "nb.po, which the sync wrote",
+      setup: (project: Project) => {
+        mkdirSync(project.path("messages"));
+      },
+      event: "nb.po",
+      atRetryDue: ["wrote messages/nb.po", "wrote messages/sv.po, messages/da.po"],
+    },
+    {
+      changed: "da.po, a catalog of its own still holding its snapshot",
+      setup: (project: Project) => {
+        mkdirSync(project.path("messages"));
+      },
+      event: "da.po",
+      atRetryDue: ["wrote messages/nb.po"],
+    },
+    {
+      changed: "da.po, a hard link to nb holding the sync's write",
+      setup: (project: Project) => {
+        project.write("messages/nb.po", "");
+        linkSync(project.path("messages/nb.po"), project.path("messages/da.po"));
+      },
+      event: "da.po",
+      atRetryDue: ["wrote messages/nb.po"],
+    },
+  ])(
+    "times the retry after a superseded sync from a change to $changed",
+    ({ setup, event, atRetryDue }, { project }) =>
+      Effect.gen(function* () {
+        project.write(
+          "elmera-intl.json",
+          `{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv", "da"] }`
+        );
+        setup(project);
+        const events = deliveredEvents();
+        const reports = recorded(project);
+        yield* startWatch(project, {
+          files: savingAfterNb(project).layer,
+          mode: NATIVE,
+          events: events.layer,
+          report: reports.report,
+        });
+        const started = reports.lines.length;
+        project.write("src/ready.tsx", component("Ready"));
+        events.listener(project.path("src")).change("rename", "ready.tsx");
+        yield* TestClock.adjust("100 millis");
+        const superseded = reports.lines.slice(started);
+        yield* TestClock.adjust("50 millis");
+        events.listener(project.path("messages")).change("change", event);
+        yield* TestClock.adjust("50 millis");
+        const atDeadline = reports.lines.slice(started);
+        yield* TestClock.adjust("50 millis");
+        const after = reports.lines.slice(started);
+        events.listener(project.path("messages")).change("change", "nb.po");
+        yield* TestClock.adjust("1 second");
 
-      expect(reports.lines).toEqual([
-        "wrote messages/nb.po, messages/sv.po",
-        "wrote messages/nb.po",
-        "wrote messages/sv.po",
-      ]);
-    })
+        expect({ superseded, atDeadline, after, settled: reports.lines.slice(started) }).toEqual({
+          superseded: ["wrote messages/nb.po"],
+          atDeadline: atRetryDue,
+          after: ["wrote messages/nb.po", "wrote messages/sv.po, messages/da.po"],
+          settled: ["wrote messages/nb.po", "wrote messages/sv.po, messages/da.po"],
+        });
+      })
   );
 
   // Locales whose catalogs are links to one file write it in turn, as the layer 4 watch did (62bfdb1): every write
@@ -391,6 +430,30 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     })
   );
 
+  // A write to a catalog absent at the read can make another path reach a file through a link: here da's write creates
+  // `messages/da`, so `sv/catalog.po -> ../da/../nb/catalog.po`, absent at the read, now names nb's catalog. The source
+  // declares no message and nb's catalog holds da's empty one, so sv's guard finds da's text there (written to an absent
+  // path: the sync's own), and once sv's write lands on it, nb's path, present at the read, holds a text this sync wrote
+  // to a path that was absent: the sync's own, and nb is written too. Oracle: the contract by hand
+  // (`isOwnWrite`): the first sync writes all three catalogs and is not superseded.
+  it.effect(
+    "takes its write through a link an absent catalog's write made reachable for its own",
+    ({ project }) =>
+      Effect.gen(function* () {
+        project.write("src/page.tsx", `export const page = "no message";\n`);
+        project.write("messages/nb/catalog.po", formatPo("da", []));
+        mkdirSync(project.path("messages/sv"));
+        symlinkSync("../da/../nb/catalog.po", project.path("messages/sv/catalog.po"));
+        configure(project, { catalogs: "messages/{locale}/catalog.po", locales: ["da", "sv", "nb"] });
+        const reports = recorded(project);
+        yield* startWatch(project, { report: reports.report });
+
+        expect(reports.lines).toEqual([
+          "wrote messages/da/catalog.po, messages/sv/catalog.po, messages/nb/catalog.po",
+        ]);
+      })
+  );
+
   // A translator copies a catalog the watch wrote onto another: nb.po, saved with "Ready" before its source, is left
   // as it is when the source arrives, and only sv.po is written; then nb's first text is copied over sv.po. The copy is
   // no text sv's path read back after the watch's writes, so it syncs. Oracle: the contract by hand: sv.po ends with
@@ -418,40 +481,42 @@ describe("extract --watch keeps a catalog saved during a sync", () => {
     })
   );
 
-  // A translator copies one catalog onto another in the moment after the sync wrote both and before the watch read
-  // them back: sv.po then holds nb's new text, which this sync wrote to another path whose snapshot was another file's.
-  // Oracle: the contract by hand: only a path's own snapshot, or a text this sync wrote over that snapshot, is the
-  // watch's own, so the copy syncs and sv.po ends with its own catalog again.
+  // A translator copies one catalog onto another in the moment after the sync wrote both and before it read them back
+  // for its record (a tap on the storage's write of sv): sv.po then holds nb's new text, which this sync wrote to
+  // another path, one whose snapshot was another existing catalog. Oracle: the contract by hand: the record takes a
+  // read-back only when it is a text this sync wrote over that path's own snapshot, so the copy is a change and starts
+  // another sync. The sync that added "Ready" wrote both catalogs, and the one after the copy writes sv.po alone, which
+  // ends with its own catalog again.
   it.effect(
     "syncs a catalog copied onto another between the sync's writes and its read-back",
     ({ project }) =>
       Effect.gen(function* () {
         project.write("elmera-intl.json", TWO_LOCALES);
-        const sv = project.path("messages/sv.po");
+        const reports = recorded(project);
         let copied = false;
-        const { reports } = yield* startWatch(project, {
-          layer: syncing((config, options) =>
-            extractCatalogs(config, options).pipe(
-              Effect.tap((result) =>
-                Effect.sync(() => {
-                  if (
-                    !copied &&
-                    result.written.some(({ path, text }) => path === sv && text.includes('msgid "Ready"'))
-                  ) {
-                    copied = true;
-                    project.write("messages/sv.po", project.read("messages/nb.po"));
-                  }
-                })
-              )
-            )
-          ),
-        });
+        // Right after the sync writes sv, its last catalog, and before it takes its record.
+        const files = afterCatalogWrite(
+          project.path("messages/sv.po"),
+          () => {
+            copied = true;
+            project.write("messages/sv.po", project.read("messages/nb.po"));
+          },
+          (text) => text.includes('msgid "Ready"')
+        );
+        yield* startWatch(project, { files, report: reports.report });
         project.write("src/ready.tsx", component("Ready"));
         for (let debounce = 0; debounce < 5; debounce += 1) {
           yield* TestClock.adjust("1 second");
         }
 
-        expect({ copied, reports }).toEqual({ copied: true, reports: ["Written", "Written", "Written"] });
+        expect({ copied, lines: reports.lines }).toEqual({
+          copied: true,
+          lines: [
+            "wrote messages/nb.po, messages/sv.po",
+            "wrote messages/nb.po, messages/sv.po",
+            "wrote messages/sv.po",
+          ],
+        });
         expect(project.read("messages/sv.po")).toMatch(/"Language: sv\\n"[\s\S]*msgid "Ready"/u);
       })
   );

@@ -19,12 +19,11 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { sep } from "node:path";
 
 import { CatalogFiles, ioFailureReason } from "./catalog-files";
-import type { ExtractOptions, ExtractResult } from "./commands";
-import { extractCatalogs, isOwnWrite } from "./commands";
+import type { CatalogRecord, CatalogSyncResult } from "./catalog-sync";
+import { NO_RECORD, syncCatalogs } from "./catalog-sync";
 import type { Problem } from "./problem";
 import { isExcludedDirectory, isProjectSource, SourceCaches, SourceDiscovery } from "./project";
 import { catalogPath } from "./project-catalogs";
@@ -125,27 +124,25 @@ export class SyncFailed
 export type SyncServices = Exclude<ProjectServices, ProjectFormats>;
 
 /**
- * One sync's extract: what the watch runs per burst of changes. A service so a test can act between a sync's read and
- * its writes, or hold a sync.
+ * One sync's extract: what the watch runs per burst of changes. A service so a test can count a sync, hold it, kill it,
+ * or stand in its result. A save between a sync's read and its writes, or between its writes and the record it takes,
+ * lands inside the step, so a test makes it through the storage (`CatalogFiles`), never here.
  */
 export class CatalogSync
   extends /* @__PURE__ */ Context.Service<
     CatalogSync,
     {
-      /** Extract the project's messages into its catalogs, as `extractCatalogs` does. */
-      readonly extract: (
-        config: ProjectConfig,
-        options: ExtractOptions
-      ) => Effect.Effect<ExtractResult, SyncFailed>;
+      /** Sync the project's messages into its catalogs, as `syncCatalogs` does. */
+      readonly extract: (config: ProjectConfig) => Effect.Effect<CatalogSyncResult, SyncFailed>;
     }
   >()("elmera-intl-tools/CatalogSync")
 {
   /**
-   * `extractCatalogs`, its failure a `SyncFailed`: I/O it does not classify, and, as when the extract was one
-   * synchronous call whose every throw was the sync's failure, any defect of the step (the merge's included). The watch
-   * reports it and retries on the next change.
+   * `syncCatalogs`, its failure a `SyncFailed`: I/O it does not classify, and, as when the extract was one
+   * synchronous call whose every throw was the sync's failure, any defect of the step (the merge's and the record's
+   * included). The watch reports it and retries on the next change.
    *
-   * @returns A layer whose extract runs `extractCatalogs` on the host's services.
+   * @returns A layer whose extract runs `syncCatalogs` on the host's services.
    */
   static layer(): Layer.Layer<CatalogSync, never, SyncServices> {
     return Layer.effect(
@@ -162,11 +159,8 @@ export class CatalogSync
         )(yield* Effect.context<SyncServices>());
 
         return {
-          extract: Effect.fn("CatalogSync.extract")(function* (
-            config: ProjectConfig,
-            options: ExtractOptions
-          ) {
-            return yield* extractCatalogs(config, options).pipe(
+          extract: Effect.fn("CatalogSync.extract")(function* (config: ProjectConfig) {
+            return yield* syncCatalogs(config).pipe(
               Effect.provideContext(services),
               Effect.mapError((failure) => new SyncFailed({ message: ioFailureReason(failure) })),
               Effect.catchDefect((defect) =>
@@ -218,11 +212,11 @@ const failed = (problem: Problem): Output => ({
 });
 
 // A superseded sync that wrote catalogs before it stopped reports them: they are written, and the retry follows.
-function syncResult(result: ExtractResult): SyncResult {
-  return result.problems.length > 0
+function syncResult(result: CatalogSyncResult): SyncResult {
+  return result._tag === "Failed"
     ? { _tag: "Failed", problems: result.problems }
     : result.written.length > 0
-      ? { _tag: "Written", files: result.written.map(({ path }) => path) }
+      ? { _tag: "Written", files: result.written }
       : result.superseded
         ? { _tag: "Superseded" }
         : { _tag: "Unchanged" };
@@ -233,10 +227,9 @@ type Pipeline = {
   readonly config: ProjectConfig;
   readonly catalogs: ReadonlySet<string>;
   readonly includeRoots: ReadonlyArray<string>;
-  // Each catalog path's own text after the last sync (`ownTexts`), every configured path, written or left as it was.
-  // A change is our own write only when its path reads exactly its own record: links that name one file read back
-  // the last of their writes on each path (#15), and a catalog copied onto another later reads as none of the other's.
-  readonly written: Ref.Ref<ReadonlyMap<string, string>>;
+  // The last sync's record of what it left in the catalogs (`CatalogRecord`), opaque to the watch: classification asks
+  // it, under the permit, whether a changed catalog is `untouched`, and only then takes the change for our own write.
+  readonly record: Ref.Ref<CatalogRecord>;
   // Each admitted change, for classification.
   readonly intake: Queue.Queue<Change>;
   // Every output, in order, for the writer.
@@ -267,7 +260,7 @@ const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (
     stop,
     catalogs: new Set(config.locales.map((locale) => catalogPath(config, locale))),
     includeRoots: includePrefixes(config),
-    written: yield* Ref.make<ReadonlyMap<string, string>>(new Map()),
+    record: yield* Ref.make<CatalogRecord>(NO_RECORD),
     intake: yield* Queue.unbounded<Change>(),
     results: yield* Queue.unbounded<Output, Cause.Done>(),
     triggers: yield* Queue.dropping<void>(1),
@@ -310,20 +303,14 @@ function writer<R>(pipeline: Pipeline, output: WatchOutput<R>) {
 function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
   return Effect.gen(function* () {
     yield* Queue.clear(pipeline.triggers);
-    const result = yield* catalogSync.extract(pipeline.config, {
-      unused: "keep",
-      concurrentSave: "yield",
-    });
+    const result = yield* catalogSync.extract(pipeline.config);
     // A sync with problems leaves no record: whatever its catalogs hold now, the next change to any of them syncs
     // (and a catalog it could not read is not read again here).
-    yield* Ref.set(
-      pipeline.written,
-      result.problems.length === 0 ? ownTexts(pipeline.catalogs, result) : new Map()
-    );
+    yield* Ref.set(pipeline.record, result._tag === "Synced" ? result.left : NO_RECORD);
 
-    // Not left to the save's own change: a save back to text this watch wrote reads as our own write, and the change
-    // that started this sync would be lost.
-    if (result.superseded) {
+    // A superseded sync queues its retry itself, without waiting for another file event: the save that stopped it may
+    // be judged the sync's own by the record, and then no event would start the retry.
+    if (result._tag === "Synced" && result.superseded) {
       yield* Queue.offer(pipeline.triggers, undefined);
     }
 
@@ -331,7 +318,7 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
   }).pipe(
     // A sync that failed leaves no record either.
     Effect.catchTag("SyncFailed", (failure) =>
-      Ref.set(pipeline.written, new Map()).pipe(Effect.as(syncFailed(failure.message)))
+      Ref.set(pipeline.record, NO_RECORD).pipe(Effect.as(syncFailed(failure.message)))
     ),
     Semaphore.withPermit(pipeline.syncing),
     Effect.flatMap((result) => Queue.offer(pipeline.results, { _tag: "Result", result })),
@@ -339,51 +326,15 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
   );
 }
 
-// The record a clean sync leaves: each catalog path's own text, seeded from the plan's snapshots (`result.read`) with
-// its writes over them, then, when it wrote anything, what each path reads back right after the writes (no file event
-// is classified in between), where that is a text of the sync's own for the path (`isOwnWrite`, the write guard's own
-// definition, over the sync's own index): links name one file, so an earlier locale's path reads the last locale's
-// write. A read-back that is anything else (a save, a copy that landed since the writes) leaves the path's record as it
-// was, so it is a change. A superseded sync records only the paths it wrote: the others' snapshots may be stale, and
-// the retry it queued reads them again.
-function ownTexts(catalogs: ReadonlySet<string>, result: ExtractResult): ReadonlyMap<string, string> {
-  const record = new Map<string, string>();
-  if (!result.superseded) {
-    for (const [path, text] of result.read) {
-      if (text !== undefined) {
-        record.set(path, text);
-      }
-    }
-  }
-  for (const { path, text } of result.written) {
-    record.set(path, text);
-  }
-
-  if (result.written.length > 0) {
-    for (const path of result.superseded ? result.written.map((output) => output.path) : catalogs) {
-      const back = readText(path);
-
-      if (back !== undefined && isOwnWrite(result.own, result.read.get(path), back)) {
-        record.set(path, back);
-      }
-    }
-  }
-
-  return record;
-}
-
-// Whether a change can alter a catalog, against the record as it stood when its batch was taken: a catalog whose text
-// is not what its own path read back after the last sync, a project source, or a rename that moved a tree under an
-// include root.
-function alters(pipeline: Pipeline, written: ReadonlyMap<string, string>, change: Change): boolean {
+// Whether a change can alter a catalog, against the record as it stood when its batch was taken: a catalog the last
+// sync did not leave untouched, a project source, or a rename that moved a tree under an include root.
+function alters(pipeline: Pipeline, record: CatalogRecord, change: Change): boolean {
   if (change.path === null) {
     return true;
   }
 
   if (pipeline.catalogs.has(change.path)) {
-    const ours = written.get(change.path);
-
-    if (ours === undefined || readText(change.path) !== ours) {
+    if (!record.untouched(change.path)) {
       return true;
     }
   } else if (isProjectSource(pipeline.config, change.path)) {
@@ -394,15 +345,15 @@ function alters(pipeline: Pipeline, written: ReadonlyMap<string, string>, change
 }
 
 // Classification, from the first sync on: every change admitted since the last one, under one permit (so never while a
-// sync runs, and a catalog's change is compared with what its path read back after the last sync), queues one trigger when any can alter a
-// catalog. A burst is one classification and one trigger.
+// sync runs, and a catalog's change is judged by asking the last sync's record), queues one trigger when any can alter
+// a catalog. A burst is one classification and one trigger.
 const classifier = /* @__PURE__ */ Effect.fnUntraced(function* (pipeline: Pipeline) {
   yield* Deferred.await(pipeline.firstSynced);
 
   for (;;) {
     const changes = yield* Queue.takeAll(pipeline.intake);
-    const fires = yield* Ref.get(pipeline.written).pipe(
-      Effect.map((written) => changes.some((change) => alters(pipeline, written, change))),
+    const fires = yield* Ref.get(pipeline.record).pipe(
+      Effect.map((record) => changes.some((change) => alters(pipeline, record, change))),
       Semaphore.withPermit(pipeline.syncing)
     );
 
@@ -777,25 +728,4 @@ export function watchProject(
 // nothing to report.
 function endFailure(exit: Exit.Exit<void>): Cause.Cause<never> | undefined {
   return Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause) ? exit.cause : undefined;
-}
-
-// A catalog deleted or replaced by a directory reads as changed.
-function readText(path: string): string | undefined {
-  let fd: number;
-  try {
-    // Opened without blocking and read only when a regular file: a FIFO put where a catalog goes is the sync's to read
-    // (it blocks until a writer opens), never the classifier's or the record's. Windows has no O_NONBLOCK, which `|`
-    // reads as 0 there.
-    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-  } catch {
-    return undefined;
-  }
-
-  try {
-    return fstatSync(fd).isFile() ? readFileSync(fd, "utf8") : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    closeSync(fd);
-  }
 }

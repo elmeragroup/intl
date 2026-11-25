@@ -13,7 +13,7 @@ import { mkdirSync } from "node:fs";
 
 import type { ProjectIoFailed } from "../src/catalog-files";
 import { CatalogFiles, ioFailureReason } from "../src/catalog-files";
-import type { ExtractOptions, ExtractResult } from "../src/commands";
+import type { CatalogSyncResult } from "../src/catalog-sync";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
 import type { ProjectServices } from "../src/project-services";
@@ -89,13 +89,13 @@ export function projectConfig(project: Project): ProjectConfig {
 }
 
 /**
- * A host's runtime for `watchProject`, as the Vite plugin makes one: `extractCatalogs` on the project's services on
+ * A host's runtime for `watchProject`, as the Vite plugin makes one: `syncCatalogs` on the project's services on
  * Node and Node's file events, disposed when the test ends (after every cleanup registered later, such as a watch's
  * close).
  *
  * @param project - The project whose teardown disposes it.
  * @param events - The file events it provides; Node's unless a test delivers its own.
- * @param sync - The sync's extract it provides; `extractCatalogs` unless a test holds it.
+ * @param sync - The sync's extract it provides; `syncCatalogs` unless a test holds it.
  * @returns The runtime.
  */
 export function hostRuntime(
@@ -112,7 +112,7 @@ export function hostRuntime(
 /**
  * The services a host provides a CLI program: the project's services on Node, and the sync's extract on them.
  *
- * @param sync - The sync's extract; `extractCatalogs` unless a test holds it.
+ * @param sync - The sync's extract; `syncCatalogs` unless a test holds it.
  * @returns A layer providing both.
  */
 export function catalogServices(
@@ -151,6 +151,38 @@ export function wrapped(
 }
 
 /**
+ * Node's catalog files, running `after` once, right after the first write to `path` that lands (`"written"`) with a text
+ * `matches` accepts: inside the sync, after that write and before the sync takes its record.
+ *
+ * @param path - The catalog.
+ * @param after - What the test does then, given the text written.
+ * @param matches - Which written text it waits for; any unless given.
+ * @returns A `CatalogFiles` layer running it.
+ */
+export function afterCatalogWrite(
+  path: string,
+  after: (text: string) => void,
+  matches: (text: string) => boolean = () => true
+): Layer.Layer<CatalogFiles, never, FileSystem.FileSystem> {
+  let done = false;
+
+  return wrapped((live) => ({
+    ...live,
+    write: (target, text, guard) =>
+      live.write(target, text, guard).pipe(
+        Effect.tap((outcome) =>
+          Effect.sync(() => {
+            if (!done && outcome === "written" && target === path && matches(text)) {
+              done = true;
+              after(text);
+            }
+          })
+        )
+      ),
+  }));
+}
+
+/**
  * A failure of the commands' I/O as the watch's `CatalogSync` reports it, for a test's own sync step.
  *
  * @param failure - The failure.
@@ -161,17 +193,16 @@ export function asSyncFailed(failure: ProjectIoFailed): SyncFailed {
 }
 
 /**
- * The watch's sync step as `extract`, an effect a test can save in between a sync's read and its writes, or hold. It
- * runs on the host's services, as `CatalogSync.layer()` does.
+ * The watch's sync step as `extract`, an effect a test can count, hold, kill or stand a result in for. It runs on the
+ * host's services, as `CatalogSync.layer()` does. A sync's reads, its writes and the record it takes are all inside
+ * `syncCatalogs`, so anything `extract` does after it returns lands after the record: a save between a sync's read and
+ * its writes, or between its writes and its record, is made through the storage (`wrapped`), never here.
  *
  * @param extract - The sync step.
  * @returns A `CatalogSync` layer running it.
  */
 export function syncing(
-  extract: (
-    config: ProjectConfig,
-    options: ExtractOptions
-  ) => Effect.Effect<ExtractResult, ProjectIoFailed, SyncServices>
+  extract: (config: ProjectConfig) => Effect.Effect<CatalogSyncResult, ProjectIoFailed, SyncServices>
 ): Layer.Layer<CatalogSync, never, SyncServices> {
   return Layer.effect(
     CatalogSync,
@@ -179,11 +210,8 @@ export function syncing(
       const services = yield* Effect.context<SyncServices>();
 
       return {
-        extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
-          return yield* extract(config, options).pipe(
-            Effect.provideContext(services),
-            Effect.mapError(asSyncFailed)
-          );
+        extract: Effect.fnUntraced(function* (config: ProjectConfig) {
+          return yield* extract(config).pipe(Effect.provideContext(services), Effect.mapError(asSyncFailed));
         }),
       };
     })

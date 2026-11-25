@@ -10,9 +10,8 @@ import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import { existsSync, rmSync } from "node:fs";
 
+import { syncCatalogs } from "../src/catalog-sync";
 import { CliPlatform, cliProgram, exitCodeOf } from "../src/cli-run";
-import type { ExtractOptions } from "../src/commands";
-import { extractCatalogs } from "../src/commands";
 import type { ProjectConfig } from "../src/project-config";
 import { Reporter } from "../src/reporter";
 import type { SyncResult, SyncServices } from "../src/watch";
@@ -350,7 +349,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
       const gate = Promise.withResolvers<void>();
       let calls = 0;
       const holding = syncing(
-        Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+        Effect.fnUntraced(function* (config: ProjectConfig) {
           calls += 1;
 
           if (calls === 2) {
@@ -358,7 +357,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
             yield* Effect.promise(() => gate.promise);
           }
 
-          return yield* extractCatalogs(config, options);
+          return yield* syncCatalogs(config);
         })
       );
       let stdout = "";
@@ -511,7 +510,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
         Effect.flatMap((services) =>
           Effect.acquireRelease(
             Effect.succeed({
-              extract: Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+              extract: Effect.fnUntraced(function* (config: ProjectConfig) {
                 calls += 1;
 
                 if (calls === 2) {
@@ -520,7 +519,7 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
                   log.push("sync resumed");
                 }
 
-                return yield* extractCatalogs(config, options).pipe(
+                return yield* syncCatalogs(config).pipe(
                   Effect.provideContext(services),
                   Effect.mapError(asSyncFailed)
                 );
@@ -567,11 +566,11 @@ describe("extract --watch in this process", { timeout: 20_000 }, () => {
     const held = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
     const holding = syncing(
-      Effect.fnUntraced(function* (config: ProjectConfig, options: ExtractOptions) {
+      Effect.fnUntraced(function* (config: ProjectConfig) {
         held.resolve();
         yield* Effect.promise(() => gate.promise);
 
-        return yield* extractCatalogs(config, options);
+        return yield* syncCatalogs(config);
       })
     );
     const runtime = hostRuntime(project, events.layer, holding);

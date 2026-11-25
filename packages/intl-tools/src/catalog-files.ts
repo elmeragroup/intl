@@ -1,6 +1,7 @@
 // The commands' file-system edges: where a catalog is read and written, how a project's text is read through
 // `FileSystem`, and the failure of any I/O the commands do not classify. Every read goes through `FileSystem`, which
-// each host provides at its edge; the one exception is a catalog's guarded write (see `CatalogFiles.layer`).
+// each host provides at its edge; the two exceptions are a catalog's guarded write (see `CatalogFiles.layer`) and a
+// watch's non-blocking read of what a sync left in a catalog (`readRegularText`).
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,8 +10,21 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { Buffer } from "node:buffer";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, relative } from "node:path";
+
+import type { CatalogText } from "./catalog-plan";
+import { catalogPath } from "./project-catalogs";
+import type { ProjectConfig } from "./project-config";
 
 /**
  * I/O the commands do not classify threw, such as a file a checkout deletes mid-scan or a directory where a catalog
@@ -138,6 +152,35 @@ const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
   return exists ? yield* readText(files, path) : undefined;
 });
 
+/**
+ * A catalog's text as a watched sync's record is captured and compared with: undefined for a catalog deleted or
+ * replaced by a directory. Synchronous: it opens the path without waiting for a FIFO's writer, and reads it only when
+ * it is a regular file.
+ *
+ * @param path - The catalog.
+ * @returns Its text; undefined when it is absent, not a regular file, or cannot be opened or read.
+ * @throws When closing the file's descriptor fails (`closeSync`), a defect of whatever step read it.
+ */
+export function readRegularText(path: string): string | undefined {
+  let fd: number;
+  try {
+    // Opened without blocking and read only when a regular file: a FIFO put where a catalog goes is the sync's to read
+    // (it blocks until a writer opens), never the classifier's or the record's. Windows has no O_NONBLOCK, which `|`
+    // reads as 0 there.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  } catch {
+    return undefined;
+  }
+
+  try {
+    return fstatSync(fd).isFile() ? readFileSync(fd, "utf8") : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** How a catalog write treats the text it replaces. */
 export type WriteGuard =
   /** Write over whatever the catalog holds (`extract`). */
@@ -188,8 +231,8 @@ export class CatalogFiles
       /** A catalog's text; a catalog that does not exist fails as its read did. */
       readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
       /**
-       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfHoldsOneOf`)
-       * holds none of the texts the guard allows. One operation: its read, its comparison and its write never yield to
+       * Write a catalog's text, making its directory, unless it already holds the text or (under `IfHolds`) what it
+       * holds fails the guard's `holds`. One operation: its read, its comparison and its write never yield to
        * another fiber in between, so a save made from this process meanwhile is either seen or lands after the write.
        */
       readonly write: (
@@ -246,3 +289,25 @@ export class CatalogFiles
     );
   }
 }
+
+/**
+ * A locale's PO as it is now, read through `CatalogFiles`: what a sync merges, and what `check` checks.
+ *
+ * @param config - The project config.
+ * @param locale - The locale.
+ * @returns The PO's text (undefined when it does not exist) and where it is.
+ */
+export const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (
+  config: ProjectConfig,
+  locale: string
+) {
+  const files = yield* CatalogFiles;
+  const path = catalogPath(config, locale);
+
+  return {
+    locale,
+    path,
+    shown: relative(config.root, path),
+    text: yield* files.read(path),
+  } satisfies CatalogText;
+});

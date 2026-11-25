@@ -1,5 +1,5 @@
 // What `extract` would write, decided from what it read: each locale's PO, as read, merged with the scanned messages.
-// Pure: the reads and the writes are `commands.ts`'s, so this decides the same way whatever the file system is.
+// Pure: the reads and the writes are `catalog-sync.ts`'s, so this decides the same way whatever the file system is.
 import { SERIALIZER_VERSION } from "@elmeragroup/intl/internal/message";
 
 import type { PoFile, UnusedEntries } from "./po";
@@ -24,7 +24,7 @@ export type CatalogText = {
 /** A catalog file with the exact text written to it. */
 export type WrittenCatalog = { readonly path: string; readonly text: string };
 
-/** What `planCatalogs` read and would write. */
+/** What a Catalog sync read and would write. */
 export type CatalogPlan = {
   readonly problems: ReadonlyArray<Problem>;
   readonly messages: number;
@@ -34,7 +34,10 @@ export type CatalogPlan = {
    * path were merged from.
    */
   readonly read: ReadonlyMap<string, string | undefined>;
-  /** In the config's order of locales, each at its configured path. */
+  /**
+   * In the config's order of locales, each at its configured path. A plan with problems has none, so it writes
+   * nothing.
+   */
   readonly outputs: ReadonlyArray<WrittenCatalog>;
 };
 

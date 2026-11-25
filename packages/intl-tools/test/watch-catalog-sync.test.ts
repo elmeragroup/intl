@@ -8,9 +8,9 @@ import { projectServices } from "../src/project-services";
 import { CatalogSync } from "../src/watch";
 import { it, projectConfig } from "./watch-project";
 
-// Unit under test: `CatalogSync.layer()`, built inside a span, as a host builds its runtime. Oracle: the contract by
-// hand: a sync's spans belong to the sync, so the extract's own span parents under `CatalogSync.extract`, never under
-// the span the layer was built in. A tracer records each span and its parent.
+// Unit under test: `CatalogSync.layer()` (watch.ts's sync step), built inside a span, as a host builds its runtime.
+// Oracle: the contract by hand: a sync's spans belong to the sync, so the sync's own span parents under
+// `CatalogSync.extract`, never under the span the layer was built in. A tracer records each span and its parent.
 it("parents a sync's spans under its extract, not under the layer's build", async ({ project }) => {
   const spans: Array<Tracer.NativeSpan> = [];
   const tracer = Tracer.make({
@@ -23,9 +23,7 @@ it("parents a sync's spans under its extract, not under the layer's build", asyn
   });
 
   await Effect.runPromise(
-    CatalogSync.use((sync) =>
-      sync.extract(projectConfig(project), { unused: "keep", concurrentSave: "yield" })
-    ).pipe(
+    CatalogSync.use((sync) => sync.extract(projectConfig(project))).pipe(
       Effect.provide(CatalogSync.layer().pipe(Layer.provide(projectServices()))),
       Effect.withSpan("host builds its runtime"),
       Effect.provideService(Tracer.Tracer, tracer)
@@ -41,5 +39,5 @@ it("parents a sync's spans under its extract, not under the layer's build", asyn
         })
       );
 
-  expect(parentOf("elmera-intl.extractCatalogs")).toEqual(["CatalogSync.extract"]);
+  expect(parentOf("elmera-intl.syncCatalogs")).toEqual(["CatalogSync.extract"]);
 });
