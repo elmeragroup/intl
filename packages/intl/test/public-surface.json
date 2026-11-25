@@ -5,6 +5,7 @@
     "createLocaleSwitcher",
     "keyOf",
     "msg",
+    "negotiateLocale",
     "resolveIntlConfig",
     "serialize"
   ],
