@@ -1,0 +1,9 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: sv\n"
+"X-Elmera-Serializer: 1\n"
+
+msgid "Hello {name}, welcome back."
+msgstr "Hej {name, välkommen tillbaka."

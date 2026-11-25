@@ -1,9 +1,5 @@
 {
-  // effect.json second: the API route reads the translator as an Effect service (`CurrentIntl`).
-  "extends": [
-    "@elmeragroup/typescript-config/react-library.json",
-    "@elmeragroup/typescript-config/effect.json"
-  ],
+  "extends": "@elmeragroup/typescript-config/react-library.json",
   "compilerOptions": {
     "composite": false,
     "jsx": "react-jsx",

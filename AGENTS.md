@@ -1,7 +1,8 @@
 # Working in this repository
 
 This pnpm workspace holds `@elmeragroup/intl`, a source-keyed i18n runtime for React, and
-`@elmeragroup/intl-tools`, its build-time tools, with one example app per host in `apps/`. Read the root [README](README.md),
+`@elmeragroup/intl-tools`, its build-time tools, with example apps in `apps/`: one per host, and one for
+`/effect` on its own. Read the root [README](README.md),
 [CONTEXT.md](CONTEXT.md) for the domain language, and the affected package's README before changing
 behavior.
 
@@ -19,8 +20,10 @@ behavior.
 - `apps/next-example` (Next.js App Router) and `apps/start-example` (TanStack Start) are the example
   apps: the recommended setup of both packages on each host, each with its own Playwright specs
   against its production build and its own Vitest unit tests. Both are the same customer portal on
-  Elmera's Fuse design system, in English, Norwegian Bokmål, Swedish and Finnish. Private and never
-  published; nothing depends on or imports an app.
+  Elmera's Fuse design system, in English, Norwegian Bokmål, Swedish and Finnish. Neither uses Effect.
+- `apps/effect-example` is the example app for `/effect` on its own: an Effect 4 HTTP API on Node, with
+  no React and no bundler, in the same four languages, with HTTP tests against its process and Vitest
+  unit tests. The example apps are private and never published; nothing depends on or imports an app.
 - `tooling/typescript` contains the shared TypeScript configuration.
 - `tooling/lint` holds this workspace's own contracts as lint: the `elmera-workspace` oxlint plugin
   and the manifest test for what lives in JSON and YAML. Private.
@@ -136,8 +139,9 @@ Each kind of test lives with its owner:
   fixture app there.
 - The recommended setup on each host: `apps/<name>/tests`, Playwright specs against the example
   app's production build, run by its `e2e` script, and `apps/<name>/test`, its Vitest unit tests
-  (pure logic and the compiled catalog, behind the catalog check). A change to an API an example uses
-  updates the example and its specs with it.
+  (pure logic and the compiled catalog, behind the catalog check). The Effect example's `tests` are
+  HTTP tests against `node src/main.ts`, also its `e2e`. A change to an API an example uses updates
+  the example and its specs with it.
 
 ## Public behavior and releases
 

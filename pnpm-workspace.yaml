@@ -76,6 +76,12 @@ catalog:
   "@tailwindcss/vite": 4.3.3
   "@tanstack/react-table": 9.2.4
   tailwindcss: 4.3.3
+  # The host examples' boundary parser: each parses the settings a client posts with one schema. The version the
+  # lockfile already held (TanStack Start's), so one copy installs.
+  zod: 4.6.7
+  # The Effect example's Node listener: Node's request as a Fetch Request (its abort signal included) for effect's
+  # HttpEffect.toWebHandler. The version the lockfile already held (h3's and nitro's), so one copy installs.
+  srvx: 1.0.8
 
 catalogs:
   react19:

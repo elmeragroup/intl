@@ -66,9 +66,10 @@ A minimal app per host in `packages/intl-e2e`, built and driven by Playwright to
 work as a consumer gets them.
 
 **Example app**:
-An app per host in `apps/` that shows the recommended setup of both packages, for readers to copy.
-Its Playwright specs prove it works on its production build; the fixture apps, not the examples, are
-the packages' test corpus.
+An app in `apps/` that shows the recommended setup of both packages, for readers to copy: one per
+host, and one for `CurrentIntl` in an Effect HTTP API with no host. Its specs prove it works as it
+runs (Playwright on a host's production build, HTTP requests to the Effect example's process); the
+fixture apps, not the examples, are the packages' test corpus.
 _Avoid_: demo, sample, playground
 
 **Linked pass / packed pass**:

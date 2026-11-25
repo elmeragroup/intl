@@ -1,0 +1,37 @@
+{
+  "name": "@elmeragroup/effect-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Example: @elmeragroup/intl/effect in an Effect 4 HTTP API on Node, with no React and no bundler, in English, Norwegian Bokmål, Swedish and Finnish.",
+  "type": "module",
+  "scripts": {
+    "clean": "git clean -xdf .turbo node_modules",
+    "dev": "pnpm run \"/^dev:/\"",
+    "dev:intl": "elmera-intl extract --watch",
+    "dev:server": "node --watch-path=src --watch-path=node_modules/@elmeragroup/intl/dist --watch-path=node_modules/@elmeragroup/intl-tools/dist src/main.ts",
+    "e2e": "elmera-intl check && vitest run --config vitest.e2e.config.ts",
+    "intl:check": "elmera-intl check",
+    "intl:extract": "elmera-intl extract",
+    "start": "node src/main.ts",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --customConditions null --module NodeNext --moduleResolution NodeNext --watch",
+    "type-check": "tsrs --noEmit --customConditions null --module NodeNext --moduleResolution NodeNext",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node-shared": "catalog:",
+    "@elmeragroup/intl": "workspace:*",
+    "@elmeragroup/intl-tools": "workspace:*",
+    "effect": "catalog:",
+    "srvx": "catalog:"
+  },
+  "devDependencies": {
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

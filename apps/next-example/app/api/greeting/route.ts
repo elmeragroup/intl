@@ -1,29 +1,19 @@
-// An API route that answers in the request's language. The handler is an Effect program that reads the translator as
-// a service; CurrentIntl.provide builds it from this request, through the app's adapter.
-import * as Effect from "effect/Effect";
+// An API route that answers in the request's language. A route handler reads the translator as a server component does,
+// `await getT()`: withIntl's alias hands it the request config (intl/request.ts), which reads this request's cookie and
+// Accept-Language.
+import { getT } from "@elmeragroup/intl/server";
 
-import { resolveIntlConfig } from "@elmeragroup/intl/core";
-import { CurrentIntl } from "@elmeragroup/intl/effect";
-
-import { adapter } from "../../../intl/adapter";
 import { LOCALIZED_CACHE_CONTROL } from "../../../intl/locale";
-
-const greeting = Effect.gen(function* () {
-  const { t } = yield* CurrentIntl;
-
-  return new Response(t("This test alert was translated by an API route."), {
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": LOCALIZED_CACHE_CONTROL },
-  });
-});
 
 /**
  * `GET /api/greeting`: a sentence in the request's locale (the stored choice, then Accept-Language), as plain text.
  *
- * @param request - The incoming request.
  * @returns The plain-text response, never cached: it varies by cookie and Accept-Language.
  */
-export function GET(request: Request): Promise<Response> {
-  return Effect.runPromise(
-    greeting.pipe(CurrentIntl.provide(Effect.promise(() => resolveIntlConfig(adapter, request))))
-  );
+export async function GET(): Promise<Response> {
+  const t = await getT();
+
+  return new Response(t("This test alert was translated by an API route."), {
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": LOCALIZED_CACHE_CONTROL },
+  });
 }

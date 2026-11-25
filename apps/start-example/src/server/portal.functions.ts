@@ -11,8 +11,6 @@
 // selects, which engines write alike, stay with the components.
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest, setResponseHeader } from "@tanstack/react-start/server";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import { createIntl } from "@elmeragroup/intl/core";
 import { loadIntlConfig } from "@elmeragroup/intl/start";
@@ -23,6 +21,7 @@ import type { Activity } from "../data/power-data";
 import { ACTIVITY, AS_OF, BILLING_PERIOD, INVOICES, INVOICES_ISSUED_ON } from "../data/power-data";
 import { parseSettings } from "../data/settings";
 import type { SaveOutcome, SettingsDraft } from "../data/settings";
+import { SettingsDraftSchema } from "../data/settings-draft";
 import { adapter } from "../intl/adapter";
 import { LOCALIZED_CACHE_CONTROL } from "../intl/locale";
 import { CONTRACT_LABELS } from "../intl/messages";
@@ -148,29 +147,19 @@ export const getInvoicesLoaderData = createServerFn({ method: "GET" }).handler(a
   };
 });
 
-// The draft as the network delivers it: any JSON, whatever the caller's types said. Its shape is decoded here, then
-// `parseSettings` parses its fields, as the form did.
-const decodeSettingsDraft = Schema.decodeUnknownOption(
-  Schema.Struct({
-    name: Schema.String,
-    email: Schema.String,
-    defaultContract: Schema.String,
-    paymentTerms: Schema.Finite,
-    alertsOn: Schema.Boolean,
-    threshold: Schema.String,
-    weeklyReport: Schema.Boolean,
-  })
-);
-
 /**
  * Save the settings form, and say what it set in the visitor's language: a server function returns translated text.
  * The example keeps nothing; an app sends the settings to its API here. The draft crossed the network, so it is
  * decoded and parsed again here, whatever the form checked.
  */
 export const saveSettings = createServerFn({ method: "POST" })
-  .validator((draft: SettingsDraft): SettingsDraft | undefined =>
-    Option.getOrUndefined(decodeSettingsDraft(draft))
-  )
+  // The draft as the network delivers it: any JSON, whatever the caller's types said. Its shape is parsed here, then
+  // `parseSettings` parses its fields, as the form did.
+  .validator((draft: SettingsDraft): SettingsDraft | undefined => {
+    const parsed = SettingsDraftSchema.safeParse(draft);
+
+    return parsed.success ? parsed.data : undefined;
+  })
   .handler(async ({ data: draft }): Promise<SaveOutcome> => {
     const intl = createIntl(await loadIntlConfig(adapter, getRequest()));
     const parsed = draft === undefined ? undefined : parseSettings(draft);

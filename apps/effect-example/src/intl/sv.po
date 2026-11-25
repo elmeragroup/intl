@@ -1,0 +1,42 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: sv\n"
+"X-Elmera-Serializer: 1\n"
+
+#: src/intl/messages.ts
+msgid "Credited"
+msgstr "Krediterad"
+
+#: src/handlers.ts
+msgid "Due on {dueOn, date, short}"
+msgstr "Förfaller {dueOn, date, short}"
+
+#: src/handlers.ts
+msgid "Hello {name}, welcome back."
+msgstr "Hej {name}, välkommen tillbaka."
+
+#: src/handlers.ts
+msgid "No invoice has the number {invoiceId}."
+msgstr "Ingen faktura har numret {invoiceId}."
+
+#: src/intl/messages.ts
+msgid "Overdue"
+msgstr "Förfallen"
+
+#: src/intl/messages.ts
+msgid "Paid"
+msgstr "Betald"
+
+#: src/intl/intl-middleware.ts
+msgid "This request is missing a parameter, or has one that is not valid."
+msgstr "Begäran saknar en parameter eller har en som inte är giltig."
+
+#: src/handlers.ts
+msgid "{channel, select, efaktura {Sent as eFaktura} email {Sent by email} other {Sent by post}}"
+msgstr "{channel, select, efaktura {Skickad som e-faktura} email {Skickad med e-post} other {Skickad med post}}"
+
+#: src/handlers.ts
+msgid "{count, plural, =0 {No invoices are overdue} one {# invoice is overdue} other {# invoices are overdue}}."
+msgstr "{count, plural, =0 {Inga fakturor är förfallna} one {# faktura är förfallen} other {# fakturor är förfallna}}."

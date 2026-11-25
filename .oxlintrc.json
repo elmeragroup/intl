@@ -321,6 +321,44 @@
         "oxc/no-this-in-exported-function": "off"
       }
     },
+    // The Effect example's API contract, which a client, the OpenAPI document and the tests import alone, and the one
+    // module of its own it imports: they take only effect's schema and HTTP API modules, the runtime's `/effect`
+    // subpath, as types only (`paths`; a value import would load the runtime), and each other, so the rule holds for
+    // every module the contract reaches. Anything else, a Node module, effect's Node platform, srvx, the tools' catalog
+    // loader, the locale negotiation, data or the server, is reported, re-exports included.
+    {
+      "files": ["apps/effect-example/src/api.ts", "apps/effect-example/src/invoice-number.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@elmeragroup/intl/effect",
+                "allowTypeImports": true,
+                "message": "The API contract takes the runtime's /effect subpath as types only: `import type`. A value import loads the runtime into every client; provide CurrentIntl in intl/intl-middleware.ts."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "*",
+                  "!effect/ErrorReporter",
+                  "!effect/Schema",
+                  "!effect/http-api/HttpApi",
+                  "!effect/http-api/HttpApiEndpoint",
+                  "!effect/http-api/HttpApiGroup",
+                  "!effect/http-api/HttpApiMiddleware",
+                  "!@elmeragroup/intl/effect",
+                  "!./invoice-number.ts"
+                ],
+                "message": "The API contract runs anywhere a client does: it imports only effect's schema and HTTP API modules, the runtime's /effect types and the invoice number. Wire Node, the listener, the locale negotiation, the catalog loader and data in server.ts or the intl middleware."
+              }
+            ]
+          }
+        ]
+      }
+    },
     // The release script's JSON boundary: package.json and `changeset status` output are read here, with no schema
     // library in the workspace scripts, so typeof is how their fields are checked before use.
     {

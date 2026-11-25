@@ -1,0 +1,33 @@
+{
+  // effect.json second: the whole app is Effect code, checked by the Effect language service.
+  "extends": ["@elmeragroup/typescript-config/base.json", "@elmeragroup/typescript-config/effect.json"],
+  "compilerOptions": {
+    "lib": ["ES2024"],
+    "target": "ES2024",
+    "verbatimModuleSyntax": true,
+    // `node src/main.ts` runs the source as written: Node strips the types, so only erasable syntax, and every relative
+    // import names its `.ts` file.
+    "erasableSyntaxOnly": true,
+    // Node resolves the app unbundled, so its type-check runs under `--module NodeNext --moduleResolution NodeNext`
+    // over the packages' built declarations (package.json). Here the preset's Bundler resolution stays: the editor
+    // and type-aware lint read the packages' source through `elmera-source`, whose extensionless relative imports
+    // NodeNext rejects.
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // The unstable effect APIs this app uses, here rather than in the workspace preset, so the published packages
+        // stay held to the preset's list. The app serves its API with effect/http-api over effect/http, marks its
+        // expected client errors with effect/ErrorReporter, and runs with @effect/platform-node-shared's NodeRuntime.
+        "allowedUnstableApis": [
+          "@effect/platform-node-shared",
+          "effect/http",
+          "effect/http-api",
+          "effect/ErrorReporter"
+        ]
+      }
+    ]
+  },
+  "include": ["src", "test", "tests", "vitest.config.ts", "vitest.e2e.config.ts"]
+}

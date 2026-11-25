@@ -24,10 +24,10 @@
     "@elmeragroup/fuse": "catalog:",
     "@elmeragroup/intl": "workspace:*",
     "@tanstack/react-table": "catalog:",
-    "effect": "catalog:",
     "next": "catalog:",
     "react": "catalog:react19",
-    "react-dom": "catalog:react19"
+    "react-dom": "catalog:react19",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@elmeragroup/intl-tools": "workspace:*",
