@@ -1,6 +1,6 @@
 // The contracts that live in JSON and YAML, which oxlint does not read: package manifests, the dependency catalog, the
 // Node pin and the lint config itself. Fast and unbuilt, so it runs in the same feedback loop as lint.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -316,7 +316,64 @@ describe(".oxlintrc.json", () => {
   it("parses", () => {
     expect(parseJsonc(config)).toHaveProperty("rules");
   });
+
+  // Unit under test: the paths .oxlintrc.json configures for elmera-workspace/file-copies. Oracle: the file system, by
+  // realpath: it gives back a path unchanged only when the file exists under that exact spelling with no symlink on the
+  // way (a case-only alias or a symlinked directory resolves elsewhere, a missing file throws). The rule holds the
+  // copies' content, and runs only on linted files whose paths match these; a mistyped path turns it off without a
+  // report, and a linked copy resolves its imports from the original's place, so the paths are held here.
+  it("names a real file by its exact path for each file elmera-workspace/file-copies holds", () => {
+    const files = fileCopiesPaths(parseJsonc(config));
+
+    expect(
+      files,
+      "elmera-workspace/file-copies is configured with an original and at least one copy"
+    ).toBeDefined();
+
+    const root = realpathSync.native(ROOT);
+    const problems = (files ?? []).flatMap((path) => {
+      const configured = join(root, path);
+
+      try {
+        const resolved = realpathSync.native(configured);
+
+        if (resolved !== configured) {
+          return [`${path} resolves to ${relative(root, resolved)}`];
+        }
+
+        return statSync(resolved).isFile() ? [] : [`${path} is not a regular file`];
+      } catch (error) {
+        return [`${path} does not resolve: ${String(error)}`];
+      }
+    });
+
+    expect(problems).toEqual([]);
+  });
 });
+
+// The original and copies configured for elmera-workspace/file-copies, as written; `undefined` when the rule is not
+// configured with an original and at least one copy.
+function fileCopiesPaths(lintConfig: unknown): ReadonlyArray<string> | undefined {
+  const rules =
+    typeof lintConfig === "object" && lintConfig !== null && "rules" in lintConfig
+      ? lintConfig.rules
+      : undefined;
+  const entry =
+    typeof rules === "object" && rules !== null && "elmera-workspace/file-copies" in rules
+      ? rules["elmera-workspace/file-copies"]
+      : undefined;
+  const option: unknown = Array.isArray(entry) ? entry[1] : undefined;
+
+  if (typeof option !== "object" || option === null || !("original" in option) || !("copies" in option)) {
+    return undefined;
+  }
+
+  const { original, copies } = option;
+  const listed: ReadonlyArray<unknown> = Array.isArray(copies) ? copies : [];
+  const paths = [original, ...listed];
+
+  return paths.length > 1 && paths.every((path) => typeof path === "string") ? paths : undefined;
+}
 
 // The Effect diagnostics are configured twice: tooling/typescript/effect.json for the editor (the Effect language
 // service) and .oxlintrc.effect.json for `pnpm lint:effect`, the gate, whose rules exist only in the Effect-patched

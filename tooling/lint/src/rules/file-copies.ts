@@ -1,21 +1,23 @@
 // A file kept as committed copies of an original holds the original's bytes: the e2e fixture apps each keep the test
 // corpus (packages/intl/test/fixtures.tsx) as a real file of their own, because extraction reads only a fixture's own
 // files and the packed pass resolves the runtime from the fixture. Nothing else would notice a copy lagging behind the
-// original, so this rule holds them equal from both ends:
+// original, so this rule holds their content equal from both ends:
 //
-// - Linting a copy: it must be a regular file (a symlink would defeat the fixture's own resolution), and its text must
-//   equal the original's on disk. The fix rewrites the whole copy from the original, so `pnpm lint:fix` is the sync.
-// - Linting the original: each listed copy must be a regular file, exist and equal it. A copy that is deleted,
-//   renamed, linked or mistyped in the option goes red here, so the rule cannot pass with nothing checked.
+// - Linting a copy: its text must equal the original's on disk. The fix rewrites the whole copy from the original, so
+//   `pnpm lint:fix` is the sync.
+// - Linting the original: each listed copy must be a UTF-8 text file equal to it.
 //
-// The paths are configured once, in `.oxlintrc.json`, relative to the workspace root (the directory holding
-// pnpm-workspace.yaml above the linted file, not where lint started), and matched exactly once that root is known.
-// Peers are read from disk on every run, never cached, and as bytes that must be valid UTF-8: an editor must not show
-// stale drift, two different files must never compare equal through a lossy decode, and the fixer must not write
-// stale or replaced text.
+// The rule owns the content; it cannot own the paths, since it runs only on linted files that match them. The
+// `.oxlintrc.json` test in tooling/lint/test/workspace.test.ts does: every configured path names an existing regular
+// file by its exact spelling, with no symlink on the way, so a typo or a linked copy fails there.
+//
+// The paths are relative to the workspace root (the directory holding pnpm-workspace.yaml above the linted file, not
+// where lint started), and matched exactly once that root is known. Peers are read from disk on every run, never
+// cached, and as bytes that must be valid UTF-8: an editor must not show stale drift, two different files must never
+// compare equal through a lossy decode, and the fixer must not write stale or replaced text.
 import type { Rule } from "@oxlint/plugins";
 import { isUtf8 } from "node:buffer";
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 
 import { parseFileCopies, workspaceRootOf } from "../workspace.ts";
@@ -26,42 +28,19 @@ const BOM = "\uFEFF";
 // Where a report on the whole file sits.
 const FILE_START = { line: 1, column: 0 } as const;
 
-/** A peer file as the rule reads it. */
-type Peer =
-  | { readonly _tag: "Text"; readonly text: string }
-  | { readonly _tag: "Missing" }
-  | { readonly _tag: "NotRegularFile" }
-  | { readonly _tag: "Unreadable" };
-
-// How a peer's path is taken: a copy must itself be a regular file, while the original may be reached through a link.
-type Links = "refuse" | "follow";
-
 function forwardSlashes(path: string): string {
   return path.split(sep).join("/");
 }
 
-// A peer's text, read fresh as bytes. A copy that is a symlink or a directory is not a regular file; bytes that are not
-// valid UTF-8 are unreadable, never decoded with replacement characters.
-function readPeer(path: string, links: Links): Peer {
+// A peer's text, read fresh as bytes; `undefined` when it is missing, not a file, or not valid UTF-8 (never decoded
+// with replacement characters).
+function readText(path: string): string | undefined {
   try {
-    const stats =
-      links === "refuse"
-        ? lstatSync(path, { throwIfNoEntry: false })
-        : statSync(path, { throwIfNoEntry: false });
-
-    if (stats === undefined) {
-      return { _tag: "Missing" };
-    }
-
-    if (!stats.isFile()) {
-      return { _tag: "NotRegularFile" };
-    }
-
     const bytes = readFileSync(path);
 
-    return isUtf8(bytes) ? { _tag: "Text", text: bytes.toString("utf8") } : { _tag: "Unreadable" };
+    return isUtf8(bytes) ? bytes.toString("utf8") : undefined;
   } catch {
-    return { _tag: "Unreadable" };
+    return undefined;
   }
 }
 
@@ -78,18 +57,12 @@ export const fileCopies: Rule = {
         "This file's path ends with {{path}}, which elmera-workspace/file-copies lists, but no pnpm-workspace.yaml is above it to resolve the rule's workspace-relative paths against.",
       copyDiffers:
         "This file is a copy of {{original}} and differs from it: run `pnpm lint:fix` to rewrite it from the original, and change the original, never the copy.",
-      notRegularFile:
-        "This file is listed as a copy of {{original}} but is not a regular file (a symlink resolves the copy's imports from the original's place): replace it with a real copy, `rm {{copy}} && cp {{original}} {{copy}}` from the workspace root.",
       originalUnreadable:
         "This file is a copy of {{original}}, which is missing, not a file, or not valid UTF-8: restore the original, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
       copyStale:
         "{{copy}} is a copy of this file and differs from it: run `pnpm lint:fix` to rewrite the copy from this file, or, when the copy does not parse, `cp {{original}} {{copy}}` from the workspace root.",
       copyMissing:
-        "{{copy}}, a copy of this file, is missing: restore it with `cp {{original}} {{copy}}` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
-      copyNotRegularFile:
-        "{{copy}}, a copy of this file, is not a regular file (a symlink or a directory): replace it with a real copy, `rm -r {{copy}} && cp {{original}} {{copy}}` from the workspace root.",
-      copyUnreadable:
-        "{{copy}}, a copy of this file, cannot be read as UTF-8 text: restore it with `cp {{original}} {{copy}}` from the workspace root.",
+        "{{copy}}, a copy of this file, is missing or not a UTF-8 text file: restore it with `cp {{original}} {{copy}}` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
     },
     // The option's structure. The paths' own rules (inside the root, distinct) are the parser's, in workspace.ts.
     schema: {
@@ -152,25 +125,18 @@ export const fileCopies: Rule = {
         const text = sourceCode.hasBOM ? `${BOM}${sourceCode.text}` : sourceCode.text;
 
         if (path !== original) {
-          // The linted buffer is what is compared; on disk, the copy itself must not be a link or a directory.
-          if (lstatSync(filename, { throwIfNoEntry: false })?.isFile() === false) {
-            context.report({ loc: FILE_START, messageId: "notRegularFile", data: { original, copy: path } });
+          const source = readText(resolve(root, original));
 
-            return;
-          }
-
-          const source = readPeer(resolve(root, original), "follow");
-
-          if (source._tag !== "Text") {
+          if (source === undefined) {
             context.report({ loc: FILE_START, messageId: "originalUnreadable", data: { original } });
-          } else if (source.text !== text) {
+          } else if (source !== text) {
             context.report({
               loc: FILE_START,
               messageId: "copyDiffers",
               data: { original },
               // The whole file, from before a byte-order mark (offset -1) to the end.
               fix: (fixer) =>
-                fixer.replaceTextRange([sourceCode.hasBOM ? -1 : 0, sourceCode.text.length], source.text),
+                fixer.replaceTextRange([sourceCode.hasBOM ? -1 : 0, sourceCode.text.length], source),
             });
           }
 
@@ -178,28 +144,14 @@ export const fileCopies: Rule = {
         }
 
         for (const copy of copies) {
-          const copied = readPeer(resolve(root, copy), "refuse");
-          const data = { copy, original };
+          const copied = readText(resolve(root, copy));
 
-          switch (copied._tag) {
-            case "Missing": {
-              context.report({ loc: FILE_START, messageId: "copyMissing", data });
-              break;
-            }
-            case "NotRegularFile": {
-              context.report({ loc: FILE_START, messageId: "copyNotRegularFile", data });
-              break;
-            }
-            case "Unreadable": {
-              context.report({ loc: FILE_START, messageId: "copyUnreadable", data });
-              break;
-            }
-            case "Text": {
-              if (copied.text !== text) {
-                context.report({ loc: FILE_START, messageId: "copyStale", data });
-              }
-              break;
-            }
+          if (copied !== text) {
+            context.report({
+              loc: FILE_START,
+              messageId: copied === undefined ? "copyMissing" : "copyStale",
+              data: { copy, original },
+            });
           }
         }
       },

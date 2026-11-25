@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { RuleTester } from "oxlint/plugins-dev";
@@ -39,9 +39,6 @@ write("src/corpus.ts", ORIGINAL);
 write("fixture/src/corpus.ts", DRIFTED);
 write("bad/original.ts", INVALID_UTF8);
 write("bad/copy.ts", INVALID_UTF8);
-mkdirSync(join(workspace, "link"));
-symlinkSync("../lib/original.ts", join(workspace, "link/copy.ts"));
-mkdirSync(join(workspace, "dir/copy.ts"), { recursive: true });
 
 const pair = { original: "lib/original.ts", copies: ["a/copy.ts", "b/copy.ts"] };
 const inWorkspace = (path: string) => join(workspace, path);
@@ -85,7 +82,14 @@ createTester().run("file-copies", fileCopies, {
       code: DRIFTED,
       filename: inWorkspace("b/copy.ts"),
       options: [pair],
-      errors: [{ messageId: "copyDiffers", data: { original: "lib/original.ts" }, line: 1, column: 0 }],
+      errors: [
+        {
+          message:
+            "This file is a copy of lib/original.ts and differs from it: run `pnpm lint:fix` to rewrite it from the original, and change the original, never the copy.",
+          line: 1,
+          column: 0,
+        },
+      ],
       output: ORIGINAL,
     },
     {
@@ -127,37 +131,18 @@ createTester().run("file-copies", fileCopies, {
       options: [{ original: "lib/original.ts", copies: ["a/copy.ts", "b/copy.ts", "gone/copy.ts"] }],
       errors: [
         {
-          messageId: "copyStale",
-          data: { copy: "b/copy.ts", original: "lib/original.ts" },
+          message:
+            "b/copy.ts is a copy of this file and differs from it: run `pnpm lint:fix` to rewrite the copy from this file, or, when the copy does not parse, `cp lib/original.ts b/copy.ts` from the workspace root.",
           line: 1,
           column: 0,
         },
         {
-          messageId: "copyMissing",
-          data: { copy: "gone/copy.ts", original: "lib/original.ts" },
+          message:
+            "gone/copy.ts, a copy of this file, is missing or not a UTF-8 text file: restore it with `cp lib/original.ts gone/copy.ts` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
           line: 1,
           column: 0,
         },
       ],
-      output: null,
-    },
-    {
-      name: "The original names each copy that is a symlink or a directory",
-      code: ORIGINAL,
-      filename: inWorkspace("lib/original.ts"),
-      options: [{ original: "lib/original.ts", copies: ["link/copy.ts", "dir/copy.ts"] }],
-      errors: [
-        { messageId: "copyNotRegularFile", data: { copy: "link/copy.ts", original: "lib/original.ts" } },
-        { messageId: "copyNotRegularFile", data: { copy: "dir/copy.ts", original: "lib/original.ts" } },
-      ],
-      output: null,
-    },
-    {
-      name: "A copy that is a symlink to the original is not a copy, and is not fixed",
-      code: ORIGINAL,
-      filename: inWorkspace("link/copy.ts"),
-      options: [{ original: "lib/original.ts", copies: ["link/copy.ts"] }],
-      errors: [{ messageId: "notRegularFile", data: { original: "lib/original.ts", copy: "link/copy.ts" } }],
       output: null,
     },
     {
@@ -181,7 +166,12 @@ createTester().run("file-copies", fileCopies, {
       code: LOSSY,
       filename: inWorkspace("bad/original.ts"),
       options: [{ original: "bad/original.ts", copies: ["bad/copy.ts"] }],
-      errors: [{ messageId: "copyUnreadable", data: { copy: "bad/copy.ts", original: "bad/original.ts" } }],
+      errors: [
+        {
+          message:
+            "bad/copy.ts, a copy of this file, is missing or not a UTF-8 text file: restore it with `cp bad/original.ts bad/copy.ts` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
+        },
+      ],
       output: null,
     },
     {
