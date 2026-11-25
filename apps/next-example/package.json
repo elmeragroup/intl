@@ -2,9 +2,8 @@
   "name": "@elmeragroup/next-example",
   "version": "0.0.0",
   "private": true,
-  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a Next.js App Router app, in English and Norwegian Bokmål. sideEffects: true keeps `import \"../intl/configure\"` from being dropped.",
+  "description": "Example: @elmeragroup/intl and @elmeragroup/intl-tools in a Next.js App Router app, in English and Norwegian Bokmål.",
   "type": "module",
-  "sideEffects": true,
   "scripts": {
     "build": "elmera-intl check && next build",
     "clean": "git clean -xdf .next .turbo node_modules playwright-report test-results",

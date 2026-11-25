@@ -3,7 +3,6 @@ import { cookies } from "next/headers";
 
 import { getIntl } from "@elmeragroup/intl/server";
 
-import "../intl/configure";
 import { LOCALE_COOKIE, parseLocale } from "../intl/locale";
 import { ORDER } from "../intl/messages";
 

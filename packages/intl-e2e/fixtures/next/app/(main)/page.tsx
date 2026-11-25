@@ -2,6 +2,7 @@ import { T } from "@elmeragroup/intl/react";
 import { getIntl } from "@elmeragroup/intl/server";
 
 import { ActionButton } from "../../components/action-button";
+import { ActionLocaleSwitcher } from "../../components/action-locale-switcher";
 import { ClientBox } from "../../components/client-box";
 import { CorpusList } from "../../components/corpus-list";
 import { receiverForms } from "../../components/forms/receiver-forms";
@@ -25,6 +26,8 @@ export default async function Page() {
       <ClientBox descriptor={DESCRIPTOR} />
       <ActionButton />
       <LocaleSwitcher />
+      <p id="rsc-action-switch">{intl.t("Rendered with the action's locale")}</p>
+      <ActionLocaleSwitcher />
       <CorpusList />
     </main>
   );

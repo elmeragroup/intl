@@ -1,21 +1,43 @@
-// Next.js server adapter: resolve each request's IntlInstance lazily from its headers (cookies included).
-import { headers } from "next/headers";
+// Next.js server adapter: the app's request config, built from the request's headers with its cookies as the request
+// currently holds them.
+import { cookies, headers } from "next/headers";
 
-import type { ServerAdapter } from "./adapter";
+import type { RequestConfig, RequestLike, ServerAdapter } from "./adapter";
 import { resolveIntlConfig } from "./adapter";
-import { createIntl } from "./intl";
-import { configureRequestIntl } from "./server";
+import { cookieHeader } from "./request-cookies";
 
-export type { RequestLike, ServerAdapter } from "./adapter";
+export type { RequestConfig, RequestLike, ServerAdapter } from "./adapter";
 
 /**
- * Wire the app's server adapter into `getIntl`/`getT` and the server `<T>`/`useT`. Call it at module load in a
- * server-only module that the root layout and every page import, so it runs before any render reads the request.
+ * The app's request config: the default export of `intl/request.ts`, which `withIntl` resolves `getIntl`, `getT`,
+ * `getFormat` and the server `<T>`/`useT` to. No page, layout, action or route imports it.
+ *
+ * The adapter sees the request's headers, except `cookie`, which is written from `cookies()`: inside a server action,
+ * `headers()` is the request as it arrived, so a locale cookie the action just set is only in `cookies()`, and the
+ * page Next re-renders in the action's response would otherwise resolve the old locale.
+ *
+ * `cookies()` is Next's own store, which Next builds from the request's headers on the first `cookies()` read and then
+ * caches apart from a route handler's `NextRequest`. A rewrite of the incoming request's cookies
+ * (`request.cookies.set(...)`) made before anything in the request has read `cookies()` is seen by `getIntl()`; a
+ * rewrite made after Next has initialized its store (a `cookies()` read, `getIntl()` included, came first) is not, and
+ * `getIntl()` resolves the old locale. For that case, a handler can build its config from the request it rewrote,
+ * `createIntl(await resolveIntlConfig(adapter, request))` (both from `@elmeragroup/intl/core`), but only with an adapter
+ * that reads the passed request's `cookie` header (`request.headers.get("cookie")`); an adapter that reads `cookies()`
+ * itself still sees Next's store, and the old locale.
  *
  * @param adapter - Locale resolution, catalog loading, time zone and formats.
+ * @returns The request config, read per call.
  */
-export function configureNextIntl(adapter: ServerAdapter): void {
-  configureRequestIntl(async () =>
-    createIntl(await resolveIntlConfig(adapter, { headers: await headers() }))
-  );
+export function createRequestConfig(adapter: ServerAdapter): RequestConfig {
+  return async () => {
+    const [incoming, jar] = await Promise.all([headers(), cookies()]);
+    const request: RequestLike = {
+      headers: {
+        // Written only when the adapter reads it.
+        get: (name) => (name.toLowerCase() === "cookie" ? cookieHeader(jar.getAll()) : incoming.get(name)),
+      },
+    };
+
+    return resolveIntlConfig(adapter, request);
+  };
 }

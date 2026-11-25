@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useLocaleSwitch } from "@elmeragroup/intl/next";
 import { T } from "@elmeragroup/intl/react";
 
-// The cookie is what intl/configure.ts reads; the switch then refreshes the server tree in place.
+// The cookie is what intl/fixture-request.ts reads; the switch then refreshes the server tree in place.
 export function LocaleSwitcher() {
   const [text, setText] = useState("");
   const { switchLocale, isPending } = useLocaleSwitch((locale) => {

@@ -22,5 +22,6 @@ const base = {
   typescript: { ignoreBuildErrors: true },
 } satisfies NextConfig;
 
-// Outermost, so withIntl sees the config the other wrappers produced.
-export default withIntl(withMDX(base), { dir: import.meta.dirname });
+// Outermost, so withIntl sees the config the other wrappers produced. The request module sits off the default path, so
+// the `request` option is what aliases it.
+export default withIntl(withMDX(base), { dir: import.meta.dirname, request: "intl/fixture-request.ts" });

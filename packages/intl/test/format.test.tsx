@@ -6,10 +6,11 @@ import { describe, expect, it } from "vitest";
 import type { Format } from "@elmeragroup/intl/core";
 import { createIntl } from "@elmeragroup/intl/core";
 import { IntlProvider, useFormat } from "@elmeragroup/intl/react";
-import { configureRequestIntl, getFormat } from "@elmeragroup/intl/server";
+import { getFormat } from "@elmeragroup/intl/server";
 
 import { APP_FORMATS } from "./app-formats";
 import { english } from "./catalogs";
+import { REQUEST_CONFIG } from "./request-config";
 
 const OSLO = "Europe/Oslo";
 // 00:30 on Mar 5 in Oslo, 01:30 in Helsinki, still Mar 4 on the host (America/Los_Angeles).
@@ -87,9 +88,9 @@ describe("format", () => {
     ]);
   });
 
-  // The server translator is rebuilt from the resolver's instance field by field, so a field it drops shows here.
+  // The server translator is rebuilt from the request config field by field, so a field it drops shows here. The
+  // request config is test/request-config.ts, which vitest.config.ts aliases as withIntl aliases an app's.
   it("gives the same output from the provider's useFormat and the request's getFormat", async () => {
-    const config = { locale: "no", catalog: english(), timeZone: OSLO, formats: APP_FORMATS };
     let client: ReadonlyArray<string> = [];
     function Probe(): ReactNode {
       client = appCalls(useFormat());
@@ -97,11 +98,10 @@ describe("format", () => {
       return null;
     }
     renderToStaticMarkup(
-      <IntlProvider {...config}>
+      <IntlProvider {...REQUEST_CONFIG}>
         <Probe />
       </IntlProvider>
     );
-    configureRequestIntl(() => Promise.resolve(createIntl(config)));
     const server = appCalls(await getFormat());
 
     expect({ client, server }).toEqual({

@@ -50,7 +50,7 @@ Only what an app does not call itself, and the React Server Components API Start
 - `loadCatalog`, `compileCatalog` and its `CatalogCompileError` (`/compile`), for Node scripts
   without a bundler: every catalog
   here is a `*.po` import, which `intl()` compiles in the app and `intlCatalogs()` in Vitest.
-- `/server` (`getT`, `getFormat`, `getIntl`, `configureRequestIntl`): the React Server Components
+- `/server` (`getT`, `getFormat`, `getIntl`): the React Server Components
   API, shown in the Next example. A Start route reads the translator from the provider (`useT`,
   `useIntl`).
 

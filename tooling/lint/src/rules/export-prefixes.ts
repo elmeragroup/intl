@@ -3,7 +3,8 @@ import type { ESTree, Rule } from "@oxlint/plugins";
 //
 // - `use*` is a React hook: a function that calls a hook (`use`, `useMemo`, another `use*`).
 // - `get*` is async and server-only: it returns a Promise from a server module (`getT`, `getIntl`, `getFormat`).
-// - `configure*` is one-time server wiring, so it lives in a server module (`configureRequestIntl`).
+// - `configure*` is one-time server wiring, so it lives in a server module (no export takes the prefix today: Next's
+//   request config is a module the build plugin aliases, `createRequestConfig`).
 // - `compile*` is a build-time compiler, so it lives in the tools (`compileCatalog`), never in the runtime.
 //
 // A server module is `server.ts` or `<name>-server.ts(x)`: the runtime's server-only entries are named so.

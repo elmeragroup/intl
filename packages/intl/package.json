@@ -93,6 +93,21 @@
       "types": "./dist/internal/message.d.ts",
       "import": "./dist/internal/message.js"
     },
+    "./internal/request-config": {
+      "react-server": {
+        "elmera-source": "./src/request-config-server.ts",
+        "types": "./dist/internal/request-config-server.d.ts",
+        "import": "./dist/internal/request-config-server.js"
+      },
+      "elmera-source": "./src/request-config.ts",
+      "types": "./dist/internal/request-config.d.ts",
+      "import": "./dist/internal/request-config.js"
+    },
+    "./internal/request-module": {
+      "elmera-source": "./src/request-config.ts",
+      "types": "./dist/internal/request-config.d.ts",
+      "import": "./dist/internal/request-config.js"
+    },
     "./internal/react-client": {
       "elmera-source": "./src/react.tsx",
       "types": "./dist/react.d.ts",
