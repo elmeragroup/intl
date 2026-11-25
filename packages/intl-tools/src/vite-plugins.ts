@@ -298,8 +298,7 @@ function watchedPaths(path: string): ReadonlyArray<string> {
   return real === path ? [path] : [path, real];
 }
 
-// The watcher reports realpaths, and matches a watched path or exclude only by its realpath. The path may not exist
-// yet, so the realpath of its nearest existing ancestor, with the rest re-joined.
+// The real path of `path` through its nearest existing ancestor, with the part that does not exist yet kept as written.
 function canonical(path: string): string {
   const existing = nearestExisting(path);
 

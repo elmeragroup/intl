@@ -212,7 +212,8 @@ type DevEdit =
   | { readonly _tag: "Write"; readonly file: string; readonly text: string }
   | { readonly _tag: "Link"; readonly file: string; readonly target: string };
 
-// Makes the edit; again, each time, so a repeated edit is one more change the watcher reports.
+// Makes the edit; again, each time: a repeated write is one more change the watcher reports, and each rename of a link
+// prompts another scan of its directory.
 function applyEdit(edit: DevEdit): void {
   if (edit._tag === "Write") {
     writeFileSync(edit.file, edit.text);
@@ -469,14 +470,14 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
   // Unit under test: `intl()`'s dev server, loading a PO import before and after one edit. Oracle: Intl rejects the
   // currency "NOKK", which only the edit makes reachable: a PO load re-runs on a save of the formats module, and on a
   // save of the config that names another one, also when the config is a symlink to a file outside the root (the
-  // watcher reports the file's realpath), and when the formats module is a symlink repointed to another module under
-  // `resolve.preserveSymlinks` (the watcher reports the link's own path: it polls the link, not its target, so it sees
-  // the repoint). Each row prepares the project and returns its edit, which the poll applies again until the load
-  // fails, so an edit made before the watcher attaches is not lost.
+  // watcher reports the file's realpath), and when the formats module is a symlink repointed to another module (the
+  // row's `extra`: chokidar's `followSymlinks: false` reports the repoint under the link's own path, and Vite's
+  // `resolve.preserveSymlinks` keeps that path in the module graph). Each row prepares the project and returns its
+  // edit, which the poll applies again until the load fails, so an edit made before the watcher attaches is not lost.
   it.for([
     {
       edited: "formats module",
-      preserveSymlinks: false,
+      extra: {},
       prepare: (project: Project): DevEdit => ({
         _tag: "Write",
         file: project.path("intl-formats.ts"),
@@ -485,12 +486,12 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     },
     {
       edited: "config, switched to another formats module",
-      preserveSymlinks: false,
+      extra: {},
       prepare: (project: Project): DevEdit => switchFormats(project, project.path("elmera-intl.json")),
     },
     {
       edited: "config through a symlink, switched to another formats module",
-      preserveSymlinks: false,
+      extra: {},
       prepare: (project: Project): DevEdit => {
         const target = join(outsideRoot(project), "elmera-intl.json");
         writeFileSync(target, project.read("elmera-intl.json"));
@@ -502,7 +503,10 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     },
     {
       edited: "formats module symlink, repointed to another module",
-      preserveSymlinks: true,
+      extra: {
+        server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
+        resolve: { preserveSymlinks: true },
+      },
       prepare: (project: Project): DevEdit => {
         const outside = outsideRoot(project);
         writeFileSync(join(outside, "valid.ts"), project.read("intl-formats.ts"));
@@ -513,39 +517,36 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
         return { _tag: "Link", file: project.path("intl-formats.ts"), target: join(outside, "invalid.ts") };
       },
     },
-  ])(
-    "loads a catalog with the edited $edited during dev",
-    async ({ prepare, preserveSymlinks }, { project }) => {
-      await useMoneyFormats(project, "NOK");
-      const edit = prepare(project);
-      const server = await devServer(project, {
-        server: preserveSymlinks ? { watch: { ...SERVER_WATCH.watch, followSymlinks: false } } : SERVER_WATCH,
-        resolve: { preserveSymlinks },
-        plugins: [intl()],
-      });
-      const load = async () => {
-        try {
-          await server.ssrLoadModule("/messages/nb.po");
+  ])("loads a catalog with the edited $edited during dev", async ({ prepare, extra }, { project }) => {
+    await useMoneyFormats(project, "NOK");
+    const edit = prepare(project);
+    const server = await devServer(project, {
+      server: SERVER_WATCH,
+      plugins: [intl()],
+      ...extra,
+    });
+    const load = async () => {
+      try {
+        await server.ssrLoadModule("/messages/nb.po");
 
-          return "loaded";
-        } catch (error) {
-          return error instanceof Error ? error.message : String(error);
-        }
-      };
-      await expect(load()).resolves.toBe("loaded");
+        return "loaded";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+    await expect(load()).resolves.toBe("loaded");
 
-      await expect
-        .poll(
-          () => {
-            applyEdit(edit);
+    await expect
+      .poll(
+        () => {
+          applyEdit(edit);
 
-            return load();
-          },
-          { ...project.guard(), interval: PROBE_INTERVAL_MS }
-        )
-        .toMatch(/Invalid currency code : NOKK/u);
-    }
-  );
+          return load();
+        },
+        { ...project.guard(), interval: PROBE_INTERVAL_MS }
+      )
+      .toMatch(/Invalid currency code : NOKK/u);
+  });
 
   it("adds a message written during dev to the PO", async ({ project }) => {
     await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
@@ -930,31 +931,24 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     await expect(loading).rejects.toHaveProperty("message", SV_NOT_CONFIGURED);
   });
 
-  // Oracle: the config problem's printed form (problem.ts): its path (under the root, which Vite resolves to its
-  // realpath), the ConfigInvalid code and why, then the fix on the next line. The import depends on the missing config,
-  // and the build still fails on it with the plugin's own error.
+  // Oracle: the config problem's printed form (problem.ts), the diagnostic the build fails with: its path (under the
+  // root, which Vite resolves to its realpath), the ConfigInvalid code and why, then the lead-in of the fix line. The
+  // build's `errors` hold the plugin's own error.
   it("fails the import when the config is missing", async ({ project }) => {
     rmSync(project.path("elmera-intl.json"));
     const config = join(realpathSync(project.root), "elmera-intl.json");
-    // The plugin's own errors, as the build's failure carries them.
-    const messages: Array<string> = [];
-    try {
-      await buildCatalogs(project, `export { default } from "../messages/nb.po";\n`);
-    } catch (error) {
-      if (error instanceof Error && "errors" in error && Array.isArray(error.errors)) {
-        for (const each of error.errors) {
-          messages.push(each instanceof Error ? each.message : String(each));
-        }
-      }
-    }
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatch(
+    const diagnostic: unknown = expect.stringMatching(
       new RegExp(
         `^${RegExp.escape(`${config}: ConfigInvalid: ${config} not found\n  fix: write elmera-intl.json as `)}`,
         "u"
       )
     );
+
+    await expect(
+      buildCatalogs(project, `export { default } from "../messages/nb.po";\n`)
+    ).rejects.toMatchObject({
+      errors: [{ message: diagnostic }],
+    });
   });
 
   it("fails the import of a configured locale's missing PO", async ({ project }) => {
