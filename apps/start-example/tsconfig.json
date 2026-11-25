@@ -1,0 +1,13 @@
+{
+  // effect.json second: the API route reads the translator as an Effect service (`CurrentIntl`).
+  "extends": [
+    "@elmeragroup/typescript-config/react-library.json",
+    "@elmeragroup/typescript-config/effect.json"
+  ],
+  "compilerOptions": {
+    "composite": false,
+    "jsx": "react-jsx",
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src", "test", "tests", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+}

@@ -57,6 +57,12 @@ _Avoid_: Intl (it shadows the global), translator service
 A minimal app per host in `packages/intl-e2e`, built and driven by Playwright to prove the packages
 work as a consumer gets them.
 
+**Example app**:
+An app per host in `apps/` that shows the recommended setup of both packages, for readers to copy.
+Its Playwright specs prove it works on its production build; the fixture apps, not the examples, are
+the packages' test corpus.
+_Avoid_: demo, sample, playground
+
 **Linked pass / packed pass**:
 The two ways a fixture app consumes the packages: through workspace links, or from `pnpm pack`
 archives installed as real copies, as npm users get them.

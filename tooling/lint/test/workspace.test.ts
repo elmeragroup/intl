@@ -1,7 +1,7 @@
 // The contracts that live in JSON and YAML, which oxlint does not read: package manifests, the dependency catalog, the
 // Node pin and the lint config itself. Fast and unbuilt, so it runs in the same feedback loop as lint.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -25,6 +25,7 @@ type Manifest = {
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly devDependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly optionalDependencies?: Readonly<Record<string, string>>;
   readonly publishConfig?: { readonly access?: string };
   readonly devEngines?: { readonly runtime?: { readonly version?: string } };
   readonly scripts?: Readonly<Record<string, string>>;
@@ -53,6 +54,47 @@ const PACKAGES = WORKSPACE_GLOBS.flatMap((dir) =>
     : []
 ).map((path) => ({ path, manifest: parseManifest(`${path}/package.json`) }));
 const PUBLISHED = PACKAGES.filter(({ manifest }) => manifest.private !== true);
+const APPS = PACKAGES.filter(({ path }) => path.startsWith("apps/"));
+
+const DEPENDENCY_SECTIONS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+] as const;
+
+// Every entry in the given manifests that links an example app: by its key, by the package its specifier aliases
+// (`workspace:<name>@<range>`, `npm:<name>@<range>`), or by the directory its specifier points at (`link:` or `file:`
+// and a path, or `workspace:` and a relative one). Each section is read on its own: a key may appear in several, and
+// one section's entry must not hide another's.
+function appDependents(
+  manifests: ReadonlyArray<{ readonly dir: string; readonly manifest: Manifest }>
+): Array<string> {
+  const names = new Set(APPS.map(({ manifest }) => manifest.name));
+  const directories = APPS.map(({ path }) => path);
+  const linksApp = (dir: string, name: string, spec: string): boolean => {
+    const alias = /^(?:workspace|npm):(@?[^@]+)@/u.exec(spec)?.[1];
+    // `link:` and `file:` always name a path; `workspace:` only when it starts like one (`workspace:*` is a range).
+    const target = /^(?:link|file):(.+)$/u.exec(spec)?.[1] ?? /^workspace:(\.{0,2}\/.*)$/u.exec(spec)?.[1];
+    const targetDir = target === undefined ? undefined : relative(ROOT, resolve(ROOT, dir, target));
+
+    return (
+      names.has(name) ||
+      (alias !== undefined && names.has(alias)) ||
+      (targetDir !== undefined &&
+        directories.some((app) => targetDir === app || targetDir.startsWith(`${app}/`)))
+    );
+  };
+
+  return manifests.flatMap(({ dir, manifest }) =>
+    DEPENDENCY_SECTIONS.flatMap((section) =>
+      Object.entries(manifest[section] ?? {})
+        .filter(([name, spec]) => linksApp(dir, name, spec))
+        .map(([name, spec]) => `${dir || "."}/package.json ${section} → ${name}: ${spec}`)
+    )
+  );
+}
+
 // Conditions Node, TypeScript and the bundlers define; any other is ours, in a global namespace.
 const STANDARD_CONDITIONS = new Set([
   "types",
@@ -106,6 +148,50 @@ describe("workspace packages", () => {
 
     expect(specs.filter(([, spec]) => !/^(catalog:[\w-]*|workspace:\*)$/u.test(spec))).toEqual([]);
   });
+});
+
+// The example apps (AGENTS.md, Package responsibilities): leaves of the dependency graph that consume the packages as an
+// app does, and never publish.
+describe("example apps", () => {
+  it("finds the example apps", () => {
+    expect(APPS.map(({ path }) => path).toSorted()).toEqual(["apps/next-example", "apps/start-example"]);
+  });
+
+  // Every manifest that can declare a dependency: each workspace package's and the root's.
+  it("depends on no example app", () => {
+    const manifests = [
+      { dir: "", manifest: parseManifest("package.json") },
+      ...PACKAGES.map(({ path, manifest }) => ({ dir: path, manifest })),
+    ];
+
+    expect(appDependents(manifests)).toEqual([]);
+  });
+
+  // The guard itself, on a manifest pnpm would accept: one section's entry must not hide another's under the same key.
+  it("finds an app linked in one section behind the same key in another", () => {
+    const manifest = {
+      name: "@elmeragroup/fixture",
+      devDependencies: { alias: "link:./apps/next-example" },
+      peerDependencies: { alias: "*" },
+    };
+
+    expect(appDependents([{ dir: "", manifest }])).toEqual([
+      "./package.json devDependencies → alias: link:./apps/next-example",
+    ]);
+  });
+
+  it.each(APPS)(
+    "$path is private, named @elmeragroup/<directory>, and takes our packages from the workspace",
+    ({ path, manifest }) => {
+      const ours = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).filter(
+        ([name]) => name.startsWith("@elmeragroup/")
+      );
+
+      expect(manifest.private).toBe(true);
+      expect(manifest.name).toBe(`@elmeragroup/${path.slice("apps/".length)}`);
+      expect(ours.filter(([, spec]) => spec !== "workspace:*")).toEqual([]);
+    }
+  );
 });
 
 describe.each(PUBLISHED)("published $manifest.name", ({ path, manifest }) => {

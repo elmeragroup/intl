@@ -1,0 +1,16 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Nitro writes the server and the client assets to .output.
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".output/**"]
+    },
+    // Type-checks as a consumer does: `--customConditions null` drops the workspace's `elmera-source` condition, so it
+    // reads the packages' built declarations. Lint still reads them through source.
+    "type-check": {
+      "dependsOn": ["^build"]
+    }
+  }
+}

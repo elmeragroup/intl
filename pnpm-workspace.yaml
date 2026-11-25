@@ -1,6 +1,8 @@
 packages:
   - packages/*
   - tooling/*
+  # Example apps: private, never published, and nothing depends on one (tooling/lint holds both).
+  - apps/*
 
 # Every version is exact: a range could resolve a release younger than minimumReleaseAge, and the
 # packages publish with these pins. The intl entries are the versions the packages were last verified

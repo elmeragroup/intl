@@ -2,6 +2,9 @@ import type { ESTree, Rule } from "@oxlint/plugins";
 // The workspace's dependency direction: intl-e2e → intl-tools → intl, and nothing back.
 //
 // - Nothing imports @elmeragroup/intl-e2e: it is a test harness.
+// - Nothing outside an example app (`apps/<name>`) imports a file inside it: an app is a leaf, and its code is copy for
+//   readers, not a module to share. A package cannot import one by name either: none may declare it (the manifest
+//   test), so the name does not resolve.
 // - @elmeragroup/intl never imports @elmeragroup/intl-tools: the runtime ships to browsers, the tools to build steps.
 // - @elmeragroup/intl/internal/* is for intl-tools (and the runtime itself): it carries no semver promise.
 // - The runtime's source imports no Node builtin: every runtime module is platform-neutral, and the client ones reach
@@ -13,10 +16,10 @@ import type { ESTree, Rule } from "@oxlint/plugins";
 //   break, its dist), and imports a bare package only when its manifest declares it as a dependency or peer, so a
 //   consumer's install has it. A type-only import may also come from a devDependency: declarations are inlined.
 import { isBuiltin } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { stringLiteral } from "../ast.ts";
-import { E2E, isPublishedSource, packageOf, pathInPackage, RUNTIME, TOOLS } from "../workspace.ts";
+import { E2E, isApp, isPublishedSource, packageOf, pathInPackage, RUNTIME, TOOLS } from "../workspace.ts";
 
 // The optional peer, and the one runtime module that may import it.
 const EFFECT = "effect";
@@ -37,6 +40,7 @@ export const importBoundaries: Rule = {
     docs: { description: "Imports follow the dependency direction intl-e2e → intl-tools → intl." },
     messages: {
       e2e: "Nothing imports @elmeragroup/intl-e2e: it is the private test harness, and nothing depends on it.",
+      app: "`{{specifier}}` reaches into the example app {{app}}: nothing outside an app imports it. Copy the code, or move what is shared into @elmeragroup/intl or @elmeragroup/intl-tools.",
       tools:
         "@elmeragroup/intl never imports @elmeragroup/intl-tools: the runtime ships to browsers, the tools run at build time (the dependency points from intl-tools to intl).",
       internal:
@@ -79,6 +83,15 @@ export const importBoundaries: Rule = {
 
       if (specifier.startsWith(".")) {
         const target = resolve(dirname(context.filename), specifier);
+        const targetPackage = packageOf(join(target, "index.ts"));
+
+        if (targetPackage !== undefined && targetPackage.root !== pkg.root && isApp(targetPackage)) {
+          context.report({
+            node: source,
+            messageId: "app",
+            data: { ...data, app: targetPackage.name ?? "" },
+          });
+        }
 
         if (barredFromEffect && target.replace(/\.[cm]?[jt]sx?$/u, "") === effectEntryPath) {
           context.report({ node: source, messageId: "effectEntry", data });

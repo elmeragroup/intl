@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nb\n"
+"X-Elmera-Serializer: 1\n"
+
+#: src/components/cart.tsx
+msgid "Add an item"
+msgstr "Legg til en vare"
+
+#: src/components/api-demo.tsx
+msgid "Call the API"
+msgstr "Kall API-et"
+
+#: src/components/api-demo.tsx
+msgid "Confirm the order"
+msgstr "Bekreft bestillingen"
+
+#: src/intl/messages.ts
+msgid "Delivered"
+msgstr "Levert"
+
+#: src/routes/index.tsx
+msgid "Delivered to your {place, select, home {home} office {office} other {pickup point}}."
+msgstr "Leveres til {place, select, home {hjemmet ditt} office {kontoret ditt} other {hentestedet ditt}}."
+
+#: src/routes/index.tsx
+msgid "Delivery window"
+msgstr "Leveringsvindu"
+
+#: src/routes/index.tsx
+msgid "Hello {name}, you have {count, plural, =0 {no new messages} one {# new message} other {# new messages}}."
+msgstr "Hei {name}, du har {count, plural, =0 {ingen nye meldinger} one {# ny melding} other {# nye meldinger}}."
+
+#: src/components/locale-switcher.tsx
+msgid "Language"
+msgstr "Språk"
+
+#: src/intl/messages.ts
+msgctxt "shop opening state"
+msgid "Open"
+msgstr "Åpen"
+
+#: src/routes/index.tsx
+msgctxt "verb"
+msgid "Open"
+msgstr "Åpne"
+
+#: src/routes/index.tsx
+msgid "Order date"
+msgstr "Bestillingsdato"
+
+#: src/routes/index.tsx
+msgid "Order status"
+msgstr "Bestillingsstatus"
+
+#: src/routes/index.tsx
+msgid "Order {id}"
+msgstr "Bestilling {id}"
+
+#: src/components/cart.tsx
+msgid "Order {id}: {status}, {placedAt}"
+msgstr "Bestilling {id}: {status}, {placedAt}"
+
+#: src/routes/index.tsx
+msgid "Orders ship within two working days, and you can return an item within 30 days."
+msgstr "Bestillinger sendes innen to virkedager, og du kan returnere en vare innen 30 dager."
+
+#: src/routes/index.tsx
+msgid "Pickup points"
+msgstr "Hentesteder"
+
+#: src/intl/messages.ts
+msgid "Placed"
+msgstr "Bestilt"
+
+#: src/routes/index.tsx
+msgid "Placed on {placedAt, date, short}"
+msgstr "Bestilt {placedAt, date, short}"
+
+#. <x0> = <a href>
+#: src/routes/index.tsx
+msgid "Read our <x0>terms of sale</x0> before you order."
+msgstr "Les <x0>salgsvilkårene</x0> våre før du bestiller."
+
+#: src/components/api-demo.tsx
+msgid "Server answers"
+msgstr "Svar fra serveren"
+
+#: src/intl/messages.ts
+msgid "Shipped"
+msgstr "Sendt"
+
+#: src/routes/index.tsx
+msgid "Shipping"
+msgstr "Frakt"
+
+#: src/routes/index.tsx
+msgid "Shop"
+msgstr "Butikk"
+
+#: src/routes/index.tsx
+msgid "Terms of sale"
+msgstr "Salgsvilkår"
+
+#: src/server/shop.functions.ts
+msgid "Thank you! Order {id} is confirmed."
+msgstr "Takk! Bestilling {id} er bekreftet."
+
+#: src/components/api-demo.tsx
+msgid "The server did not answer. Try again."
+msgstr "Serveren svarte ikke. Prøv igjen."
+
+#: src/server/shop.functions.ts
+msgid "This notice was translated in a route loader."
+msgstr "Denne meldingen ble oversatt i en rutelaster."
+
+#: src/components/load-error.tsx
+msgid "This page could not be loaded."
+msgstr "Siden kunne ikke lastes inn."
+
+#: src/routes/api/greeting.ts
+msgid "This text was translated by an API route."
+msgstr "Denne teksten ble oversatt av en API-rute."
+
+#: src/routes/index.tsx
+msgid "Total"
+msgstr "Totalt"
+
+#: src/components/cart.tsx
+msgid "Total: {total, number, price}"
+msgstr "Totalt: {total, number, price}"
+
+#: src/components/load-error.tsx
+msgid "Try again"
+msgstr "Prøv igjen"
+
+#: src/routes/index.tsx
+msgid "Welcome to the example shop"
+msgstr "Velkommen til eksempelbutikken"
+
+#: src/components/cart.tsx
+msgid "Your cart"
+msgstr "Handlekurven din"
+
+#: src/components/locale-switcher.tsx
+msgid "Your language choice was not saved. Try again."
+msgstr "Språkvalget ditt ble ikke lagret. Prøv igjen."
+
+#: src/components/locale-switcher.tsx
+msgid "Your language choice was saved. Reload the page to see it."
+msgstr "Språkvalget ditt er lagret. Last inn siden på nytt for å se det."
+
+#: src/components/cart.tsx
+msgid "{count, plural, =0 {Your cart is empty} one {# item in your cart} other {# items in your cart}}"
+msgstr "{count, plural, =0 {Handlekurven er tom} one {# vare i handlekurven} other {# varer i handlekurven}}"
