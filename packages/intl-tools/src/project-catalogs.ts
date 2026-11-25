@@ -1,5 +1,6 @@
-// Where a project's catalogs live: each locale's PO path, and the locale a PO path is the catalog of. A leaf, so the
-// loaders (Next's po-loader, Vite's `load`) resolve a catalog without loading the extractor.
+// Where a project's catalogs live: each locale's PO path, and the locale a PO path is the catalog of. A leaf, so a
+// catalog import (catalog-import.ts, which Next's po-loader and Vite's `load` share) resolves its catalog without
+// loading the extractor.
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { ProjectConfig } from "./project-config";
