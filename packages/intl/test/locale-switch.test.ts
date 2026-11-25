@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { SwitchOutcome } from "@elmeragroup/intl/core";
 import { createLocaleSwitcher } from "@elmeragroup/intl/core";
 
-import { countPending } from "../src/adapter";
-import type { MakeSwitch } from "./switch-settlement";
 import { fakeServer, sweepSettlement } from "./switch-settlement";
 
 const tags = (outcomes: ReadonlyArray<SwitchOutcome>): ReadonlyArray<string> =>
@@ -150,55 +148,66 @@ describe("locale switch", () => {
     expect(settled).toEqual(["A", "B", "C"]);
   });
 
-  const makers: ReadonlyArray<{ readonly name: string; readonly make: MakeSwitch }> = [
-    {
-      name: "the switcher",
-      make: (server) => ({ switchLocale: createLocaleSwitcher(server), dispose: () => undefined }),
-    },
-    {
-      name: "the pending-counted switcher",
-      make: (server) => ({
-        switchLocale: countPending(createLocaleSwitcher(server), () => undefined),
-        dispose: () => undefined,
-      }),
-    },
-  ];
+  it("resolves a switch superseded whenever a newer one starts before it settles", async () => {
+    const sawPending = await sweepSettlement((server) => ({
+      switchLocale: createLocaleSwitcher(server),
+      dispose: () => undefined,
+    }));
+    expect(sawPending, "no step saw A pending").toBe(true);
+  });
 
-  it.each(makers)(
-    "resolves a switch superseded whenever a newer one starts before it settles, through $name",
-    async ({ make }) => {
-      expect(await sweepSettlement(make), "no step saw A pending").toBe(true);
+  // Unit under test: the switcher's handoff from one switch to the next. Oracle: the order a caller observes: an
+  // outcome handler attached before the switch settles runs before the next persist is sent, so the caller hears A's
+  // outcome before the server hears B.
+  it("runs an outcome handler attached before a switch settles before the next persist", async () => {
+    const log: Array<string> = [];
+    const server = fakeServer();
+    const switchLocale = createLocaleSwitcher({
+      ...server,
+      persist: (locale) => {
+        log.push(`persist ${locale}`);
+
+        return server.persist(locale);
+      },
+    });
+    const first = switchLocale("nb");
+    const nb = await server.request(0);
+    const second = switchLocale("sv");
+    // Attached after B started and before A settles: B's own step on A's settlement is already queued, so only a
+    // switcher that starts B a step after A's settlement runs this handler first.
+    void first.then((outcome) => {
+      log.push(`nb ${outcome._tag}`);
+    });
+    nb.arrive();
+    (await server.request(1)).arrive();
+    await second;
+    expect(log).toEqual(["persist nb", "nb Superseded", "persist sv"]);
+  });
+
+  // Unit under test: how the switcher calls the app's port. Oracle: the port's own contract, persist then refresh on
+  // the port itself: a method reading `this` keeps its receiver, and a property the contract does not name changes
+  // nothing.
+  it("calls a class-based port's methods on the port", async () => {
+    class CookiePort {
+      readonly rendered: Array<string> = [];
+      private stored = "en";
+      persist(locale: string): void {
+        this.stored = locale;
+      }
+      refreshServer(): void {
+        this.rendered.push(this.stored);
+      }
     }
-  );
+    const port = new CookiePort();
+    expect(await createLocaleSwitcher(port)("nb")).toEqual({ _tag: "Switched", locale: "nb" });
+    expect(port.rendered).toEqual(["nb"]);
+  });
 
-  // Unit under test: the switcher's handoff from one switch to the next, bare and pending-counted. Oracle: the order
-  // a caller observes: an outcome handler attached before the switch settles runs before the next persist is sent,
-  // so the caller hears A's outcome before the server hears B.
-  it.each(makers)(
-    "runs an outcome handler attached before a switch settles before the next persist, through $name",
-    async ({ make }) => {
-      const log: Array<string> = [];
-      const server = fakeServer();
-      const { switchLocale } = await make({
-        ...server,
-        persist: (locale) => {
-          log.push(`persist ${locale}`);
-
-          return server.persist(locale);
-        },
-      });
-      const first = switchLocale("nb");
-      const nb = await server.request(0);
-      const second = switchLocale("sv");
-      // Attached after B started and before A settles: B's own step on A's settlement is already queued, so only a
-      // switcher that starts B a step after A's settlement runs this handler first.
-      void first.then((outcome) => {
-        log.push(`nb ${outcome._tag}`);
-      });
-      nb.arrive();
-      (await server.request(1)).arrive();
-      await second;
-      expect(log).toEqual(["persist nb", "nb Superseded", "persist sv"]);
-    }
-  );
+  it("refreshes a port that carries a property of its own", async () => {
+    const server = fakeServer();
+    const port = { persist: server.persist, refreshServer: server.refreshServer, rendersOnPersist: true };
+    const done = createLocaleSwitcher(port)("nb");
+    (await server.request(0)).arrive();
+    expect([(await done)._tag, server.rendered]).toEqual(["Switched", ["nb"]]);
+  });
 });
