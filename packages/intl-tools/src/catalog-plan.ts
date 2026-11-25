@@ -34,7 +34,10 @@ export type CatalogPlan = {
    * path were merged from.
    */
   readonly read: ReadonlyMap<string, string | undefined>;
-  /** In the config's order of locales, each at its configured path. */
+  /**
+   * In the config's order of locales, each at its configured path. A plan with problems has none, so it writes
+   * nothing.
+   */
   readonly outputs: ReadonlyArray<WrittenCatalog>;
 };
 
