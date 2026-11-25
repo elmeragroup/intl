@@ -2,9 +2,9 @@
 // serializer. The runtime tests render it and the extractor reads it, so the runtime Key and the extracted Key face the
 // same expectation. Each e2e fixture app keeps a byte-for-byte copy, which it extracts, translates and renders on its
 // Host; elmera-workspace/file-copies (configured in .oxlintrc.json) holds the copies equal to the original in
-// packages/intl/test. Edit only the original. A new entry: add it there; run `pnpm lint:fix`, then `pnpm lint`;
-// run `elmera-intl extract` in each fixture app and translate the new message; add its row to
-// packages/intl-e2e/tests/corpus-expectations.ts.
+// packages/intl/test. Edit only the original. A new entry: add it there; run `pnpm lint:fix`, then `pnpm lint`; after
+// `pnpm build`, run `pnpm exec ../../node_modules/.bin/elmera-intl extract` in each fixture app's directory and
+// translate the new message; add its row to packages/intl-e2e/tests/corpus-expectations.ts.
 import type { ReactNode } from "react";
 
 import { Plural, Select, T, Val } from "@elmeragroup/intl/react";

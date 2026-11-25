@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { RuleTester } from "oxlint/plugins-dev";
@@ -132,13 +140,13 @@ createTester().run("file-copies", fileCopies, {
       errors: [
         {
           message:
-            "b/copy.ts is a copy of this file and differs from it: run `pnpm lint:fix` to rewrite the copy from this file, or, when the copy does not parse, `cp lib/original.ts b/copy.ts` from the workspace root.",
+            "b/copy.ts is a copy of this file and differs from it: run `pnpm lint:fix` to rewrite the copy from this file, or, when the copy does not parse, replace b/copy.ts with a copy of lib/original.ts by hand.",
           line: 1,
           column: 0,
         },
         {
           message:
-            "gone/copy.ts, a copy of this file, is missing or not a UTF-8 text file: restore it with `cp lib/original.ts gone/copy.ts` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
+            "gone/copy.ts, a copy of this file, is missing or not a UTF-8 text file: restore gone/copy.ts as a copy of lib/original.ts, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
           line: 1,
           column: 0,
         },
@@ -169,7 +177,7 @@ createTester().run("file-copies", fileCopies, {
       errors: [
         {
           message:
-            "bad/copy.ts, a copy of this file, is missing or not a UTF-8 text file: restore it with `cp bad/original.ts bad/copy.ts` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
+            "bad/copy.ts, a copy of this file, is missing or not a UTF-8 text file: restore bad/copy.ts as a copy of bad/original.ts, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
         },
       ],
       output: null,
@@ -267,4 +275,34 @@ it("reads the original afresh each time it lints the same copy", () => {
 
   write(fresh.original, DRIFTED);
   runNow({ valid: [], invalid: [{ ...copy, errors: [{ messageId: "copyDiffers" }], output: DRIFTED }] });
+});
+
+// The fix's precondition: it rewrites only a regular file at the linted path. Here the linted copy is a link to another
+// file in the workspace (plain text, not a module), whose text differs from the original's, so a fix written through
+// the link would change it.
+it("reports a copy that is a link on disk, offers no fix, and leaves the link's target as it was", () => {
+  const linked = { original: "lib/original.ts", copies: ["linked/copy.ts"] };
+
+  write("linked/target.txt", DRIFTED);
+  symlinkSync("target.txt", inWorkspace("linked/copy.ts"));
+
+  runNow({
+    valid: [],
+    invalid: [
+      {
+        code: DRIFTED,
+        filename: inWorkspace("linked/copy.ts"),
+        options: [linked],
+        errors: [
+          {
+            message:
+              "This file is listed as a copy of lib/original.ts, but on disk it is a link or not a regular file, so it is not rewritten: a fix would write through it to another file. Replace it with a regular file holding lib/original.ts's text.",
+          },
+        ],
+        output: null,
+      },
+    ],
+  });
+
+  expect(readFileSync(join(workspace, "linked/target.txt"), "utf8")).toBe(DRIFTED);
 });

@@ -3,10 +3,17 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
-import { catalogEntries, effectPresetFindings, lintConfigFindings, parseJsonc } from "./config-files.ts";
+import { parseFileCopies } from "../src/workspace.ts";
+import {
+  catalogEntries,
+  effectPresetFindings,
+  lintConfigFindings,
+  parseJsonc,
+  ruleSetting,
+} from "./config-files.ts";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -317,21 +324,27 @@ describe(".oxlintrc.json", () => {
     expect(parseJsonc(config)).toHaveProperty("rules");
   });
 
-  // Unit under test: the paths .oxlintrc.json configures for elmera-workspace/file-copies. Oracle: the file system, by
-  // realpath: it gives back a path unchanged only when the file exists under that exact spelling with no symlink on the
-  // way (a case-only alias or a symlinked directory resolves elsewhere, a missing file throws). The rule holds the
-  // copies' content, and runs only on linted files whose paths match these; a mistyped path turns it off without a
-  // report, and a linked copy resolves its imports from the original's place, so the paths are held here.
-  it("names a real file by its exact path for each file elmera-workspace/file-copies holds", () => {
-    const files = fileCopiesPaths(parseJsonc(config));
+  // Unit under test: the setting .oxlintrc.json gives elmera-workspace/file-copies, parsed by the rule's own
+  // parseFileCopies, so this checks exactly the paths the rule matches. Oracle: the setting must be `error`, and the file
+  // system, by realpath: it gives back a path unchanged only when the file exists under that exact spelling with no
+  // symlink on the way (a case-only alias or a symlinked directory resolves elsewhere, a missing file throws). The rule
+  // holds the copies' content, and runs only when on and only on linted files whose paths match these; a level turned
+  // off or a mistyped path switches it off without a report, and a linked copy resolves its imports from the original's
+  // place, so the setting is held here.
+  it("holds each file elmera-workspace/file-copies names to a real file at its exact path, as an error", () => {
+    const setting = ruleSetting(config, "elmera-workspace/file-copies");
 
-    expect(
-      files,
-      "elmera-workspace/file-copies is configured with an original and at least one copy"
-    ).toBeDefined();
+    assert(setting !== undefined, "elmera-workspace/file-copies is not set in .oxlintrc.json's rules");
+    expect(setting.level, "elmera-workspace/file-copies' level").toBe("error");
+
+    const option = parseFileCopies(setting.options);
+
+    if (option._tag === "Invalid") {
+      assert.fail(`elmera-workspace/file-copies' option is invalid: ${option.reason}`);
+    }
 
     const root = realpathSync.native(ROOT);
-    const problems = (files ?? []).flatMap((path) => {
+    const problems = [option.files.original, ...option.files.copies].flatMap((path) => {
       const configured = join(root, path);
 
       try {
@@ -350,30 +363,6 @@ describe(".oxlintrc.json", () => {
     expect(problems).toEqual([]);
   });
 });
-
-// The original and copies configured for elmera-workspace/file-copies, as written; `undefined` when the rule is not
-// configured with an original and at least one copy.
-function fileCopiesPaths(lintConfig: unknown): ReadonlyArray<string> | undefined {
-  const rules =
-    typeof lintConfig === "object" && lintConfig !== null && "rules" in lintConfig
-      ? lintConfig.rules
-      : undefined;
-  const entry =
-    typeof rules === "object" && rules !== null && "elmera-workspace/file-copies" in rules
-      ? rules["elmera-workspace/file-copies"]
-      : undefined;
-  const option: unknown = Array.isArray(entry) ? entry[1] : undefined;
-
-  if (typeof option !== "object" || option === null || !("original" in option) || !("copies" in option)) {
-    return undefined;
-  }
-
-  const { original, copies } = option;
-  const listed: ReadonlyArray<unknown> = Array.isArray(copies) ? copies : [];
-  const paths = [original, ...listed];
-
-  return paths.length > 1 && paths.every((path) => typeof path === "string") ? paths : undefined;
-}
 
 // The Effect diagnostics are configured twice: tooling/typescript/effect.json for the editor (the Effect language
 // service) and .oxlintrc.effect.json for `pnpm lint:effect`, the gate, whose rules exist only in the Effect-patched

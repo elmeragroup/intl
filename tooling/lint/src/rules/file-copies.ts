@@ -4,7 +4,8 @@
 // original, so this rule holds their content equal from both ends:
 //
 // - Linting a copy: its text must equal the original's on disk. The fix rewrites the whole copy from the original, so
-//   `pnpm lint:fix` is the sync.
+//   `pnpm lint:fix` is the sync. It rewrites only a regular file at the linted path: a copy that is a link on disk is
+//   reported and left alone, so a fix never writes through it to another file.
 // - Linting the original: each listed copy must be a UTF-8 text file equal to it.
 //
 // The rule owns the content; it cannot own the paths, since it runs only on linted files that match them. The
@@ -17,7 +18,7 @@
 // compare equal through a lossy decode, and the fixer must not write stale or replaced text.
 import type { Rule } from "@oxlint/plugins";
 import { isUtf8 } from "node:buffer";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 
 import { parseFileCopies, workspaceRootOf } from "../workspace.ts";
@@ -60,11 +61,14 @@ export const fileCopies: Rule = {
       originalUnreadable:
         "This file is a copy of {{original}}, which is missing, not a file, or not valid UTF-8: restore the original, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
       copyStale:
-        "{{copy}} is a copy of this file and differs from it: run `pnpm lint:fix` to rewrite the copy from this file, or, when the copy does not parse, `cp {{original}} {{copy}}` from the workspace root.",
+        "{{copy}} is a copy of this file and differs from it: run `pnpm lint:fix` to rewrite the copy from this file, or, when the copy does not parse, replace {{copy}} with a copy of {{original}} by hand.",
       copyMissing:
-        "{{copy}}, a copy of this file, is missing or not a UTF-8 text file: restore it with `cp {{original}} {{copy}}` from the workspace root, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
+        "{{copy}}, a copy of this file, is missing or not a UTF-8 text file: restore {{copy}} as a copy of {{original}}, or correct the paths of elmera-workspace/file-copies in .oxlintrc.json.",
+      copyNotRegularFile:
+        "This file is listed as a copy of {{original}}, but on disk it is a link or not a regular file, so it is not rewritten: a fix would write through it to another file. Replace it with a regular file holding {{original}}'s text.",
     },
-    // The option's structure. The paths' own rules (inside the root, distinct) are the parser's, in workspace.ts.
+    // The option's structure, as a user's config meets it at load. parseFileCopies (workspace.ts) checks it again on its
+    // own, with the paths' rules a JSON schema cannot state (inside the root, distinct).
     schema: {
       type: "array",
       minItems: 1,
@@ -125,6 +129,13 @@ export const fileCopies: Rule = {
         const text = sourceCode.hasBOM ? `${BOM}${sourceCode.text}` : sourceCode.text;
 
         if (path !== original) {
+          // The fix's precondition: the linted path is a regular file, or not on disk at all (an unsaved buffer).
+          if (lstatSync(filename, { throwIfNoEntry: false })?.isFile() === false) {
+            context.report({ loc: FILE_START, messageId: "copyNotRegularFile", data: { original } });
+
+            return;
+          }
+
           const source = readText(resolve(root, original));
 
           if (source === undefined) {

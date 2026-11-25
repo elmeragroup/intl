@@ -243,9 +243,10 @@ function canonicalPath(path: string): CanonicalPath {
 }
 
 /**
- * The rule's option, parsed from its configured options array (`[{ original, copies }]`). oxlint's schema check holds
- * the option's structure; this narrows its type and owns what a JSON schema cannot state: each path is
- * workspace-relative and inside the root, no copy is the original, and no copy is listed twice, once canonical.
+ * The rule's option, parsed from its configured options array (`[{ original, copies }]`). Complete on its own, so the
+ * config test can parse the committed setting as the rule does: exactly one option object with at least one copy, each
+ * path workspace-relative and inside the root, no copy the original, and no copy listed twice, once canonical. oxlint's
+ * schema check states the same structure to a user's config at load.
  *
  * @param options - The rule's options, as oxlint passes them.
  * @returns The canonical paths, or the reason the option checks nothing.
@@ -254,7 +255,7 @@ export function parseFileCopies(options: ReadonlyArray<unknown>): FileCopiesOpti
   const [option] = options;
   const notAnOption = { _tag: "Invalid", reason: "it is not one { original, copies } object" } as const;
 
-  if (!isRecord(option)) {
+  if (options.length !== 1 || !isRecord(option)) {
     return notAnOption;
   }
 
@@ -266,6 +267,10 @@ export function parseFileCopies(options: ReadonlyArray<unknown>): FileCopiesOpti
     !copies.every((copy) => typeof copy === "string")
   ) {
     return notAnOption;
+  }
+
+  if (copies.length === 0) {
+    return { _tag: "Invalid", reason: "it lists no copy" };
   }
 
   const canonicalOriginal = canonicalPath(original);
