@@ -1,47 +1,54 @@
 // Messages declared at module scope with msg(): extraction reads them here, and a component renders one later with
-// `t.from(descriptor)`. The demo data beside them is fixed, so every render (and the tests) shows the same values.
+// `t.from(descriptor)`. They label the portal's data (data/*.ts), which holds no English of its own.
+import type { Descriptor } from "@elmeragroup/intl/core";
 import { msg } from "@elmeragroup/intl/core";
 
-/** An order's lifecycle. */
-export type OrderStatus = "placed" | "shipped" | "delivered";
+import type { InvoiceStateTag } from "../data/invoice-run";
+import type { ContractType, PriceArea } from "../data/market";
+import type { MeteringPointStatus } from "../data/metering-points";
+import type { PriceLevel } from "../data/power-data";
 
-/** Each status's label, translated where it renders. */
-export const ORDER_STATUS = {
-  placed: msg("Placed"),
-  shipped: msg("Shipped"),
-  delivered: msg("Delivered"),
-} as const;
+/** Where each price area is, for its filter and the invoice it bills. */
+export const PRICE_AREA_NAMES = {
+  NO1: msg("Eastern Norway"),
+  NO2: msg("Southern Norway"),
+  NO3: msg("Central Norway"),
+  NO4: msg("Northern Norway"),
+  NO5: msg("Western Norway"),
+} as const satisfies Readonly<Record<PriceArea, Descriptor>>;
 
-/** "Open" as the shop's opening state; the context tells it apart from the verb on a button. */
-export const SHOP_OPEN = msg("Open", { context: "shop opening state" });
+/** Each metering point status's label. */
+export const STATUS_LABELS = {
+  active: msg("Active"),
+  onboarding: msg("Onboarding"),
+  "moving-out": msg("Moving out"),
+  disconnected: msg("Disconnected"),
+} as const satisfies Readonly<Record<MeteringPointStatus, Descriptor>>;
 
-/** The example order the page shows. */
-export const ORDER = {
-  id: "A-1001",
-  status: "shipped",
-  total: 1234.5,
-  // 00:30 on 5 March in Oslo, the configured zone: still 4 March in UTC and further west.
-  placedAt: new Date("2026-03-04T23:30:00Z"),
-  shippedAt: new Date("2026-03-06T08:00:00Z"),
-  // Delivered between 08:00 and 16:00 on Monday 9 March in Oslo (UTC+1 until summer time on 29 March): 03:00 to 11:00
-  // in New York, so a range in the host's zone would read differently.
-  delivery: { from: new Date("2026-03-09T07:00:00Z"), until: new Date("2026-03-09T15:00:00Z") },
-  pickupPoints: ["Oslo", "Bergen", "Trondheim"],
-} as const satisfies {
-  readonly id: string;
-  readonly status: OrderStatus;
-  readonly total: number;
-  readonly placedAt: Date;
-  readonly shippedAt: Date;
-  readonly delivery: { readonly from: Date; readonly until: Date };
-  readonly pickupPoints: ReadonlyArray<string>;
-};
+/** Each contract type's label. */
+export const CONTRACT_LABELS = {
+  spot: msg("Spot"),
+  fixed: msg("Fixed price"),
+  variable: msg("Variable"),
+} as const satisfies Readonly<Record<ContractType, Descriptor>>;
 
 /**
- * The moment relative times are measured from. An app passes its clock's `now`; the example fixes it two hours after
- * shipping, so the server and the browser render the same phrase.
+ * Each invoice state's label. "Open" the state shares its English with "Open" the verb on the overview's button: the
+ * context keeps the two apart, so each gets its own translation.
  */
-export const NOW = new Date("2026-03-06T10:00:00Z");
+export const INVOICE_STATE_LABELS = {
+  Paid: msg("Paid"),
+  Open: msg("Open", { context: "invoice state" }),
+  Overdue: msg("Overdue"),
+  Credited: msg("Credited"),
+} as const satisfies Readonly<Record<InvoiceStateTag, Descriptor>>;
 
-/** The price of one item in the cart. */
-export const ITEM_PRICE = 249;
+/** Each spot price level's badge. */
+export const PRICE_LEVEL_LABELS = {
+  low: msg("Low"),
+  normal: msg("Normal"),
+  high: msg("High"),
+} as const satisfies Readonly<Record<PriceLevel, Descriptor>>;
+
+/** The signed-in user's role, under their name in the account menu. */
+export const SIGNED_IN_ROLE = msg("Customer operations");

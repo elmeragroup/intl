@@ -4,6 +4,7 @@ import { getCookie } from "@tanstack/react-start/server";
 
 import type { Catalog, ServerAdapter } from "@elmeragroup/intl/core";
 
+import { TIME_ZONE } from "../data/market";
 import { formats } from "./formats";
 import type { Locale } from "./locale";
 import { chooseLocale, DEFAULT_LOCALE, LOCALE_COOKIE, parseLocale } from "./locale";
@@ -13,6 +14,8 @@ import { chooseLocale, DEFAULT_LOCALE, LOCALE_COOKIE, parseLocale } from "./loca
 const CATALOGS = {
   en: () => import("./nb.po?source"),
   nb: () => import("./nb.po"),
+  sv: () => import("./sv.po"),
+  fi: () => import("./fi.po"),
 } satisfies Readonly<Record<Locale, () => Promise<{ readonly default: Catalog }>>>;
 
 /** The app's server adapter. */
@@ -20,8 +23,8 @@ export const adapter: ServerAdapter = {
   // A switch stores the cookie, then re-runs the loaders in a new request, which carries it. Start's own cookie reader
   // parses the header, so `start-example-locale=nb=other` reads as `nb=other`, which is no locale.
   resolveLocale: (request) => chooseLocale(getCookie(LOCALE_COOKIE), request.headers.get("accept-language")),
-  // One zone for every visitor: dates render the same on the server, in the browser and in the API.
-  resolveTimeZone: () => "Europe/Oslo",
+  // One zone for every visitor, the market's: dates render the same on the server, in the browser and in the API.
+  resolveTimeZone: () => TIME_ZONE,
   formats,
   loadCatalog: async (locale) => (await CATALOGS[parseLocale(locale) ?? DEFAULT_LOCALE]()).default,
 };

@@ -1,15 +1,24 @@
-// The app's locales and how a request picks one: the cookie the switcher writes, then the browser's
-// Accept-Language, then English. Pure: the adapter hands it what it read from the request.
+// The app's locales and how a request picks one: the stored choice, then the browser's Accept-Language, then English.
+// Pure: the adapter hands it what it read from the request.
+
+import type { SupportedLocale } from "@elmeragroup/fuse/theme";
 
 /**
  * Every locale the app ships, each under its own name so a visitor finds theirs whatever the page's language: English,
- * the source language, and Norwegian Bokmål (`src/intl/nb.po`). The type, the parser and the switcher's buttons derive
- * from it; `elmera-intl.json` lists the same locales for the CLI.
+ * the source language, Norwegian Bokmål, Swedish and Finnish (`src/intl/nb.po`, `src/intl/sv.po`, `src/intl/fi.po`).
+ * `fuse` is the locale Fuse's own component strings and charts take for it (Fuse's `LocaleProvider`). The type, the
+ * parser and the switcher's buttons derive from it; `elmera-intl.json` lists the same locales for the CLI.
  */
 export const LANGUAGES = [
-  { locale: "en", name: "English" },
-  { locale: "nb", name: "Norsk bokmål" },
-] as const;
+  { locale: "en", name: "English", fuse: "en-US" },
+  { locale: "nb", name: "Norsk bokmål", fuse: "nb-NO" },
+  { locale: "sv", name: "Svenska", fuse: "sv-SE" },
+  { locale: "fi", name: "Suomi", fuse: "fi-FI" },
+] as const satisfies ReadonlyArray<{
+  readonly locale: string;
+  readonly name: string;
+  readonly fuse: SupportedLocale;
+}>;
 
 /** A locale the app has a catalog for. */
 export type Locale = (typeof LANGUAGES)[number]["locale"];
@@ -37,6 +46,16 @@ export const DEFAULT_LOCALE: Locale = "en";
  */
 export function parseLocale(value: string | undefined): Locale | undefined {
   return LANGUAGES.find(({ locale }) => locale === value)?.locale;
+}
+
+/**
+ * The locale Fuse's components take for a locale the app ships.
+ *
+ * @param locale - The request's locale, as `useIntl()` reports it.
+ * @returns Fuse's locale for it: English as `en-US`, the others with their country.
+ */
+export function fuseLocale(locale: string): SupportedLocale {
+  return (LANGUAGES.find((language) => language.locale === locale) ?? LANGUAGES[0]).fuse;
 }
 
 // A language range (RFC 4647 §2.1): `*`, or a primary subtag of 1 to 8 letters and subtags of 1 to 8 letters or digits.

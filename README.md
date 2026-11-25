@@ -11,8 +11,8 @@ parser formats the compiled catalogs per locale.
 | [`@elmeragroup/intl`](packages/intl)             | The runtime: `<T>`, `useT`, `msg()`, `useFormat()`, one adapter per host (Next.js, TanStack Start), and `CurrentIntl` for Effect. |
 | [`@elmeragroup/intl-tools`](packages/intl-tools) | Build time: the extractor, the `elmera-intl` CLI, PO catalogs, the compiler, build plugins and lint.                              |
 | [`packages/intl-e2e`](packages/intl-e2e)         | Private. Fixture apps per host and their Playwright gates, on linked and on packed packages.                                      |
-| [`apps/next-example`](apps/next-example)         | Private. Example: both packages in a Next.js App Router app, with Playwright specs on its production build and Vitest unit tests. |
-| [`apps/start-example`](apps/start-example)       | Private. Example: both packages in a TanStack Start app, with Playwright specs on its production build and Vitest unit tests.     |
+| [`apps/next-example`](apps/next-example)         | Private. Example: both packages in a Next.js App Router app on Fuse, in four languages, with Playwright specs and Vitest tests.   |
+| [`apps/start-example`](apps/start-example)       | Private. Example: both packages in a TanStack Start app on Fuse, in four languages, with Playwright specs and Vitest tests.       |
 | `tooling/typescript`                             | Private. Shared TypeScript configuration.                                                                                         |
 | `tooling/lint`                                   | Private. The workspace's own contracts as lint: the `elmera-workspace` oxlint plugin and manifest checks.                         |
 

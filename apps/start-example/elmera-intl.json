@@ -2,6 +2,6 @@
   "include": ["src/**/*.{ts,tsx}"],
   "exclude": ["**/*.d.ts", "src/routeTree.gen.ts"],
   "catalogs": "src/intl/{locale}.po",
-  "locales": ["nb"],
+  "locales": ["nb", "sv", "fi"],
   "formats": "src/intl/formats.ts"
 }

@@ -1,0 +1,868 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: fi\n"
+"X-Elmera-Serializer: 1\n"
+
+#: app/page.tsx
+msgid "30-day average"
+msgstr "30 päivän keskiarvo"
+
+#: components/app-config.ts
+msgid "Account"
+msgstr "Tili"
+
+#: components/user-menu.tsx
+msgid "Account menu for {name}"
+msgstr "Tilivalikko: {name}"
+
+#: components/command-menu.tsx
+msgid "Actions"
+msgstr "Toiminnot"
+
+#: intl/messages.ts
+msgid "Active"
+msgstr "Aktiivinen"
+
+#: app/page.tsx
+msgid "Activity"
+msgstr "Tapahtumat"
+
+#: components/metering-points-table.tsx
+msgid "Address"
+msgstr "Osoite"
+
+#: components/settings-form.tsx
+msgid "Alert threshold, øre/kWh"
+msgstr "Hälytysraja, äyri/kWh"
+
+#: components/invoices-table.tsx
+msgid "All"
+msgstr "Kaikki"
+
+#: components/settings-form.tsx
+msgid "All changes saved"
+msgstr "Kaikki muutokset on tallennettu"
+
+#: components/invoice-detail.tsx
+#: components/invoices-table.tsx
+msgid "Amount"
+msgstr "Summa"
+
+#: components/metering-points-table.tsx
+msgid "Annual use (kWh)"
+msgstr "Vuosikulutus (kWh)"
+
+#: components/metering-points-table.tsx
+msgid "Annual use, kWh"
+msgstr "Vuosikulutus, kWh"
+
+#: components/user-menu.tsx
+msgid "Appearance"
+msgstr "Ulkoasu"
+
+#: components/metering-points-table.tsx
+msgid "Area"
+msgstr "Alue"
+
+#: app/layout.tsx
+#: components/app-header.tsx
+#: components/app-sidebar.tsx
+msgid "Back office"
+msgstr "Asiakaskeskus"
+
+#: app/invoices/page.tsx
+msgid "Between {first, date, short} and {last, date, short}"
+msgstr "{first, date, short} – {last, date, short}"
+
+#: components/app-config.ts
+msgid "Billing"
+msgstr "Laskutus"
+
+#: app/invoices/page.tsx
+msgid "Billing period"
+msgstr "Laskutuskausi"
+
+#: intl/messages.ts
+msgid "Central Norway"
+msgstr "Keski-Norja"
+
+#: components/metering-points-table.tsx
+msgid "City"
+msgstr "Paikkakunta"
+
+#: components/metering-points-table.tsx
+msgid "Clear search and filters"
+msgstr "Tyhjennä haku ja suodattimet"
+
+#: components/metering-points-table.tsx
+msgid "Clear selection"
+msgstr "Tyhjennä valinta"
+
+#: components/invoice-detail.tsx
+msgid "Close"
+msgstr "Sulje"
+
+#: app/page.tsx
+msgid "Consumption"
+msgstr "Kulutus"
+
+#: app/page.tsx
+msgid "Consumption and solar production"
+msgstr "Kulutus ja aurinkosähkön tuotanto"
+
+#: app/page.tsx
+msgid "Consumption and solar production per month, March 2025 to February 2026"
+msgstr "Kulutus ja aurinkosähkön tuotanto kuukausittain, maaliskuu 2025 – helmikuu 2026"
+
+#: app/page.tsx
+msgid "Consumption per day"
+msgstr "Kulutus päivittäin"
+
+#: app/page.tsx
+msgid "Consumption per day, March 1 to 28"
+msgstr "Kulutus päivittäin, 1.–28. maaliskuuta"
+
+#: app/page.tsx
+msgid "Consumption per day, March 2026 against March 2025"
+msgstr "Kulutus päivittäin, maaliskuu 2026 verrattuna maaliskuuhun 2025"
+
+#: components/metering-points-table.tsx
+msgid "Consumption per day, last 30 days, {customer}"
+msgstr "Kulutus päivittäin, viimeiset 30 päivää, {customer}"
+
+#: app/page.tsx
+msgid "Consumption, March 1–28"
+msgstr "Kulutus, 1.–28.3."
+
+#: components/app-config.ts
+msgid "Consumption, spot price and invoicing across the portfolio."
+msgstr "Koko salkun kulutus, pörssihinta ja laskutus."
+
+#: components/invoice-detail.tsx
+#: components/metering-points-table.tsx
+msgid "Contract"
+msgstr "Sopimus"
+
+#: components/command-menu.tsx
+msgid "Copy link to this page"
+msgstr "Kopioi linkki tälle sivulle"
+
+#: components/command-menu.tsx
+msgid "Could not copy the link"
+msgstr "Linkin kopiointi epäonnistui"
+
+#: components/invoice-detail.tsx
+msgid "Credit note"
+msgstr "Hyvityslasku"
+
+#: intl/messages.ts
+msgid "Credited"
+msgstr "Hyvitetty"
+
+#: components/invoices-table.tsx
+#: components/metering-points-table.tsx
+msgid "Customer"
+msgstr "Asiakas"
+
+#: intl/messages.ts
+msgid "Customer operations"
+msgstr "Asiakaspalvelu"
+
+#: components/settings-form.tsx
+msgid "Customers can change contract at any time."
+msgstr "Asiakkaat voivat vaihtaa sopimusta milloin tahansa."
+
+#: components/user-menu.tsx
+msgctxt "appearance"
+msgid "Dark"
+msgstr "Tumma"
+
+#. <x0> = <time dateTime>
+#: app/page.tsx
+msgid "Data as of <x0>{asOf}</x0>"
+msgstr "Tilanne <x0>{asOf}</x0>"
+
+#: components/settings-form.tsx
+msgid "Default contract"
+msgstr "Oletussopimus"
+
+#: components/settings-form.tsx
+msgid "Discard changes"
+msgstr "Hylkää muutokset"
+
+#: intl/messages.ts
+msgid "Disconnected"
+msgstr "Kytketty irti"
+
+#: app/invoices/page.tsx
+#: app/page.tsx
+#: components/invoices-table.tsx
+msgid "Due"
+msgstr "Eräpäivä"
+
+#: app/page.tsx
+msgid "Due on {dueOn, date, short}"
+msgstr "Erääntyy {dueOn, date, short}"
+
+#: intl/messages.ts
+msgid "Eastern Norway"
+msgstr "Itä-Norja"
+
+#: app/page.tsx
+msgid "Elhub delivered a reading for every point we supplied that day."
+msgstr "Elhub toimitti lukeman jokaisesta käyttöpaikasta, jolle toimitimme sähköä sinä päivänä."
+
+#: components/settings-form.tsx
+msgid "Email"
+msgstr "Sähköposti"
+
+#: components/invoice-detail.tsx
+msgid "Energy, {contract}"
+msgstr "Energia, {contract}"
+
+#: components/settings-form.tsx
+msgid "Enter a whole number of øre from 1 to 999."
+msgstr "Anna kokonaisluku 1–999 (äyriä)."
+
+#: components/settings-form.tsx
+msgid "Enter an email address such as name@example.com."
+msgstr "Anna sähköpostiosoite, esimerkiksi nimi@example.com."
+
+#: components/settings-form.tsx
+msgid "Enter your name."
+msgstr "Anna nimesi."
+
+#: app/page.tsx
+msgid "Estimated invoicing per day, March 1 to 28"
+msgstr "Arvioitu laskutus päivittäin, 1.–28. maaliskuuta"
+
+#: app/page.tsx
+msgid "Estimated invoicing, March"
+msgstr "Arvioitu laskutus, maaliskuu"
+
+#: app/page.tsx
+msgid "Evening price peak in NO1"
+msgstr "Illan hintapiikki NO1-alueella"
+
+#: components/app-config.ts
+msgid "Every point we supply, with its contract and its last 30 days."
+msgstr "Jokainen toimittamamme käyttöpaikka, sen sopimus ja viimeiset 30 päivää."
+
+#: components/metering-points-table.tsx
+msgid "Export"
+msgstr "Vie"
+
+#: components/metering-points-table.tsx
+msgid "Export {count, plural, one {# point} other {# points}}"
+msgstr "Vie {count, plural, one {# käyttöpaikka} other {# käyttöpaikkaa}}"
+
+#: app/page.tsx
+msgid "February invoices"
+msgstr "Helmikuun laskut"
+
+#: app/page.tsx
+msgid "February invoices sent"
+msgstr "Helmikuun laskut lähetetty"
+
+#: components/app-config.ts
+msgid "February's invoices, their payments and what each one charged."
+msgstr "Helmikuun laskut, niiden maksut ja mitä kustakin laskutettiin."
+
+#: intl/messages.ts
+msgid "Fixed price"
+msgstr "Kiinteä hinta"
+
+#: components/settings-form.tsx
+msgid "Full name"
+msgstr "Koko nimi"
+
+#: app/page.tsx
+msgid "Hello {name}, you have {count, plural, =0 {no overdue invoices} one {# overdue invoice} other {# overdue invoices}}."
+msgstr "Hei {name}, {count, plural, =0 {sinulla ei ole erääntyneitä laskuja} one {sinulla on # erääntynyt lasku} other {sinulla on # erääntynyttä laskua}}."
+
+#: intl/messages.ts
+msgid "High"
+msgstr "Korkea"
+
+#: components/settings-form.tsx
+msgid "How long a new customer has to pay each invoice."
+msgstr "Kuinka kauan uudella asiakkaalla on aikaa maksaa kukin lasku."
+
+#: components/settings-form.tsx
+msgid "How you appear to your team, and where your mail goes."
+msgstr "Miten näyt tiimillesi ja minne postisi menee."
+
+#: components/invoices-table.tsx
+msgid "Invoice"
+msgstr "Lasku"
+
+#: components/invoice-detail.tsx
+msgid "Invoice lines"
+msgstr "Laskurivit"
+
+#: app/invoices/page.tsx
+#: app/page.tsx
+msgid "Invoiced"
+msgstr "Laskutettu"
+
+#: components/app-config.ts
+#: components/invoices-table.tsx
+msgid "Invoices"
+msgstr "Laskut"
+
+#: components/settings-form.tsx
+msgid "Invoicing"
+msgstr "Laskutus"
+
+#: components/invoice-detail.tsx
+msgid "Issued"
+msgstr "Laadittu"
+
+#: app/page.tsx
+msgid "Key figures"
+msgstr "Tunnusluvut"
+
+#: app/settings/page.tsx
+#: components/locale-switcher.tsx
+msgid "Language"
+msgstr "Kieli"
+
+#: components/metering-points-table.tsx
+msgid "Last 30 days"
+msgstr "Viimeiset 30 päivää"
+
+#: components/user-menu.tsx
+msgctxt "appearance"
+msgid "Light"
+msgstr "Vaalea"
+
+#: components/invoice-detail.tsx
+msgid "Line"
+msgstr "Rivi"
+
+#: components/command-menu.tsx
+msgid "Link copied"
+msgstr "Linkki kopioitu"
+
+#: intl/messages.ts
+msgid "Low"
+msgstr "Matala"
+
+#: components/settings-form.tsx
+msgid "Mail me when NO1's spot price passes the threshold."
+msgstr "Lähetä minulle sähköpostia, kun NO1-alueen pörssihinta ylittää rajan."
+
+#: app/page.tsx
+msgid "March so far, against March last year, across every metering point."
+msgstr "Maaliskuu tähän mennessä verrattuna viime vuoden maaliskuuhun, kaikki käyttöpaikat."
+
+#: components/invoice-detail.tsx
+#: components/metering-points-table.tsx
+msgid "Metering point"
+msgstr "Käyttöpaikka"
+
+#: components/metering-points-table.tsx
+msgid "Metering point filters"
+msgstr "Käyttöpaikkojen suodattimet"
+
+#: components/app-config.ts
+msgid "Metering points"
+msgstr "Käyttöpaikat"
+
+#: components/invoice-detail.tsx
+msgid "Monthly fee"
+msgstr "Kuukausimaksu"
+
+#: intl/messages.ts
+msgid "Moving out"
+msgstr "Muuttamassa pois"
+
+#: app/page.tsx
+msgid "NO1 by the quarter-hour, against the 30-day average."
+msgstr "NO1 vartin välein verrattuna 30 päivän keskiarvoon."
+
+#: components/metering-points-table.tsx
+msgid "Name, address or metering point"
+msgstr "Nimi, osoite tai käyttöpaikka"
+
+#: components/metering-points-table.tsx
+msgid "No metering points match"
+msgstr "Yksikään käyttöpaikka ei vastaa hakua"
+
+#: components/command-menu.tsx
+msgid "No page or action matches."
+msgstr "Yksikään sivu tai toiminto ei vastaa hakua."
+
+#: intl/messages.ts
+msgid "Normal"
+msgstr "Normaali"
+
+#: intl/messages.ts
+msgid "Northern Norway"
+msgstr "Pohjois-Norja"
+
+#: components/app-header.tsx
+msgid "Not found"
+msgstr "Ei löytynyt"
+
+#: components/app-shell.tsx
+#: components/settings-form.tsx
+msgid "Notifications"
+msgstr "Ilmoitukset"
+
+#: intl/messages.ts
+msgid "Onboarding"
+msgstr "Käyttöönotossa"
+
+#: intl/messages.ts
+msgctxt "invoice state"
+msgid "Open"
+msgstr "Avoin"
+
+#: app/page.tsx
+msgctxt "verb"
+msgid "Open"
+msgstr "Avaa"
+
+#: intl/messages.ts
+msgid "Overdue"
+msgstr "Erääntynyt"
+
+#: components/app-config.ts
+#: components/app-sidebar.tsx
+msgid "Overview"
+msgstr "Yleiskatsaus"
+
+#: components/app-shell.tsx
+#: components/command-menu.tsx
+msgid "Pages"
+msgstr "Sivut"
+
+#: intl/messages.ts
+msgid "Paid"
+msgstr "Maksettu"
+
+#: components/settings-form.tsx
+msgid "Payment terms"
+msgstr "Maksuehdot"
+
+#: app/page.tsx
+msgid "Payments matched"
+msgstr "Maksut kohdistettu"
+
+#: components/app-config.ts
+msgid "Portfolio"
+msgstr "Salkku"
+
+#: components/app-sidebar.tsx
+msgid "Power retail"
+msgstr "Sähkön myynti"
+
+#: components/settings-form.tsx
+msgid "Price alerts"
+msgstr "Hintahälytykset"
+
+#: app/page.tsx
+msgid "Price alerts go to your {channel, select, email {email} sms {phone} other {app}}."
+msgstr "Hintahälytykset lähetetään {channel, select, email {sähköpostiisi} sms {puhelimeesi} other {sovellukseen}}."
+
+#: components/invoice-detail.tsx
+#: components/metering-points-table.tsx
+msgid "Price area"
+msgstr "Hinta-alue"
+
+#: app/page.tsx
+msgid "Price areas"
+msgstr "Hinta-alueet"
+
+#: components/settings-form.tsx
+msgid "Profile"
+msgstr "Profiili"
+
+#: components/metering-points-table.tsx
+msgid "Reading reminders sent"
+msgstr "Lukemamuistutukset lähetetty"
+
+#: app/page.tsx
+msgid "Readings for {day, date, short} are in"
+msgstr "Lukemat {day, date, short} ovat saapuneet"
+
+#: components/invoice-detail.tsx
+msgid "Reminder sent"
+msgstr "Muistutus lähetetty"
+
+#: components/settings-form.tsx
+msgid "Reports and price alerts go here."
+msgstr "Raportit ja hintahälytykset lähetetään tähän osoitteeseen."
+
+#. <x0> = <Link href>
+#: app/page.tsx
+msgid "Review <x0>February's invoices</x0> before they fall due."
+msgstr "Tarkista <x0>helmikuun laskut</x0> ennen kuin ne erääntyvät."
+
+#: components/settings-form.tsx
+msgid "Save settings"
+msgstr "Tallenna asetukset"
+
+#: app/actions.ts
+msgid "Saved: {contract} by default, {days}-day terms, {alerts, select, on {price alerts above {ore, number} øre/kWh} other {no price alerts}} and {report, select, on {a weekly report} other {no weekly report}}."
+msgstr "Tallennettu: oletuksena {contract}, maksuaika {days} päivää, {alerts, select, on {hintahälytykset yli {ore, number} äyri/kWh} other {ei hintahälytyksiä}} {report, select, on {ja viikkoraportti} other {eikä viikkoraporttia}}."
+
+#: components/command-menu.tsx
+msgid "Search"
+msgstr "Haku"
+
+#: components/metering-points-table.tsx
+msgid "Search metering points"
+msgstr "Hae käyttöpaikkoja"
+
+#: components/command-menu.tsx
+msgid "Search pages and actions"
+msgstr "Hae sivuja ja toimintoja"
+
+#: components/command-menu.tsx
+msgid "Search…"
+msgstr "Hae…"
+
+#: components/metering-points-table.tsx
+msgid "Select {customer}, {address}"
+msgstr "Valitse {customer}, {address}"
+
+#: components/metering-points-table.tsx
+msgid "Selected metering points"
+msgstr "Valitut käyttöpaikat"
+
+#: components/settings-form.tsx
+msgid "Send a test alert"
+msgstr "Lähetä testihälytys"
+
+#: components/metering-points-table.tsx
+msgid "Send reading reminder"
+msgstr "Lähetä lukemamuistutus"
+
+#: components/invoice-detail.tsx
+msgid "Send reminder"
+msgstr "Lähetä muistutus"
+
+#: app/page.tsx
+msgid "Sent"
+msgstr "Lähetetty"
+
+#: components/app-config.ts
+msgid "Settings"
+msgstr "Asetukset"
+
+#: components/invoices-table.tsx
+msgid "Show invoices"
+msgstr "Näytä laskut"
+
+#: components/user-menu.tsx
+msgid "Sign out"
+msgstr "Kirjaudu ulos"
+
+#: components/user-menu.tsx
+msgid "Signed out"
+msgstr "Kirjauduttu ulos"
+
+#: components/app-shell.tsx
+msgid "Skip to content"
+msgstr "Siirry sisältöön"
+
+#: app/page.tsx
+msgid "Solar production"
+msgstr "Aurinkosähkön tuotanto"
+
+#: app/page.tsx
+msgid "Solar production per day, March 1 to 28"
+msgstr "Aurinkosähkön tuotanto päivittäin, 1.–28. maaliskuuta"
+
+#: app/page.tsx
+msgid "Solar production, March 1–28"
+msgstr "Aurinkosähkö, 1.–28.3."
+
+#: intl/messages.ts
+msgid "Southern Norway"
+msgstr "Etelä-Norja"
+
+#: intl/messages.ts
+msgid "Spot"
+msgstr "Pörssisähkö"
+
+#: app/page.tsx
+msgid "Spot passes {ore, number} øre/kWh at {at, time, hourMinute}. Price alerts went to {customers, plural, one {# customer} other {# customers}}."
+msgstr "Pörssihinta ylittää {ore, number} äyri/kWh klo {at, time, hourMinute}. Hintahälytys lähti {customers, plural, one {# asiakkaalle} other {# asiakkaalle}}."
+
+#: app/page.tsx
+msgid "Spot plus markup, VAT included"
+msgstr "Pörssihinta ja marginaali, sis. alv"
+
+#: app/page.tsx
+msgid "Spot price in NO1 per quarter-hour, {day, date, short}"
+msgstr "Pörssihinta NO1-alueella vartin välein, {day, date, short}"
+
+#: app/page.tsx
+msgid "Spot price now, NO1, excl. VAT"
+msgstr "Pörssihinta nyt, NO1, ilman alv:tä"
+
+#: app/page.tsx
+msgid "Spot price per quarter-hour today, so far"
+msgstr "Pörssihinta vartin välein tänään tähän mennessä"
+
+#: app/page.tsx
+msgid "Spot price today"
+msgstr "Pörssihinta tänään"
+
+#: app/page.tsx
+msgid "Spot price, NO1"
+msgstr "Pörssihinta, NO1"
+
+#: components/invoices-table.tsx
+#: components/metering-points-table.tsx
+msgid "Status"
+msgstr "Tila"
+
+#: app/page.tsx
+msgid "Supply starts on {startsOn, date, short} for {later, number} of them, and at once for {now, number}."
+msgstr "Toimitus alkaa {startsOn, date, short} {later, number} asiakkaalle ja heti {now, number} asiakkaalle."
+
+#: components/command-menu.tsx
+msgid "Switch to dark appearance"
+msgstr "Vaihda tummaan ulkoasuun"
+
+#: components/command-menu.tsx
+msgid "Switch to light appearance"
+msgstr "Vaihda vaaleaan ulkoasuun"
+
+#: components/user-menu.tsx
+msgctxt "appearance"
+msgid "System"
+msgstr "Järjestelmän mukaan"
+
+#: components/settings-form.tsx
+msgid "The defaults for customers who sign up from today."
+msgstr "Oletukset tästä päivästä alkaen liittyville asiakkaille."
+
+#: app/page.tsx
+msgid "The last twelve months. Heating peaks in winter, and the prosumers' solar in summer."
+msgstr "Viimeiset kaksitoista kuukautta. Lämmitys huipentuu talvella ja pientuottajien aurinkosähkö kesällä."
+
+#: app/page.tsx
+msgid "The latest from billing, metering and the market."
+msgstr "Uusimmat tapahtumat laskutuksesta, mittauksesta ja markkinoilta."
+
+#: app/page.tsx
+msgid "The month's invoice run, as it stands."
+msgstr "Kuukauden laskutusajo tämänhetkisessä tilassaan."
+
+#: app/settings/page.tsx
+msgid "The portal's language, here and on every page. Your unsaved changes below stay as they are."
+msgstr "Portaalin kieli, tällä ja kaikilla muilla sivuilla. Tallentamattomat muutoksesi alla säilyvät ennallaan."
+
+#: components/settings-form.tsx
+msgid "The portfolio's consumption and invoicing, every Monday."
+msgstr "Salkun kulutus ja laskutus joka maanantai."
+
+#: components/answer-request.tsx
+msgid "The server did not answer. Try again."
+msgstr "Palvelin ei vastannut. Yritä uudelleen."
+
+#: app/actions.ts
+msgid "These settings were not saved: a field needs fixing."
+msgstr "Asetuksia ei tallennettu: yksi kenttä on korjattava."
+
+#: components/user-menu.tsx
+msgid "This example has no sign-in, so it opens again as {name}."
+msgstr "Tässä esimerkissä ei ole kirjautumista, joten se avautuu taas käyttäjänä {name}."
+
+#: app/page.tsx
+msgid "This page was rendered on the server."
+msgstr "Tämä sivu muodostettiin palvelimella."
+
+#: app/api/greeting/route.ts
+msgid "This test alert was translated by an API route."
+msgstr "Tämän testihälytyksen käänsi API-reitti."
+
+#: components/command-menu.tsx
+msgid "Toggle sidebar"
+msgstr "Näytä tai piilota sivupalkki"
+
+#: components/invoice-detail.tsx
+msgid "Total"
+msgstr "Yhteensä"
+
+#: components/metering-points-table.tsx
+msgid "Try another name or address, or take a filter away."
+msgstr "Kokeile toista nimeä tai osoitetta tai poista jokin suodatin."
+
+#: components/settings-form.tsx
+msgid "Unsaved changes"
+msgstr "Tallentamattomia muutoksia"
+
+#: components/invoice-detail.tsx
+msgid "VAT, not charged in Northern Norway"
+msgstr "Alv, ei peritä Pohjois-Norjassa"
+
+#: components/invoice-detail.tsx
+msgid "VAT, {rate, number, percent} of {subtotal, number, price}"
+msgstr "Alv {rate, number, percent} summasta {subtotal, number, price}"
+
+#: intl/messages.ts
+msgid "Variable"
+msgstr "Muuttuva hinta"
+
+#: components/settings-form.tsx
+msgid "Weekly report"
+msgstr "Viikkoraportti"
+
+#: app/page.tsx
+msgid "Welcome back"
+msgstr "Tervetuloa takaisin"
+
+#: intl/messages.ts
+msgid "Western Norway"
+msgstr "Länsi-Norja"
+
+#: components/settings-form.tsx
+msgid "What we tell you about, and when."
+msgstr "Mistä ilmoitamme sinulle ja milloin."
+
+#: components/locale-switcher.tsx
+msgid "Your language choice was not saved. Try again."
+msgstr "Kielivalintaasi ei tallennettu. Yritä uudelleen."
+
+#: components/locale-switcher.tsx
+msgid "Your language choice was saved. Reload the page to see it."
+msgstr "Kielivalintasi on tallennettu. Lataa sivu uudelleen nähdäksesi sen."
+
+#: components/app-config.ts
+msgid "Your profile, language, invoicing defaults and notifications."
+msgstr "Profiilisi, kieli, laskutuksen oletukset ja ilmoitukset."
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "bills payments overdue"
+msgstr "laskut maksut erääntyneet"
+
+#: components/command-menu.tsx
+msgctxt "search words"
+msgid "collapse expand navigation"
+msgstr "piilota näytä navigointi valikko"
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "customers meters gsrn elhub"
+msgstr "asiakkaat mittarit gsrn elhub"
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "dashboard home key figures"
+msgstr "koontinäyttö etusivu tunnusluvut"
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "profile language preferences notifications"
+msgstr "profiili kieli asetukset ilmoitukset"
+
+#: components/command-menu.tsx
+msgctxt "search words"
+msgid "theme color scheme mode"
+msgstr "teema värit tumma vaalea tila"
+
+#: components/command-menu.tsx
+msgctxt "search words"
+msgid "url share address"
+msgstr "url jaa osoite linkki"
+
+#: components/metering-points-table.tsx
+#, ignore-same
+msgid "{address}, {city} · {area}"
+msgstr "{address}, {city} · {area}"
+
+#: components/metering-points-table.tsx
+#, ignore-same
+msgid "{area} {name}"
+msgstr "{area} {name}"
+
+#: components/invoice-detail.tsx
+#, ignore-same
+msgid "{area}, {name}"
+msgstr "{area}, {name}"
+
+#: app/page.tsx
+msgid "{change, number, change} against last year"
+msgstr "{change, number, change} viime vuoteen verrattuna"
+
+#: app/page.tsx
+msgid "{change, number, change} against the 30-day average"
+msgstr "{change, number, change} 30 päivän keskiarvoon verrattuna"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# customer gets a reminder} other {# customers get a reminder}} to read their meter."
+msgstr "{count, plural, one {# asiakas saa muistutuksen} other {# asiakasta saa muistutuksen}} mittarin lukemisesta."
+
+#: app/invoices/page.tsx
+msgid "{count, plural, one {# invoice} other {# invoices}} for {total, number, price}"
+msgstr "{count, plural, one {# lasku} other {# laskua}}, yhteensä {total, number, price}"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# metering point} other {# metering points}}"
+msgstr "{count, plural, one {# käyttöpaikka} other {# käyttöpaikkaa}}"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# metering point} other {# metering points}} of {total, number}"
+msgstr "{count, plural, one {# käyttöpaikka} other {# käyttöpaikkaa}} / {total, number}"
+
+#: components/app-sidebar.tsx
+msgid "{count, plural, one {# overdue invoice} other {# overdue invoices}}"
+msgstr "{count, plural, one {# erääntynyt lasku} other {# erääntynyttä laskua}}"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# point selected} other {# points selected}}"
+msgstr "{count, plural, one {# käyttöpaikka valittu} other {# käyttöpaikkaa valittu}}"
+
+#: app/page.tsx
+msgid "{customers, plural, one {# customer moved in} other {# customers moved in}}"
+msgstr "{customers, plural, one {# asiakas muutti} other {# asiakasta muutti}}"
+
+#: components/invoice-detail.tsx
+msgid "{customer} gets a reminder for {number}."
+msgstr "{customer} saa muistutuksen laskusta {number}."
+
+#: components/invoice-detail.tsx
+msgid "{customer}, February 2026. {total, number, price} due on {dueOn, date, short}."
+msgstr "{customer}, helmikuu 2026. {total, number, price} erääntyy {dueOn, date, short}."
+
+#: components/settings-form.tsx
+msgid "{days, plural, one {# day} other {# days}}"
+msgstr "{days, plural, one {# päivä} other {# päivää}}"
+
+#: app/page.tsx
+msgid "{invoices, plural, one {# invoice} other {# invoices}}, due {dueOn, date, short}, and {directDebitDueOn, date, short} for direct debit."
+msgstr "{invoices, plural, one {# lasku} other {# laskua}}, eräpäivä {dueOn, date, short}, suoramaksussa {directDebitDueOn, date, short}."
+
+#: components/invoice-detail.tsx
+msgid "{kwh, number} kWh × {price, number} øre"
+msgstr "{kwh, number} kWh × {price, number} äyriä"
+
+#: app/layout.tsx
+#: app/page.tsx
+msgid "{page} · Back office"
+msgstr "{page} · Asiakaskeskus"
+
+#: app/page.tsx
+msgid "{paid, plural, one {# February invoice is paid} other {# February invoices are paid}}. {overdue, plural, one {# is overdue} other {# are overdue}}."
+msgstr "{paid, plural, one {# helmikuun lasku on maksettu} other {# helmikuun laskua on maksettu}}. {overdue, plural, one {# on erääntynyt} other {# on erääntynyt}}."
+
+#: app/page.tsx
+msgid "{price, number, spot} øre/kWh"
+msgstr "{price, number, spot} äyri/kWh"
+
+#: components/metering-points-table.tsx
+msgid "· {annual} kWh a year"
+msgstr "· {annual} kWh vuodessa"
+
+#: components/metering-points-table.tsx
+msgid "· {count, plural, one {# more hidden by filters} other {# more hidden by filters}}"
+msgstr "· {count, plural, one {# lisää piilotettu suodattimilla} other {# lisää piilotettu suodattimilla}}"

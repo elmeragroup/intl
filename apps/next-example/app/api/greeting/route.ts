@@ -11,7 +11,7 @@ import { LOCALIZED_CACHE_CONTROL } from "../../../intl/locale";
 const greeting = Effect.gen(function* () {
   const { t } = yield* CurrentIntl;
 
-  return new Response(t("This text was translated by an API route."), {
+  return new Response(t("This test alert was translated by an API route."), {
     headers: { "content-type": "text/plain; charset=utf-8", "cache-control": LOCALIZED_CACHE_CONTROL },
   });
 });

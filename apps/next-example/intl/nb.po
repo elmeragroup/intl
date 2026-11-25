@@ -5,40 +5,420 @@ msgstr ""
 "Language: nb\n"
 "X-Elmera-Serializer: 1\n"
 
-#: components/cart.tsx
-msgid "Add an item"
-msgstr "Legg til en vare"
+#: app/page.tsx
+msgid "30-day average"
+msgstr "Snitt siste 30 dager"
 
-#: components/api-demo.tsx
-msgid "Call the API"
-msgstr "Kall API-et"
+#: components/app-config.ts
+msgid "Account"
+msgstr "Konto"
 
-#: components/api-demo.tsx
-msgid "Confirm the order"
-msgstr "Bekreft bestillingen"
+#: components/user-menu.tsx
+msgid "Account menu for {name}"
+msgstr "Kontomeny for {name}"
+
+#: components/command-menu.tsx
+msgid "Actions"
+msgstr "Handlinger"
 
 #: intl/messages.ts
-msgid "Delivered"
-msgstr "Levert"
+msgid "Active"
+msgstr "Aktiv"
 
 #: app/page.tsx
-msgid "Delivered to your {place, select, home {home} office {office} other {pickup point}}."
-msgstr "Leveres til {place, select, home {hjemmet ditt} office {kontoret ditt} other {hentestedet ditt}}."
+msgid "Activity"
+msgstr "Aktivitet"
+
+#: components/metering-points-table.tsx
+msgid "Address"
+msgstr "Adresse"
+
+#: components/settings-form.tsx
+msgid "Alert threshold, øre/kWh"
+msgstr "Varslingsgrense, øre/kWh"
+
+#: components/invoices-table.tsx
+msgid "All"
+msgstr "Alle"
+
+#: components/settings-form.tsx
+msgid "All changes saved"
+msgstr "Alle endringer er lagret"
+
+#: components/invoice-detail.tsx
+#: components/invoices-table.tsx
+msgid "Amount"
+msgstr "Beløp"
+
+#: components/metering-points-table.tsx
+msgid "Annual use (kWh)"
+msgstr "Årsforbruk (kWh)"
+
+#: components/metering-points-table.tsx
+msgid "Annual use, kWh"
+msgstr "Årsforbruk, kWh"
+
+#: components/user-menu.tsx
+msgid "Appearance"
+msgstr "Utseende"
+
+#: components/metering-points-table.tsx
+msgid "Area"
+msgstr "Område"
+
+#: app/layout.tsx
+#: components/app-header.tsx
+#: components/app-sidebar.tsx
+msgid "Back office"
+msgstr "Kundesenter"
+
+#: app/invoices/page.tsx
+msgid "Between {first, date, short} and {last, date, short}"
+msgstr "Mellom {first, date, short} og {last, date, short}"
+
+#: components/app-config.ts
+msgid "Billing"
+msgstr "Fakturering"
+
+#: app/invoices/page.tsx
+msgid "Billing period"
+msgstr "Faktureringsperiode"
+
+#: intl/messages.ts
+msgid "Central Norway"
+msgstr "Midt-Norge"
+
+#: components/metering-points-table.tsx
+msgid "City"
+msgstr "Sted"
+
+#: components/metering-points-table.tsx
+msgid "Clear search and filters"
+msgstr "Fjern søk og filtre"
+
+#: components/metering-points-table.tsx
+msgid "Clear selection"
+msgstr "Fjern valget"
+
+#: components/invoice-detail.tsx
+msgid "Close"
+msgstr "Lukk"
 
 #: app/page.tsx
-msgid "Delivery window"
-msgstr "Leveringsvindu"
+msgid "Consumption"
+msgstr "Forbruk"
 
 #: app/page.tsx
-msgid "Hello {name}, you have {count, plural, =0 {no new messages} one {# new message} other {# new messages}}."
-msgstr "Hei {name}, du har {count, plural, =0 {ingen nye meldinger} one {# ny melding} other {# nye meldinger}}."
+msgid "Consumption and solar production"
+msgstr "Forbruk og solproduksjon"
 
+#: app/page.tsx
+msgid "Consumption and solar production per month, March 2025 to February 2026"
+msgstr "Forbruk og solproduksjon per måned, mars 2025 til februar 2026"
+
+#: app/page.tsx
+msgid "Consumption per day"
+msgstr "Forbruk per dag"
+
+#: app/page.tsx
+msgid "Consumption per day, March 1 to 28"
+msgstr "Forbruk per dag, 1. til 28. mars"
+
+#: app/page.tsx
+msgid "Consumption per day, March 2026 against March 2025"
+msgstr "Forbruk per dag, mars 2026 mot mars 2025"
+
+#: components/metering-points-table.tsx
+msgid "Consumption per day, last 30 days, {customer}"
+msgstr "Forbruk per dag, siste 30 dager, {customer}"
+
+#: app/page.tsx
+msgid "Consumption, March 1–28"
+msgstr "Forbruk, 1.–28. mars"
+
+#: components/app-config.ts
+msgid "Consumption, spot price and invoicing across the portfolio."
+msgstr "Forbruk, spotpris og fakturering for hele porteføljen."
+
+#: components/invoice-detail.tsx
+#: components/metering-points-table.tsx
+msgid "Contract"
+msgstr "Avtale"
+
+#: components/command-menu.tsx
+msgid "Copy link to this page"
+msgstr "Kopier lenke til denne siden"
+
+#: components/command-menu.tsx
+msgid "Could not copy the link"
+msgstr "Kunne ikke kopiere lenken"
+
+#: components/invoice-detail.tsx
+msgid "Credit note"
+msgstr "Kreditnota"
+
+#: intl/messages.ts
+msgid "Credited"
+msgstr "Kreditert"
+
+#: components/invoices-table.tsx
+#: components/metering-points-table.tsx
+msgid "Customer"
+msgstr "Kunde"
+
+#: intl/messages.ts
+msgid "Customer operations"
+msgstr "Kundeoppfølging"
+
+#: components/settings-form.tsx
+msgid "Customers can change contract at any time."
+msgstr "Kundene kan bytte avtale når som helst."
+
+#: components/user-menu.tsx
+msgctxt "appearance"
+msgid "Dark"
+msgstr "Mørkt"
+
+#. <x0> = <time dateTime>
+#: app/page.tsx
+msgid "Data as of <x0>{asOf}</x0>"
+msgstr "Data per <x0>{asOf}</x0>"
+
+#: components/settings-form.tsx
+msgid "Default contract"
+msgstr "Standardavtale"
+
+#: components/settings-form.tsx
+msgid "Discard changes"
+msgstr "Forkast endringer"
+
+#: intl/messages.ts
+msgid "Disconnected"
+msgstr "Frakoblet"
+
+#: app/invoices/page.tsx
+#: app/page.tsx
+#: components/invoices-table.tsx
+msgid "Due"
+msgstr "Forfall"
+
+#: app/page.tsx
+msgid "Due on {dueOn, date, short}"
+msgstr "Forfaller {dueOn, date, short}"
+
+#: intl/messages.ts
+msgid "Eastern Norway"
+msgstr "Øst-Norge"
+
+#: app/page.tsx
+msgid "Elhub delivered a reading for every point we supplied that day."
+msgstr "Elhub leverte en måleravlesning for hvert punkt vi leverte strøm til den dagen."
+
+#: components/settings-form.tsx
+msgid "Email"
+msgstr "E-post"
+
+#: components/invoice-detail.tsx
+msgid "Energy, {contract}"
+msgstr "Energi, {contract}"
+
+#: components/settings-form.tsx
+msgid "Enter a whole number of øre from 1 to 999."
+msgstr "Skriv inn et helt antall øre fra 1 til 999."
+
+#: components/settings-form.tsx
+msgid "Enter an email address such as name@example.com."
+msgstr "Skriv inn en e-postadresse, for eksempel navn@example.com."
+
+#: components/settings-form.tsx
+msgid "Enter your name."
+msgstr "Skriv inn navnet ditt."
+
+#: app/page.tsx
+msgid "Estimated invoicing per day, March 1 to 28"
+msgstr "Beregnet fakturering per dag, 1. til 28. mars"
+
+#: app/page.tsx
+msgid "Estimated invoicing, March"
+msgstr "Beregnet fakturering, mars"
+
+#: app/page.tsx
+msgid "Evening price peak in NO1"
+msgstr "Pristopp i kveld i NO1"
+
+#: components/app-config.ts
+msgid "Every point we supply, with its contract and its last 30 days."
+msgstr "Hvert punkt vi leverer til, med avtalen og de siste 30 dagene."
+
+#: components/metering-points-table.tsx
+msgid "Export"
+msgstr "Eksporter"
+
+#: components/metering-points-table.tsx
+msgid "Export {count, plural, one {# point} other {# points}}"
+msgstr "Eksporter {count, plural, one {# punkt} other {# punkter}}"
+
+#: app/page.tsx
+msgid "February invoices"
+msgstr "Fakturaer for februar"
+
+#: app/page.tsx
+msgid "February invoices sent"
+msgstr "Fakturaene for februar er sendt"
+
+#: components/app-config.ts
+msgid "February's invoices, their payments and what each one charged."
+msgstr "Fakturaene for februar, betalingene og hva hver av dem krevde inn."
+
+#: intl/messages.ts
+msgid "Fixed price"
+msgstr "Fastpris"
+
+#: components/settings-form.tsx
+msgid "Full name"
+msgstr "Fullt navn"
+
+#: app/page.tsx
+msgid "Hello {name}, you have {count, plural, =0 {no overdue invoices} one {# overdue invoice} other {# overdue invoices}}."
+msgstr "Hei {name}, du har {count, plural, =0 {ingen forfalte fakturaer} one {# forfalt faktura} other {# forfalte fakturaer}}."
+
+#: intl/messages.ts
+msgid "High"
+msgstr "Høy"
+
+#: components/settings-form.tsx
+msgid "How long a new customer has to pay each invoice."
+msgstr "Hvor lang tid en ny kunde har på å betale hver faktura."
+
+#: components/settings-form.tsx
+msgid "How you appear to your team, and where your mail goes."
+msgstr "Slik ser teamet deg, og hit går e-posten din."
+
+#: components/invoices-table.tsx
+msgid "Invoice"
+msgstr "Faktura"
+
+#: components/invoice-detail.tsx
+msgid "Invoice lines"
+msgstr "Fakturalinjer"
+
+#: app/invoices/page.tsx
+#: app/page.tsx
+msgid "Invoiced"
+msgstr "Fakturert"
+
+#: components/app-config.ts
+#: components/invoices-table.tsx
+msgid "Invoices"
+msgstr "Fakturaer"
+
+#: components/settings-form.tsx
+msgid "Invoicing"
+msgstr "Fakturering"
+
+#: components/invoice-detail.tsx
+msgid "Issued"
+msgstr "Utstedt"
+
+#: app/page.tsx
+msgid "Key figures"
+msgstr "Nøkkeltall"
+
+#: app/settings/page.tsx
 #: components/locale-switcher.tsx
 msgid "Language"
 msgstr "Språk"
 
+#: components/metering-points-table.tsx
+msgid "Last 30 days"
+msgstr "Siste 30 dager"
+
+#: components/user-menu.tsx
+msgctxt "appearance"
+msgid "Light"
+msgstr "Lyst"
+
+#: components/invoice-detail.tsx
+msgid "Line"
+msgstr "Linje"
+
+#: components/command-menu.tsx
+msgid "Link copied"
+msgstr "Lenken er kopiert"
+
 #: intl/messages.ts
-msgctxt "shop opening state"
+msgid "Low"
+msgstr "Lav"
+
+#: components/settings-form.tsx
+msgid "Mail me when NO1's spot price passes the threshold."
+msgstr "Send meg e-post når spotprisen i NO1 går over grensen."
+
+#: app/page.tsx
+msgid "March so far, against March last year, across every metering point."
+msgstr "Mars så langt, mot mars i fjor, for alle målepunkter."
+
+#: components/invoice-detail.tsx
+#: components/metering-points-table.tsx
+msgid "Metering point"
+msgstr "Målepunkt"
+
+#: components/metering-points-table.tsx
+msgid "Metering point filters"
+msgstr "Filtre for målepunkter"
+
+#: components/app-config.ts
+msgid "Metering points"
+msgstr "Målepunkter"
+
+#: components/invoice-detail.tsx
+msgid "Monthly fee"
+msgstr "Månedsavgift"
+
+#: intl/messages.ts
+msgid "Moving out"
+msgstr "Flytter ut"
+
+#: app/page.tsx
+msgid "NO1 by the quarter-hour, against the 30-day average."
+msgstr "NO1 per kvarter, mot snittet de siste 30 dagene."
+
+#: components/metering-points-table.tsx
+msgid "Name, address or metering point"
+msgstr "Navn, adresse eller målepunkt"
+
+#: components/metering-points-table.tsx
+msgid "No metering points match"
+msgstr "Ingen målepunkter passer"
+
+#: components/command-menu.tsx
+msgid "No page or action matches."
+msgstr "Ingen side eller handling passer."
+
+#: intl/messages.ts
+#, ignore-same
+msgid "Normal"
+msgstr "Normal"
+
+#: intl/messages.ts
+msgid "Northern Norway"
+msgstr "Nord-Norge"
+
+#: components/app-header.tsx
+msgid "Not found"
+msgstr "Ikke funnet"
+
+#: components/app-shell.tsx
+#: components/settings-form.tsx
+msgid "Notifications"
+msgstr "Varsler"
+
+#: intl/messages.ts
+msgid "Onboarding"
+msgstr "Under oppstart"
+
+#: intl/messages.ts
+msgctxt "invoice state"
 msgid "Open"
 msgstr "Åpen"
 
@@ -47,94 +427,308 @@ msgctxt "verb"
 msgid "Open"
 msgstr "Åpne"
 
-#: app/page.tsx
-msgid "Order date"
-msgstr "Bestillingsdato"
+#: intl/messages.ts
+msgid "Overdue"
+msgstr "Forfalt"
 
-#: app/page.tsx
-msgid "Order status"
-msgstr "Bestillingsstatus"
+#: components/app-config.ts
+#: components/app-sidebar.tsx
+msgid "Overview"
+msgstr "Oversikt"
 
-#: app/page.tsx
-msgid "Order {id}"
-msgstr "Bestilling {id}"
-
-#: components/cart.tsx
-msgid "Order {id}: {status}, {placedAt}"
-msgstr "Bestilling {id}: {status}, {placedAt}"
-
-#: app/page.tsx
-msgid "Orders ship within two working days, and you can return an item within 30 days."
-msgstr "Bestillinger sendes innen to virkedager, og du kan returnere en vare innen 30 dager."
-
-#: app/page.tsx
-msgid "Pickup points"
-msgstr "Hentesteder"
+#: components/app-shell.tsx
+#: components/command-menu.tsx
+msgid "Pages"
+msgstr "Sider"
 
 #: intl/messages.ts
-msgid "Placed"
-msgstr "Bestilt"
+msgid "Paid"
+msgstr "Betalt"
+
+#: components/settings-form.tsx
+msgid "Payment terms"
+msgstr "Betalingsfrist"
 
 #: app/page.tsx
-msgid "Placed on {placedAt, date, short}"
-msgstr "Bestilt {placedAt, date, short}"
+msgid "Payments matched"
+msgstr "Innbetalinger avstemt"
 
-#. <x0> = <a href>
-#: app/page.tsx
-msgid "Read our <x0>terms of sale</x0> before you order."
-msgstr "Les <x0>salgsvilkårene</x0> våre før du bestiller."
+#: components/app-config.ts
+msgid "Portfolio"
+msgstr "Portefølje"
 
-#: components/api-demo.tsx
-msgid "Server answers"
-msgstr "Svar fra serveren"
+#: components/app-sidebar.tsx
+msgid "Power retail"
+msgstr "Strømsalg"
 
-#: intl/messages.ts
-msgid "Shipped"
-msgstr "Sendt"
-
-#: app/page.tsx
-msgid "Shipping"
-msgstr "Frakt"
+#: components/settings-form.tsx
+msgid "Price alerts"
+msgstr "Prisvarsler"
 
 #: app/page.tsx
-msgid "Shop"
-msgstr "Butikk"
+msgid "Price alerts go to your {channel, select, email {email} sms {phone} other {app}}."
+msgstr "Prisvarsler sendes til {channel, select, email {e-posten din} sms {telefonen din} other {appen}}."
+
+#: components/invoice-detail.tsx
+#: components/metering-points-table.tsx
+msgid "Price area"
+msgstr "Prisområde"
 
 #: app/page.tsx
-msgid "Terms of sale"
-msgstr "Salgsvilkår"
+msgid "Price areas"
+msgstr "Prisområder"
+
+#: components/settings-form.tsx
+msgid "Profile"
+msgstr "Profil"
+
+#: components/metering-points-table.tsx
+msgid "Reading reminders sent"
+msgstr "Påminnelser om måleravlesning er sendt"
+
+#: app/page.tsx
+msgid "Readings for {day, date, short} are in"
+msgstr "Målerverdiene for {day, date, short} er kommet inn"
+
+#: components/invoice-detail.tsx
+msgid "Reminder sent"
+msgstr "Påminnelsen er sendt"
+
+#: components/settings-form.tsx
+msgid "Reports and price alerts go here."
+msgstr "Rapporter og prisvarsler sendes hit."
+
+#. <x0> = <Link href>
+#: app/page.tsx
+msgid "Review <x0>February's invoices</x0> before they fall due."
+msgstr "Gå gjennom <x0>fakturaene for februar</x0> før de forfaller."
+
+#: components/settings-form.tsx
+msgid "Save settings"
+msgstr "Lagre innstillingene"
 
 #: app/actions.ts
-msgid "Thank you! Order {id} is confirmed."
-msgstr "Takk! Bestilling {id} er bekreftet."
+msgid "Saved: {contract} by default, {days}-day terms, {alerts, select, on {price alerts above {ore, number} øre/kWh} other {no price alerts}} and {report, select, on {a weekly report} other {no weekly report}}."
+msgstr "Lagret: {contract} som standard, {days} dagers betalingsfrist, {alerts, select, on {prisvarsler over {ore, number} øre/kWh} other {ingen prisvarsler}} og {report, select, on {ukerapport} other {ingen ukerapport}}."
 
-#: components/api-demo.tsx
+#: components/command-menu.tsx
+msgid "Search"
+msgstr "Søk"
+
+#: components/metering-points-table.tsx
+msgid "Search metering points"
+msgstr "Søk i målepunkter"
+
+#: components/command-menu.tsx
+msgid "Search pages and actions"
+msgstr "Søk i sider og handlinger"
+
+#: components/command-menu.tsx
+msgid "Search…"
+msgstr "Søk …"
+
+#: components/metering-points-table.tsx
+msgid "Select {customer}, {address}"
+msgstr "Velg {customer}, {address}"
+
+#: components/metering-points-table.tsx
+msgid "Selected metering points"
+msgstr "Valgte målepunkter"
+
+#: components/settings-form.tsx
+msgid "Send a test alert"
+msgstr "Send et testvarsel"
+
+#: components/metering-points-table.tsx
+msgid "Send reading reminder"
+msgstr "Send påminnelse om avlesning"
+
+#: components/invoice-detail.tsx
+msgid "Send reminder"
+msgstr "Send påminnelse"
+
+#: app/page.tsx
+msgid "Sent"
+msgstr "Sendt"
+
+#: components/app-config.ts
+msgid "Settings"
+msgstr "Innstillinger"
+
+#: components/invoices-table.tsx
+msgid "Show invoices"
+msgstr "Vis fakturaer"
+
+#: components/user-menu.tsx
+msgid "Sign out"
+msgstr "Logg ut"
+
+#: components/user-menu.tsx
+msgid "Signed out"
+msgstr "Logget ut"
+
+#: components/app-shell.tsx
+msgid "Skip to content"
+msgstr "Hopp til innholdet"
+
+#: app/page.tsx
+msgid "Solar production"
+msgstr "Solproduksjon"
+
+#: app/page.tsx
+msgid "Solar production per day, March 1 to 28"
+msgstr "Solproduksjon per dag, 1. til 28. mars"
+
+#: app/page.tsx
+msgid "Solar production, March 1–28"
+msgstr "Solproduksjon, 1.–28. mars"
+
+#: intl/messages.ts
+msgid "Southern Norway"
+msgstr "Sør-Norge"
+
+#: intl/messages.ts
+msgid "Spot"
+msgstr "Spotpris"
+
+#: app/page.tsx
+msgid "Spot passes {ore, number} øre/kWh at {at, time, hourMinute}. Price alerts went to {customers, plural, one {# customer} other {# customers}}."
+msgstr "Spotprisen passerer {ore, number} øre/kWh kl. {at, time, hourMinute}. Prisvarsler gikk til {customers, plural, one {# kunde} other {# kunder}}."
+
+#: app/page.tsx
+msgid "Spot plus markup, VAT included"
+msgstr "Spot pluss påslag, inkl. mva."
+
+#: app/page.tsx
+msgid "Spot price in NO1 per quarter-hour, {day, date, short}"
+msgstr "Spotpris i NO1 per kvarter, {day, date, short}"
+
+#: app/page.tsx
+msgid "Spot price now, NO1, excl. VAT"
+msgstr "Spotpris nå, NO1, ekskl. mva."
+
+#: app/page.tsx
+msgid "Spot price per quarter-hour today, so far"
+msgstr "Spotpris per kvarter i dag så langt"
+
+#: app/page.tsx
+msgid "Spot price today"
+msgstr "Spotpris i dag"
+
+#: app/page.tsx
+msgid "Spot price, NO1"
+msgstr "Spotpris, NO1"
+
+#: components/invoices-table.tsx
+#: components/metering-points-table.tsx
+#, ignore-same
+msgid "Status"
+msgstr "Status"
+
+#: app/page.tsx
+msgid "Supply starts on {startsOn, date, short} for {later, number} of them, and at once for {now, number}."
+msgstr "Leveransen starter {startsOn, date, short} for {later, number} av dem og med en gang for {now, number}."
+
+#: components/command-menu.tsx
+msgid "Switch to dark appearance"
+msgstr "Bytt til mørkt utseende"
+
+#: components/command-menu.tsx
+msgid "Switch to light appearance"
+msgstr "Bytt til lyst utseende"
+
+#: components/user-menu.tsx
+msgctxt "appearance"
+msgid "System"
+msgstr "Som systemet"
+
+#: components/settings-form.tsx
+msgid "The defaults for customers who sign up from today."
+msgstr "Standardvalgene for kunder som registrerer seg fra i dag."
+
+#: app/page.tsx
+msgid "The last twelve months. Heating peaks in winter, and the prosumers' solar in summer."
+msgstr "De siste tolv månedene. Oppvarmingen topper seg om vinteren, og plusskundenes solkraft om sommeren."
+
+#: app/page.tsx
+msgid "The latest from billing, metering and the market."
+msgstr "Det siste fra fakturering, måling og markedet."
+
+#: app/page.tsx
+msgid "The month's invoice run, as it stands."
+msgstr "Månedens fakturakjøring slik den står nå."
+
+#: app/settings/page.tsx
+msgid "The portal's language, here and on every page. Your unsaved changes below stay as they are."
+msgstr "Portalens språk, her og på alle sider. Endringene du ikke har lagret nedenfor, blir stående."
+
+#: components/settings-form.tsx
+msgid "The portfolio's consumption and invoicing, every Monday."
+msgstr "Porteføljens forbruk og fakturering, hver mandag."
+
+#: components/answer-request.tsx
 msgid "The server did not answer. Try again."
 msgstr "Serveren svarte ikke. Prøv igjen."
+
+#: app/actions.ts
+msgid "These settings were not saved: a field needs fixing."
+msgstr "Innstillingene ble ikke lagret: et felt må rettes."
+
+#: components/user-menu.tsx
+msgid "This example has no sign-in, so it opens again as {name}."
+msgstr "Dette eksempelet har ingen innlogging, så det åpnes igjen som {name}."
 
 #: app/page.tsx
 msgid "This page was rendered on the server."
 msgstr "Denne siden ble gjengitt på serveren."
 
 #: app/api/greeting/route.ts
-msgid "This text was translated by an API route."
-msgstr "Denne teksten ble oversatt av en API-rute."
+msgid "This test alert was translated by an API route."
+msgstr "Dette testvarselet ble oversatt av en API-rute."
 
-#: app/page.tsx
+#: components/command-menu.tsx
+msgid "Toggle sidebar"
+msgstr "Vis eller skjul sidepanelet"
+
+#: components/invoice-detail.tsx
 msgid "Total"
 msgstr "Totalt"
 
-#: components/cart.tsx
-msgid "Total: {total, number, price}"
-msgstr "Totalt: {total, number, price}"
+#: components/metering-points-table.tsx
+msgid "Try another name or address, or take a filter away."
+msgstr "Prøv et annet navn eller en annen adresse, eller fjern et filter."
+
+#: components/settings-form.tsx
+msgid "Unsaved changes"
+msgstr "Endringer som ikke er lagret"
+
+#: components/invoice-detail.tsx
+msgid "VAT, not charged in Northern Norway"
+msgstr "Mva., ikke beregnet i Nord-Norge"
+
+#: components/invoice-detail.tsx
+msgid "VAT, {rate, number, percent} of {subtotal, number, price}"
+msgstr "Mva., {rate, number, percent} av {subtotal, number, price}"
+
+#: intl/messages.ts
+msgid "Variable"
+msgstr "Variabel pris"
+
+#: components/settings-form.tsx
+msgid "Weekly report"
+msgstr "Ukerapport"
 
 #: app/page.tsx
-msgid "Welcome to the example shop"
-msgstr "Velkommen til eksempelbutikken"
+msgid "Welcome back"
+msgstr "Velkommen tilbake"
 
-#: components/cart.tsx
-msgid "Your cart"
-msgstr "Handlekurven din"
+#: intl/messages.ts
+msgid "Western Norway"
+msgstr "Vest-Norge"
+
+#: components/settings-form.tsx
+msgid "What we tell you about, and when."
+msgstr "Hva vi varsler deg om, og når."
 
 #: components/locale-switcher.tsx
 msgid "Your language choice was not saved. Try again."
@@ -144,6 +738,135 @@ msgstr "Språkvalget ditt ble ikke lagret. Prøv igjen."
 msgid "Your language choice was saved. Reload the page to see it."
 msgstr "Språkvalget ditt er lagret. Last inn siden på nytt for å se det."
 
-#: components/cart.tsx
-msgid "{count, plural, =0 {Your cart is empty} one {# item in your cart} other {# items in your cart}}"
-msgstr "{count, plural, =0 {Handlekurven er tom} one {# vare i handlekurven} other {# varer i handlekurven}}"
+#: components/app-config.ts
+msgid "Your profile, language, invoicing defaults and notifications."
+msgstr "Profilen din, språk, standardvalg for fakturering og varsler."
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "bills payments overdue"
+msgstr "regninger betalinger forfalt"
+
+#: components/command-menu.tsx
+msgctxt "search words"
+msgid "collapse expand navigation"
+msgstr "skjul vis navigasjon meny"
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "customers meters gsrn elhub"
+msgstr "kunder målere gsrn elhub"
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "dashboard home key figures"
+msgstr "dashbord hjem nøkkeltall"
+
+#: components/app-config.ts
+msgctxt "search words"
+msgid "profile language preferences notifications"
+msgstr "profil språk innstillinger varsler"
+
+#: components/command-menu.tsx
+msgctxt "search words"
+msgid "theme color scheme mode"
+msgstr "tema farger mørk lys modus"
+
+#: components/command-menu.tsx
+msgctxt "search words"
+msgid "url share address"
+msgstr "url del adresse lenke"
+
+#: components/metering-points-table.tsx
+#, ignore-same
+msgid "{address}, {city} · {area}"
+msgstr "{address}, {city} · {area}"
+
+#: components/metering-points-table.tsx
+#, ignore-same
+msgid "{area} {name}"
+msgstr "{area} {name}"
+
+#: components/invoice-detail.tsx
+#, ignore-same
+msgid "{area}, {name}"
+msgstr "{area}, {name}"
+
+#: app/page.tsx
+msgid "{change, number, change} against last year"
+msgstr "{change, number, change} mot i fjor"
+
+#: app/page.tsx
+msgid "{change, number, change} against the 30-day average"
+msgstr "{change, number, change} mot snittet siste 30 dager"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# customer gets a reminder} other {# customers get a reminder}} to read their meter."
+msgstr "{count, plural, one {# kunde får en påminnelse} other {# kunder får en påminnelse}} om å lese av måleren."
+
+#: app/invoices/page.tsx
+msgid "{count, plural, one {# invoice} other {# invoices}} for {total, number, price}"
+msgstr "{count, plural, one {# faktura} other {# fakturaer}} på {total, number, price}"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# metering point} other {# metering points}}"
+msgstr "{count, plural, one {# målepunkt} other {# målepunkter}}"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# metering point} other {# metering points}} of {total, number}"
+msgstr "{count, plural, one {# målepunkt} other {# målepunkter}} av {total, number}"
+
+#: components/app-sidebar.tsx
+msgid "{count, plural, one {# overdue invoice} other {# overdue invoices}}"
+msgstr "{count, plural, one {# forfalt faktura} other {# forfalte fakturaer}}"
+
+#: components/metering-points-table.tsx
+msgid "{count, plural, one {# point selected} other {# points selected}}"
+msgstr "{count, plural, one {# punkt valgt} other {# punkter valgt}}"
+
+#: app/page.tsx
+msgid "{customers, plural, one {# customer moved in} other {# customers moved in}}"
+msgstr "{customers, plural, one {# kunde har flyttet inn} other {# kunder har flyttet inn}}"
+
+#: components/invoice-detail.tsx
+msgid "{customer} gets a reminder for {number}."
+msgstr "{customer} får en påminnelse om {number}."
+
+#: components/invoice-detail.tsx
+msgid "{customer}, February 2026. {total, number, price} due on {dueOn, date, short}."
+msgstr "{customer}, februar 2026. {total, number, price} forfaller {dueOn, date, short}."
+
+#: components/settings-form.tsx
+msgid "{days, plural, one {# day} other {# days}}"
+msgstr "{days, plural, one {# dag} other {# dager}}"
+
+#: app/page.tsx
+msgid "{invoices, plural, one {# invoice} other {# invoices}}, due {dueOn, date, short}, and {directDebitDueOn, date, short} for direct debit."
+msgstr "{invoices, plural, one {# faktura} other {# fakturaer}}, forfall {dueOn, date, short}, og {directDebitDueOn, date, short} for AvtaleGiro."
+
+#: components/invoice-detail.tsx
+#, ignore-same
+msgid "{kwh, number} kWh × {price, number} øre"
+msgstr "{kwh, number} kWh × {price, number} øre"
+
+#: app/layout.tsx
+#: app/page.tsx
+msgid "{page} · Back office"
+msgstr "{page} · Kundesenter"
+
+#: app/page.tsx
+msgid "{paid, plural, one {# February invoice is paid} other {# February invoices are paid}}. {overdue, plural, one {# is overdue} other {# are overdue}}."
+msgstr "{paid, plural, one {# faktura for februar er betalt} other {# fakturaer for februar er betalt}}. {overdue, plural, one {# har forfalt} other {# har forfalt}}."
+
+#: app/page.tsx
+#, ignore-same
+msgid "{price, number, spot} øre/kWh"
+msgstr "{price, number, spot} øre/kWh"
+
+#: components/metering-points-table.tsx
+msgid "· {annual} kWh a year"
+msgstr "· {annual} kWh i året"
+
+#: components/metering-points-table.tsx
+msgid "· {count, plural, one {# more hidden by filters} other {# more hidden by filters}}"
+msgstr "· {count, plural, one {# til skjult av filtre} other {# til skjult av filtre}}"

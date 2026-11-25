@@ -1,7 +1,7 @@
 {
-  "include": ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}", "intl/**/*.{ts,tsx}"],
+  "include": ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}", "data/**/*.{ts,tsx}", "intl/**/*.{ts,tsx}"],
   "exclude": ["**/*.d.ts"],
   "catalogs": "intl/{locale}.po",
-  "locales": ["nb"],
+  "locales": ["nb", "sv", "fi"],
   "formats": "intl/formats.ts"
 }
