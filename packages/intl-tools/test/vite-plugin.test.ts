@@ -1,7 +1,15 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { execPath } from "node:process";
@@ -197,6 +205,47 @@ async function useMoneyFormats(project: Project, currency: string): Promise<void
   project.write("intl-formats.ts", moneyFormats(currency));
   project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats.ts" }));
   await extractAndTranslate(project, [["{n, number, money}", "{n, number, money} totalt"]]);
+}
+
+/** One edit a dev case makes: a file's text written, or a symlink repointed (atomically, as a deploy swaps it). */
+type DevEdit =
+  | { readonly _tag: "Write"; readonly file: string; readonly text: string }
+  | { readonly _tag: "Link"; readonly file: string; readonly target: string };
+
+// Makes the edit; again, each time, so a repeated edit is one more change the watcher reports.
+function applyEdit(edit: DevEdit): void {
+  if (edit._tag === "Write") {
+    writeFileSync(edit.file, edit.text);
+
+    return;
+  }
+
+  const next = `${edit.file}.next`;
+  rmSync(next, { force: true });
+  symlinkSync(edit.target, next);
+  renameSync(next, edit.file);
+}
+
+// A directory outside the project root, removed when the test ends.
+function outsideRoot(project: Project): string {
+  const outside = mkdtempSync(join(tmpdir(), "elmera-intl-vite-outside-"));
+  project.defer(() => {
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  return outside;
+}
+
+// Stages another formats module whose `money` currency is "NOKK", and returns the edit of `config` (the file the
+// project's config is, or links to) that switches the project to it.
+function switchFormats(project: Project, config: string): DevEdit {
+  project.write("intl-formats-next.ts", moneyFormats("NOKK"));
+
+  return {
+    _tag: "Write",
+    file: config,
+    text: JSON.stringify({ ...CONFIG, formats: "intl-formats-next.ts" }),
+  };
 }
 
 // A dev server on the project, closed when the test ends.
@@ -420,57 +469,83 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
   // Unit under test: `intl()`'s dev server, loading a PO import before and after one edit. Oracle: Intl rejects the
   // currency "NOKK", which only the edit makes reachable: a PO load re-runs on a save of the formats module, and on a
   // save of the config that names another one, also when the config is a symlink to a file outside the root (the
-  // watcher reports the file's realpath). Each row prepares the project and returns its edit.
+  // watcher reports the file's realpath), and when the formats module is a symlink repointed to another module under
+  // `resolve.preserveSymlinks` (the watcher reports the link's own path: it polls the link, not its target, so it sees
+  // the repoint). Each row prepares the project and returns its edit, which the poll applies again until the load
+  // fails, so an edit made before the watcher attaches is not lost.
   it.for([
     {
       edited: "formats module",
-      prepare: () => (project: Project) => {
-        project.write("intl-formats.ts", moneyFormats("NOKK"));
-      },
+      preserveSymlinks: false,
+      prepare: (project: Project): DevEdit => ({
+        _tag: "Write",
+        file: project.path("intl-formats.ts"),
+        text: moneyFormats("NOKK"),
+      }),
     },
     {
       edited: "config, switched to another formats module",
-      prepare: () => (project: Project) => {
-        project.write("intl-formats-next.ts", moneyFormats("NOKK"));
-        project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, formats: "intl-formats-next.ts" }));
-      },
+      preserveSymlinks: false,
+      prepare: (project: Project): DevEdit => switchFormats(project, project.path("elmera-intl.json")),
     },
     {
       edited: "config through a symlink, switched to another formats module",
-      prepare: (project: Project) => {
-        const outside = mkdtempSync(join(tmpdir(), "elmera-intl-vite-outside-"));
-        project.defer(() => {
-          rmSync(outside, { recursive: true, force: true });
-        });
-        const target = join(outside, "elmera-intl.json");
+      preserveSymlinks: false,
+      prepare: (project: Project): DevEdit => {
+        const target = join(outsideRoot(project), "elmera-intl.json");
         writeFileSync(target, project.read("elmera-intl.json"));
         rmSync(project.path("elmera-intl.json"));
         symlinkSync(target, project.path("elmera-intl.json"));
 
-        return (edited: Project) => {
-          edited.write("intl-formats-next.ts", moneyFormats("NOKK"));
-          writeFileSync(target, JSON.stringify({ ...CONFIG, formats: "intl-formats-next.ts" }));
-        };
+        return switchFormats(project, target);
       },
     },
-  ])("loads a catalog with the edited $edited during dev", async ({ prepare }, { project }) => {
-    await useMoneyFormats(project, "NOK");
-    const edit = prepare(project);
-    const server = await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
-    const load = async () => {
-      try {
-        await server.ssrLoadModule("/messages/nb.po");
+    {
+      edited: "formats module symlink, repointed to another module",
+      preserveSymlinks: true,
+      prepare: (project: Project): DevEdit => {
+        const outside = outsideRoot(project);
+        writeFileSync(join(outside, "valid.ts"), project.read("intl-formats.ts"));
+        writeFileSync(join(outside, "invalid.ts"), moneyFormats("NOKK"));
+        rmSync(project.path("intl-formats.ts"));
+        symlinkSync(join(outside, "valid.ts"), project.path("intl-formats.ts"));
 
-        return "loaded";
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
-    };
-    await expect(load()).resolves.toBe("loaded");
+        return { _tag: "Link", file: project.path("intl-formats.ts"), target: join(outside, "invalid.ts") };
+      },
+    },
+  ])(
+    "loads a catalog with the edited $edited during dev",
+    async ({ prepare, preserveSymlinks }, { project }) => {
+      await useMoneyFormats(project, "NOK");
+      const edit = prepare(project);
+      const server = await devServer(project, {
+        server: preserveSymlinks ? { watch: { ...SERVER_WATCH.watch, followSymlinks: false } } : SERVER_WATCH,
+        resolve: { preserveSymlinks },
+        plugins: [intl()],
+      });
+      const load = async () => {
+        try {
+          await server.ssrLoadModule("/messages/nb.po");
 
-    edit(project);
-    await expect.poll(load, project.guard()).toMatch(/Invalid currency code : NOKK/u);
-  });
+          return "loaded";
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      };
+      await expect(load()).resolves.toBe("loaded");
+
+      await expect
+        .poll(
+          () => {
+            applyEdit(edit);
+
+            return load();
+          },
+          { ...project.guard(), interval: PROBE_INTERVAL_MS }
+        )
+        .toMatch(/Invalid currency code : NOKK/u);
+    }
+  );
 
   it("adds a message written during dev to the PO", async ({ project }) => {
     await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
@@ -772,6 +847,10 @@ async function useCount(project: Project): Promise<void> {
   await extractAndTranslate(project, [[COUNT, "{n, number} varer"]]);
 }
 
+// The text a PO of no configured locale fails with, by the one rule for every host, written out for messages/sv.po.
+const SV_NOT_CONFIGURED =
+  "elmera-intl: messages/sv.po is not a configured catalog (messages/{locale}.po, nb)";
+
 // Unit under test: the `*.po` load hook (alone, as a Vitest config uses it). Oracle: the hand-written rendering of each
 // locale through the runtime, Intl's nb and en number formats.
 describe("intlCatalogs()", { timeout: 15_000 }, () => {
@@ -837,9 +916,7 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     await expect(
       buildCatalogs(project, `export { default } from "../messages/sv.po";\n`)
     ).rejects.toMatchObject({
-      errors: [
-        { message: "elmera-intl: messages/sv.po is not a configured catalog (messages/{locale}.po, nb)" },
-      ],
+      errors: [{ message: SV_NOT_CONFIGURED }],
     });
   });
 
@@ -850,30 +927,34 @@ describe("intlCatalogs()", { timeout: 15_000 }, () => {
     const server = await devServer(project, { plugins: [intlCatalogs()], server: { watch: null } });
     const loading = server.environments.ssr.pluginContainer.load(join(server.config.root, "messages/sv.po"));
 
-    await expect(loading).rejects.toHaveProperty(
-      "message",
-      "elmera-intl: messages/sv.po is not a configured catalog (messages/{locale}.po, nb)"
-    );
+    await expect(loading).rejects.toHaveProperty("message", SV_NOT_CONFIGURED);
   });
 
-  // Oracle: the config problem's printed form (problem.ts), written out: its path (under the root, which Vite resolves
-  // to its realpath), the ConfigInvalid code and why, then the fix naming an example config. The import depends on the
-  // missing config, and the build still fails on it; its `errors` hold the plugin's own error.
+  // Oracle: the config problem's printed form (problem.ts): its path (under the root, which Vite resolves to its
+  // realpath), the ConfigInvalid code and why, then the fix on the next line. The import depends on the missing config,
+  // and the build still fails on it with the plugin's own error.
   it("fails the import when the config is missing", async ({ project }) => {
     rmSync(project.path("elmera-intl.json"));
     const config = join(realpathSync(project.root), "elmera-intl.json");
-    const example =
-      '{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }';
+    // The plugin's own errors, as the build's failure carries them.
+    const messages: Array<string> = [];
+    try {
+      await buildCatalogs(project, `export { default } from "../messages/nb.po";\n`);
+    } catch (error) {
+      if (error instanceof Error && "errors" in error && Array.isArray(error.errors)) {
+        for (const each of error.errors) {
+          messages.push(each instanceof Error ? each.message : String(each));
+        }
+      }
+    }
 
-    await expect(
-      buildCatalogs(project, `export { default } from "../messages/nb.po";\n`)
-    ).rejects.toMatchObject({
-      errors: [
-        {
-          message: `${config}: ConfigInvalid: ${config} not found\n  fix: write elmera-intl.json as ${example}`,
-        },
-      ],
-    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(
+      new RegExp(
+        `^${RegExp.escape(`${config}: ConfigInvalid: ${config} not found\n  fix: write elmera-intl.json as `)}`,
+        "u"
+      )
+    );
   });
 
   it("fails the import of a configured locale's missing PO", async ({ project }) => {

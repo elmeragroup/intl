@@ -249,12 +249,12 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
           source: new URLSearchParams(query).has("source"),
         });
 
-        // Failed or not, each by the realpath the watcher reports (a config or formats module may be a symlink). Vite
-        // watches a path as soon as it is added, but ties a load's dependencies to its module only when the hook
-        // returns: an edit reloads a compiled import, while a failed one is simply loaded again on the next request (a
-        // module that imported it keeps its own cached error until it is itself reloaded).
+        // Failed or not. Vite matches the paths of changed files against a module's recorded dependencies, and records
+        // a load's dependencies when the load succeeds.
         for (const dependency of dependencies) {
-          this.addWatchFile(canonical(dependency));
+          for (const path of watchedPaths(dependency)) {
+            this.addWatchFile(path);
+          }
         }
 
         if (outcome._tag === "Failed") {
@@ -281,6 +281,21 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
       return [];
     },
   };
+}
+
+// A catalog import's dependency as the watcher may report its change: the configured path (a change to a symlink itself,
+// such as a repointed link, or any change under `resolve.preserveSymlinks`), and its realpath when that differs (a
+// change to the file a symlink points at). The configured path alone when the realpath cannot be resolved (a drive
+// that is not there), so the import still fails with its own diagnostic.
+function watchedPaths(path: string): ReadonlyArray<string> {
+  let real: string;
+  try {
+    real = canonical(path);
+  } catch {
+    return [path];
+  }
+
+  return real === path ? [path] : [path, real];
 }
 
 // The watcher reports realpaths, and matches a watched path or exclude only by its realpath. The path may not exist
