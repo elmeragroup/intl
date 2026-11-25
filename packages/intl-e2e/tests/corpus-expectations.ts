@@ -1,6 +1,6 @@
-// The corpus' hand-written renders (fixtures/*/components/corpus.tsx, in its order): English as the original corpus
-// writes it, and Norwegian from the fixtures' catalogs (no in Next, nb in Start, same translations). As React's
-// server renderer escapes them, which is what a server-rendered item holds.
+// The corpus' hand-written renders (fixtures/next/components/corpus.tsx and fixtures/start/src/components/corpus.tsx,
+// in their order): English as the original corpus writes it, and Norwegian from the fixtures' catalogs (no in Next, nb
+// in Start, same translations). As React's server renderer escapes them, which is what a server-rendered item holds.
 export const CORPUS: ReadonlyArray<{ readonly en: string; readonly translated: string }> = [
   { en: "Don&#x27;t lose your cart", translated: "Ikke mist handlekurven" },
   { en: "Literal {} braces", translated: "Bokstavelige {} klammer" },
@@ -26,4 +26,10 @@ export const CORPUS: ReadonlyArray<{ readonly en: string; readonly translated: s
     en: "Got 2 users&#x27; &lt;b&gt;{x}&lt;/b&gt;",
     translated: "Fikk 2 brukeres &lt;b&gt;{x}&lt;/b&gt;",
   },
+  {
+    en: "There are orders sold for this person <b>in the last month</b>.",
+    translated: "Det er solgt ordrer for denne personen <b>i løpet av den siste måneden</b>.",
+  },
+  { en: "Pick #1", translated: "Velg #1" },
+  { en: "Pick A", translated: "Velg A" },
 ];

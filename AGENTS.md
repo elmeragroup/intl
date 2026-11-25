@@ -99,10 +99,10 @@ errors. Use a `SAFETY:` comment where the assertion rule requires it. A file-sco
 There are no ADRs. A contract is enforced by a lint rule where lint can see it, because that is
 the fastest feedback, and otherwise by a test; its rationale lives beside its owner in code. The
 `elmera-workspace/*` rules in `tooling/lint` hold naming, the public surface, import boundaries,
-global names and side-effect-free modules, each failing with its fix, and
-`tooling/lint/test/workspace.test.ts` holds the manifests, the catalog and `.oxlintrc.json`. A new
-contract gets a rule or a test there, not a paragraph here. Track unresolved work as GitHub issues,
-never in a backlog file, and cite the issue where code points at open work.
+global names, side-effect-free modules and committed file copies equal to their original, each
+failing with its fix, and `tooling/lint/test/workspace.test.ts` holds the manifests, the catalog and
+`.oxlintrc.json`. A new contract gets a rule or a test there, not a paragraph here. Track unresolved
+work as GitHub issues, never in a backlog file, and cite the issue where code points at open work.
 
 ## Tests
 

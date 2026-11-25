@@ -1,6 +1,6 @@
-// The workspace as the rules see it: which package a linted file belongs to, read from the nearest package.json, and
-// the surface a published package commits. The plugin's one JSON boundary: manifests and surfaces are parsed here,
-// once each, into the fields the rules use.
+// The workspace as the rules see it: which package a linted file belongs to, read from the nearest package.json, the
+// surface a published package commits, the workspace root, and file-copies' option. The plugin's one JSON boundary:
+// manifests, surfaces and rule options are parsed here, manifests and surfaces once each, into the fields the rules use.
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
@@ -176,4 +176,75 @@ export function readSurface(pkg: WorkspacePackage): Surface | undefined {
   surfaces.set(pkg.root, surface);
 
   return surface;
+}
+
+// The file that marks the workspace root.
+const WORKSPACE_MARKER = "pnpm-workspace.yaml";
+
+const rootByDirectory = new Map<string, string | undefined>();
+
+/**
+ * The workspace root above a file: the nearest directory holding `pnpm-workspace.yaml`. Found from the file, not from
+ * where lint started, so an editor or a run from a subdirectory sees the same root.
+ *
+ * @param filename - Absolute path of the linted file.
+ * @returns The root's absolute path, or `undefined` when no `pnpm-workspace.yaml` is above the file.
+ */
+export function workspaceRootOf(filename: string): string | undefined {
+  const directory = dirname(filename);
+
+  if (rootByDirectory.has(directory)) {
+    return rootByDirectory.get(directory);
+  }
+
+  const parent = dirname(directory);
+  const found = existsSync(join(directory, WORKSPACE_MARKER))
+    ? directory
+    : parent === directory
+      ? undefined
+      : workspaceRootOf(directory);
+
+  rootByDirectory.set(directory, found);
+
+  return found;
+}
+
+/** The `elmera-workspace/file-copies` option: one original and the files that must equal it, workspace-relative. */
+export type FileCopies = {
+  /** The original's path from the workspace root, with `/` separators. */
+  readonly original: string;
+  /** Each copy's path from the workspace root, with `/` separators; never empty. */
+  readonly copies: ReadonlyArray<string>;
+};
+
+function isPath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * The rule's option, parsed from its configured options array (`[{ original, copies }]`).
+ *
+ * @param options - The rule's options, as oxlint passes them.
+ * @returns The original and its copies, or `undefined` when the options are not exactly one such object with at least
+ *   one copy.
+ */
+export function parseFileCopies(options: ReadonlyArray<unknown>): FileCopies | undefined {
+  const [option] = options;
+
+  if (options.length !== 1 || !isRecord(option)) {
+    return undefined;
+  }
+
+  const { original, copies } = option;
+
+  if (
+    !isPath(original) ||
+    !Array.isArray(copies) ||
+    copies.length === 0 ||
+    !copies.every((copy) => isPath(copy))
+  ) {
+    return undefined;
+  }
+
+  return { original, copies };
 }
