@@ -13,6 +13,10 @@ msgstr "100 kroner"
 msgid "Action result"
 msgstr "Handlingsresultat"
 
+#: app/(main)/page.tsx
+msgid "Billed to the {payer, select, company {company} private {household} other {customer}}"
+msgstr "Fakturert til {payer, select, company {bedriften} private {husstanden} other {kunden}}"
+
 #: components/unused.tsx
 msgid "Catalog only sentinel"
 msgstr "KATALOGVAKT-7Q2"
@@ -148,6 +152,10 @@ msgstr "Tabulator her"
 #: components/corpus.tsx
 msgid "The <x0>players''</x0> cards"
 msgstr "<x0>Spillernes</x0> kort"
+
+#: app/(main)/page.tsx
+msgid "The server holds {count, plural, one {# parcel} other {# parcels}}"
+msgstr "Serveren har {count, plural, one {# pakke} other {# pakker}}"
 
 #. <x0> = <b>
 #: components/corpus.tsx
