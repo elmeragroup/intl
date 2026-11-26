@@ -32,7 +32,7 @@ export function IntlProvider(props: IntlProviderProps): ReactNode {
  * @returns The translated content.
  */
 export async function T({ children, context }: TProps): Promise<ReactNode> {
-  return renderT(await getIntl(), children, context);
+  return renderT(await getIntl(), children, context, T);
 }
 
 /**

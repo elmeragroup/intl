@@ -272,6 +272,30 @@ describe("components", () => {
     expect([out, errors.length]).toEqual([html, 1]);
   });
 
+  // Unit under test: a <T> written inside a <T>, against a catalog holding the outer message's key, which any
+  // `<T context="nest">a <b>b</b> c</T>` provides (positional tags erase the element), and the inner message's. Oracle:
+  // the children as written, the inner <T> translated by its own entry, with one report naming the fix, under the outer
+  // message's catalog key (context, U+0004, source), written out here; translating would hand the inner <T> the outer
+  // translation's text, which it renders as `ABC`.
+  it("renders a <T> inside a <T> as written, the inner one translated, and reports it, though the catalog has the outer key", () => {
+    const reports: Array<readonly [string, string]> = [];
+    const html = renderToStaticMarkup(
+      <IntlProvider
+        locale="nb"
+        catalog={compiled("nb", { "nest\u0004a <x0>b</x0> c": "A<x0> B </x0>C", b: "innermelding" })}
+        timeZone={OSLO}
+        onError={(error, key) => reports.push([error.message, key])}>
+        <T context="nest">
+          a <T>b</T> c
+        </T>
+      </IntlProvider>
+    );
+    expect([html, reports]).toEqual([
+      "a innermelding c",
+      [["<T> cannot contain another <T>; keep the whole text in the outer <T>", "nest\u0004a <x0>b</x0> c"]],
+    ]);
+  });
+
   it("requires a provider", () => {
     expect(() => renderToStaticMarkup(<T>x</T>)).toThrow("need an <IntlProvider>");
   });
