@@ -27,6 +27,13 @@ export type CommandReport = {
   readonly unreachable: ReadonlyArray<UnreachableArm>;
 };
 
+/** A `check` run: its report, and the source files it read, which a host watches so that a repair of one checks again. */
+export type CheckRun = {
+  readonly report: CommandReport;
+  /** Each source file the scan read, as its path joined to the root; none when the config or formats did not load. */
+  readonly sources: ReadonlyArray<string>;
+};
+
 /**
  * Extract messages and write each locale's PO (`extractCatalogs`). Existing translations, flags and the files are kept
  * when unchanged. Writes nothing when any source or catalog fails.
@@ -53,20 +60,27 @@ export const runExtract = /* @__PURE__ */ Effect.fn("elmera-intl.extract")(funct
  * dry-formats with the app's `formats`, as the loaders will compile it.
  *
  * @param config - The project config.
- * @returns Every problem found, each naming its fix, and the arms the compile does not reach; fails with
- *   `ProjectIoFailed` on I/O the commands do not classify.
+ * @returns Every problem found, each naming its fix, and the arms the compile does not reach, with the source files
+ *   read; fails with `ProjectIoFailed` on I/O the commands do not classify.
  */
 export const runCheck = /* @__PURE__ */ Effect.fn("elmera-intl.check")(function* (config: ProjectConfig) {
   const formats = yield* ProjectFormats.use((loader) => loader.load(config));
 
   if (formats._tag === "ConfigInvalid") {
-    return { problems: [formats.problem], messages: 0, written: [], unreachable: [] } satisfies CommandReport;
+    return {
+      report: { problems: [formats.problem], messages: 0, written: [], unreachable: [] },
+      sources: [],
+    } satisfies CheckRun;
   }
 
   const scanned = yield* scanProject(config);
+  const { sources: read } = scanned;
 
   if (scanned._tag === "Failed") {
-    return { problems: scanned.problems, messages: 0, written: [], unreachable: [] } satisfies CommandReport;
+    return {
+      report: { problems: scanned.problems, messages: 0, written: [], unreachable: [] },
+      sources: read,
+    } satisfies CheckRun;
   }
 
   const messages = scanned.messages.length;
@@ -78,7 +92,7 @@ export const runCheck = /* @__PURE__ */ Effect.fn("elmera-intl.check")(function*
   }
 
   if (problems.length > 0) {
-    return { problems, messages, written: [], unreachable: [] } satisfies CommandReport;
+    return { report: { problems, messages, written: [], unreachable: [] }, sources: read } satisfies CheckRun;
   }
 
   // Last, on catalogs every other rule passed: the artifact the loaders build, compiled and dry-formatted with the
@@ -99,9 +113,7 @@ export const runCheck = /* @__PURE__ */ Effect.fn("elmera-intl.check")(function*
   }
 
   return {
-    problems: compiled,
-    messages,
-    written: [],
-    unreachable,
-  } satisfies CommandReport;
+    report: { problems: compiled, messages, written: [], unreachable },
+    sources: read,
+  } satisfies CheckRun;
 });

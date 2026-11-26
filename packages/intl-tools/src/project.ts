@@ -160,15 +160,22 @@ export function isExcludedDirectory(config: ProjectConfig, directory: string): b
   );
 }
 
-/** What a scan found: the messages, or every extraction problem. */
+/** What a scan found: the messages, or every extraction problem; either way, the source files it read. */
 export type ScanResult =
   | {
       readonly _tag: "Scanned";
       readonly messages: ReadonlyArray<ProjectMessage>;
       /** `IncludeUnmatched` problems: `check` reports them, `extract` refuses to write. */
       readonly unmatched: ReadonlyArray<Problem>;
+      /** Each source file read, as its path joined to the root: what a host watches for the next run. */
+      readonly sources: ReadonlyArray<string>;
     }
-  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> };
+  | {
+      readonly _tag: "Failed";
+      readonly problems: ReadonlyArray<Problem>;
+      /** Each source file read, as its path joined to the root: a repair of any of them can clear the problems. */
+      readonly sources: ReadonlyArray<string>;
+    };
 
 // Whether a path names a file, following links. Absent (as `statSync` with `throwIfNoEntry: false` reads ENOENT and
 // ENOTDIR) is no file, like a dangling symlink; any other failure (a self-looping link) is the scan's.
@@ -193,7 +200,7 @@ function isErrno(cause: unknown, code: string): boolean {
  *
  * @param config - The project config.
  * @returns The messages by key (in first-seen order) and the include patterns that match no file, or every
- *   extraction problem; fails with `ProjectIoFailed` on I/O the scan does not classify.
+ *   extraction problem, with the source files read; fails with `ProjectIoFailed` on I/O the scan does not classify.
  */
 export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(function* (config: ProjectConfig) {
   const files = yield* FileSystem.FileSystem;
@@ -237,9 +244,11 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
     { source: string; context: string | undefined; references: Set<string>; comments: Set<string> }
   >();
   const scannedPaths = new Set<string>();
+  const read: Array<string> = [];
   for (const file of sources) {
     // The catalogs' reference, spelled as it always was: `/` for every backslash, on any host.
     const absolute = paths.join(config.root, file);
+    read.push(absolute);
     const path = paths.relative(config.root, absolute).split("\\").join("/");
     scannedPaths.add(path);
     const text = yield* readText(files, absolute).pipe(Effect.mapError(platformFailed("scan")));
@@ -289,7 +298,7 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
   }
 
   if (problems.length > 0) {
-    return { _tag: "Failed", problems: [...unmatched, ...problems] } satisfies ScanResult;
+    return { _tag: "Failed", problems: [...unmatched, ...problems], sources: read } satisfies ScanResult;
   }
 
   const messages = [...byKey].map(([key, entry]) => ({
@@ -300,7 +309,7 @@ export const scanProject = /* @__PURE__ */ Effect.fn("elmera-intl.scan")(functio
     comments: [...entry.comments].toSorted(),
   }));
 
-  return { _tag: "Scanned", messages, unmatched } satisfies ScanResult;
+  return { _tag: "Scanned", messages, unmatched, sources: read } satisfies ScanResult;
 });
 
 function cachedExtract(cache: ParseCache, path: string, text: string): ReturnType<typeof extractMessages> {

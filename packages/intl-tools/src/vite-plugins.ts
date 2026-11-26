@@ -4,13 +4,13 @@ import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { readFileSync, realpathSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Environment, Plugin, ResolvedConfig } from "vite";
 
 import { CATALOG_UPDATE_EVENT } from "@elmeragroup/intl/internal/catalog";
 
 import { compileCatalogImport } from "./catalog-import";
-import { oneShot } from "./command-run";
+import { inProcessRun } from "./command-run";
 import type { HostSessions } from "./host-sessions";
 import { hostSessions } from "./host-sessions";
 import { describeProblem } from "./problem";
@@ -133,14 +133,13 @@ export function intlPlugins(
       apply: "build",
       // An input's ancestor watch can cover the output directories, and a rebuild on any environment's output loops
       // (its own, or another's in ping-pong). Set here: the watcher reads its options before any build hook runs.
-      configResolved({ environments, root }) {
-        const builds = Object.values(environments).map(({ build }) => build);
-        const outputs = builds.map(({ outDir }) => {
-          const output = canonical(resolve(root, outDir));
-
-          return new RegExp(`^${RegExp.escape(output)}(?:${RegExp.escape(sep)}|$)`, "u");
-        });
-        builds.forEach((build) => {
+      // Rolldown matches every watched file against them, a source the check read included (a bundle the config's
+      // `include` matches).
+      configResolved(config) {
+        const outputs = outputDirectories(config).map(
+          (output) => new RegExp(`^${RegExp.escape(output)}(?:${RegExp.escape(sep)}|$)`, "u")
+        );
+        Object.values(config.environments).forEach(({ build }) => {
           if (build.watch) {
             build.watch.exclude = [build.watch.exclude ?? [], outputs].flat();
           }
@@ -156,6 +155,20 @@ export function intlPlugins(
           this.addWatchFile(realpathSync(nearestExisting(input)));
         });
         const result = await check(buildSessions, this.environment, config);
+        // And each source the check read, so a repair of one rebuilds: a failed check stops the build before it loads
+        // a module, and a source the build never imports is never in its graph. Each file itself, never a directory: a
+        // directory watch is recursive, past the extractor's own pruning (`node_modules`, `.git`), and a file-only
+        // `build.watch.include` drops it. Never one under an output directory (a bundle the config's `include`
+        // matches), which every build rewrites: watched, it rebuilds itself. The outputs are canonical, and so is the
+        // second of a source's paths when the first is not. A source created after this check is not watched (#64).
+        const outputs = outputDirectories(this.environment.getTopLevelConfig());
+        result.sources
+          .map((source) => watchedPaths(source))
+          .filter((paths) => !paths.some((path) => outputs.some((output) => isWithin(output, path))))
+          .flat()
+          .forEach((path) => {
+            this.addWatchFile(path);
+          });
 
         if (!result.ok) {
           this.error(result.output);
@@ -176,25 +189,68 @@ export function intlPlugins(
   ];
 }
 
-// The CLI's own check, so the build fails with exactly what `elmera-intl check` prints.
+// The CLI's own check, so the build fails with exactly what `elmera-intl check` prints, and the source files it read.
 // Its output collected per call, so environments checking in parallel each fail with their own.
 async function check(
   sessions: HostSessions<Environment, PluginServices>,
   session: Environment,
   config: string
-): Promise<{ readonly ok: true } | { readonly ok: false; readonly output: string }> {
+): Promise<
+  { readonly sources: ReadonlyArray<string> } & (
+    | { readonly ok: true }
+    | { readonly ok: false; readonly output: string }
+  )
+> {
   let output = "";
   const collect = (text: string) => {
     output += text;
   };
-  const outcome = await sessions.run(
+  const { outcome, sources } = await sessions.run(
     session,
-    oneShot("check", { configPath: config, crash: "reject" }).pipe(
+    inProcessRun("check", { configPath: config, crash: "reject" }).pipe(
       Effect.provide(Reporter.layer({ stdout: collect, stderr: collect }))
     )
   );
 
-  return outcome === "ok" ? { ok: true } : { ok: false, output: `${NAME} check failed:\n${output}` };
+  return outcome === "ok"
+    ? { ok: true, sources }
+    : { ok: false, output: `${NAME} check failed:\n${output}`, sources };
+}
+
+// An environment's resolved build options, as far as its output directories go, on every Vite the peer range admits:
+// Vite 8 resolves `rolldownOptions` (its `rollupOptions` a deprecated accessor of the same object), Vite 6 and 7 only
+// `rollupOptions`. Only Rolldown takes a `cwd`.
+type OutputBuild = {
+  readonly outDir: string;
+  readonly rolldownOptions?: OutputBundler & { readonly cwd?: string | undefined };
+  readonly rollupOptions?: OutputBundler;
+};
+type OutputBundler = { readonly output?: OutputEntry | ReadonlyArray<OutputEntry> | undefined };
+type OutputEntry = { readonly dir?: string | undefined };
+
+// Every environment's output directories, canonical, where the bundler writes them: `build.outDir` against the root
+// (Vite resolves it, and passes it as the `dir` of an entry without one), and each bundler output entry's own `dir`
+// against the bundler's working directory (Rolldown's `cwd`, else the process's), as the bundler resolves it, not the
+// root, which Vite's own watch assumes (`getResolvedOutDirs`). Vite refuses `output.file`, so no output is a file.
+function outputDirectories({ environments, root }: ResolvedConfig): Array<string> {
+  return Object.values(environments).flatMap(({ build }) => {
+    const options: OutputBuild = build;
+    // `rollupOptions` read only when there is no `rolldownOptions` (Vite 8 deprecates its accessor).
+    const { output = [] } = options.rolldownOptions ?? options.rollupOptions ?? {};
+    const cwd = options.rolldownOptions?.cwd ?? process.cwd();
+
+    return [
+      resolve(root, options.outDir),
+      ...[output].flat().flatMap(({ dir }) => (dir === undefined ? [] : [resolve(cwd, dir)])),
+    ].map((dir) => canonical(dir));
+  });
+}
+
+// Whether `path` is `directory` or lies under it.
+function isWithin(directory: string, path: string): boolean {
+  const below = relative(directory, path);
+
+  return below === "" || (below !== ".." && !below.startsWith(`..${sep}`) && !isAbsolute(below));
 }
 
 // The config, each locale's PO and the formats module; just the config when it is missing or invalid, so fixing it

@@ -7,7 +7,7 @@ import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
 import type { ProjectIoFailed } from "./catalog-files";
-import type { CommandReport } from "./commands";
+import type { CheckRun, CommandReport } from "./commands";
 import { runCheck, runExtract } from "./commands";
 import type { Problem } from "./problem";
 import { describeProblem } from "./problem";
@@ -30,8 +30,9 @@ export class ProblemsFound
 /** A one-shot command. */
 export type OneShotCommand = "extract" | "check";
 
-// The command's report. I/O the commands do not classify is the crash it was: the error Node raised is the defect, so
-// it prints with its own stack and a host that rejects on a crash rejects with it.
+// The command's report, with the source files a check read (none for an extract: no host watches what it read). I/O
+// the commands do not classify is the crash it was: the error Node raised is the defect, so it prints with its own
+// stack and a host that rejects on a crash rejects with it.
 const commandReport = /* @__PURE__ */ Effect.fn("elmera-intl.report")(function* (
   command: OneShotCommand,
   configPath: string
@@ -39,13 +40,18 @@ const commandReport = /* @__PURE__ */ Effect.fn("elmera-intl.report")(function* 
   const loaded = yield* readConfig(configPath);
 
   if (loaded._tag === "ConfigInvalid") {
-    return { problems: [loaded.problem], messages: 0, written: [], unreachable: [] } satisfies CommandReport;
+    return {
+      report: { problems: [loaded.problem], messages: 0, written: [], unreachable: [] },
+      sources: [],
+    } satisfies CheckRun;
   }
 
-  const report: Effect.Effect<CommandReport, ProjectIoFailed, ProjectServices> =
-    command === "extract" ? runExtract(loaded.config) : runCheck(loaded.config);
+  const run: Effect.Effect<CheckRun, ProjectIoFailed, ProjectServices> =
+    command === "extract"
+      ? runExtract(loaded.config).pipe(Effect.map((report) => ({ report, sources: [] })))
+      : runCheck(loaded.config);
 
-  return yield* report.pipe(Effect.catchTag("ProjectIoFailed", (failure) => Effect.die(failure.cause)));
+  return yield* run.pipe(Effect.catchTag("ProjectIoFailed", (failure) => Effect.die(failure.cause)));
 });
 
 /**
@@ -73,8 +79,21 @@ export const runOnce = /* @__PURE__ */ Effect.fn("elmera-intl.once")(function* (
   json: boolean,
   configPath: string
 ) {
+  const { problems } = yield* printedRun(command, json, configPath);
+
+  if (problems > 0) {
+    return yield* new ProblemsFound({ count: problems });
+  }
+});
+
+// `runOnce`'s run and report, ending in how many problems it printed and the source files a check read.
+const printedRun = /* @__PURE__ */ Effect.fn("elmera-intl.printed")(function* (
+  command: OneShotCommand,
+  json: boolean,
+  configPath: string
+) {
   const reporter = yield* Reporter;
-  const report = yield* commandReport(command, configPath);
+  const { report, sources } = yield* commandReport(command, configPath);
 
   if (json) {
     // stdout carries only the JSON document, so tooling can parse it.
@@ -88,9 +107,7 @@ export const runOnce = /* @__PURE__ */ Effect.fn("elmera-intl.once")(function* (
     );
   }
 
-  if (report.problems.length > 0) {
-    return yield* new ProblemsFound({ count: report.problems.length });
-  }
+  return { problems: report.problems.length, sources };
 });
 
 function renderJsonReport(report: CommandReport): string {
@@ -129,9 +146,45 @@ export type CrashHandling =
 /** How a one-shot command ended: clean, with problems it printed, or crashed. */
 export type OneShotOutcome = "ok" | "problems" | "crashed";
 
+/** A one-shot command as a host ran it in-process: how it ended, and the source files a check read. */
+export type InProcessRun = {
+  /** Clean, with problems it printed, or crashed. */
+  readonly outcome: OneShotOutcome;
+  /** Each source file the check read, as its path joined to the project root; none for an extract or a crash. */
+  readonly sources: ReadonlyArray<string>;
+};
+
 /**
  * `elmera-intl <command> --config <configPath>` as a host runs it in-process: the same output as the executable,
- * without parsing arguments, ending in how it went.
+ * without parsing arguments, ending in how it went and what a check read. A watch build watches those sources, so a
+ * repair of one checks again even when the failed check stopped the build from loading it.
+ *
+ * @param command - The command to run.
+ * @param options - The project's config path and how a crash is taken.
+ * @returns An effect that writes the report on the Reporter and succeeds with the outcome (`"ok"` when clean,
+ *   `"problems"` when the command printed problems, `"crashed"` on a reported crash) and the sources a check read; with
+ *   `crash: "reject"`, a crash stays its defect.
+ */
+export const inProcessRun = /* @__PURE__ */ Effect.fn("elmera-intl.inProcess")(function* (
+  command: OneShotCommand,
+  options: { readonly configPath: string; readonly crash: CrashHandling }
+) {
+  const program = printedRun(command, false, options.configPath).pipe(
+    Effect.map(({ problems, sources }): InProcessRun => ({
+      outcome: problems > 0 ? "problems" : "ok",
+      sources,
+    }))
+  );
+
+  return yield* options.crash === "report"
+    ? reportCrash(program).pipe(
+        Effect.catchDefect(() => Effect.succeed<InProcessRun>({ outcome: "crashed", sources: [] }))
+      )
+    : program;
+});
+
+/**
+ * `inProcessRun`'s outcome alone, for a host that watches nothing.
  *
  * @param command - The command to run.
  * @param options - The project's config path and how a crash is taken.
@@ -142,14 +195,9 @@ export const oneShot = /* @__PURE__ */ Effect.fn("elmera-intl.oneShot")(function
   command: OneShotCommand,
   options: { readonly configPath: string; readonly crash: CrashHandling }
 ) {
-  const program = runOnce(command, false, options.configPath).pipe(
-    Effect.as<OneShotOutcome>("ok"),
-    Effect.catchTag("ProblemsFound", () => Effect.succeed<OneShotOutcome>("problems"))
-  );
+  const { outcome } = yield* inProcessRun(command, options);
 
-  return yield* options.crash === "report"
-    ? reportCrash(program).pipe(Effect.catchDefect(() => Effect.succeed<OneShotOutcome>("crashed")))
-    : program;
+  return outcome;
 });
 
 /**

@@ -502,6 +502,7 @@ test("scans the sources of a file system that is not the host's disk", async () 
       { key: "Hello", source: "Hello", context: undefined, references: ["src/example.ts"], comments: [] },
     ],
     unmatched: [],
+    sources: ["/memory/src/example.ts"],
   });
 });
 
@@ -556,5 +557,6 @@ test("scans a Win32 file system with Win32 paths on any host", async () => {
       { key: "Hello", source: "Hello", context: undefined, references: ["src/example.ts"], comments: [] },
     ],
     unmatched: [],
+    sources: [WIN32_SOURCE],
   });
 });
