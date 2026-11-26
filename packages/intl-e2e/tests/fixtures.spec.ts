@@ -255,6 +255,22 @@ test.describe(`next fixture, ${BUILD}, server components`, () => {
     await expect(page.locator("#client-element")).toHaveText("Hei fra et element");
     await expect(page.locator("#client-from")).toHaveText("Deklarert melding");
   });
+
+  // Unit under test: the react-server build of `/react`, whose <T> resolves <Select> and <Plural> in a server component
+  // (the corpus's go through the client <T>). Oracle: the page's English sources and their translations in the
+  // fixture's committed catalog (intl/no.po), each Norwegian branch worded unlike its English one.
+  for (const [locale, expected] of [
+    ["en", { select: "Billed to the company", plural: "The server holds 1 parcel" }],
+    ["no", { select: "Fakturert til bedriften", plural: "Serveren har 1 pakke" }],
+  ] as const) {
+    test(`resolves a server component's <Select> and <Plural>, in ${locale}`, async ({ page }) => {
+      await page.context().addCookies([{ name: "locale", value: locale, url: NEXT_URL }]);
+      await page.goto(NEXT_URL);
+
+      await expect(page.locator("#rsc-select")).toHaveText(expected.select);
+      await expect(page.locator("#rsc-plural")).toHaveText(expected.plural);
+    });
+  }
 });
 
 // Unit under test: createRequestConfig (`/next/server`) behind withIntl's alias to the fixture's request module, whose
