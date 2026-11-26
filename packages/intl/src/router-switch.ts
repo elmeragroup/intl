@@ -1,18 +1,25 @@
 // The React side of one switch queue per router, shared by the Next and Start `useLocaleSwitch`.
 import { useInsertionEffect, useMemo, useState, useSyncExternalStore } from "react";
 
-import type { QueuedSwitch, SwitchOutcome, SwitchQueue } from "./adapter";
-import { createSwitchQueue } from "./adapter";
+import type { QueuedSwitch, SwitchOutcome } from "./locale-switch";
+import { isPendingOn, queueFor, subscribeTo } from "./locale-switch";
 
-/** What `useRouterSwitch` gives a host hook: the switch function it returns, and the queue's part of its `isPending`. */
+/**
+ * What a host's `useLocaleSwitch` returns (each host's `LocaleSwitch` maps it), and what `useRouterSwitch` gives it: the
+ * switch function, and the queue's part of its `isPending`.
+ */
 export type RouterSwitch = {
   /**
-   * Queue a switch to `locale` on the router's queue; resolves to how that switch ended, and never rejects. Callable
-   * from the commit of the render that returned it (an effect or an event handler); called from a render that never
-   * committed, it throws, since nothing was committed for it to run.
+   * Persist `locale`, then refresh the server data, as a switch queued on the router's queue; resolves to how that
+   * switch ended (latest switch wins), and never rejects. Callable from the commit of the render that returned it (an
+   * effect or an event handler); called from a render that never committed, it throws, since nothing was committed for
+   * it to run.
    */
   readonly switchLocale: (locale: string) => Promise<SwitchOutcome>;
-  /** Whether any switch on the router's queue is in flight, from whichever mount it started. */
+  /**
+   * True at least while a switch under the router is in flight, from whichever mount it started; `LocaleSwitch` says
+   * what else counts and until when.
+   */
   readonly isPending: boolean;
 };
 
@@ -24,10 +31,6 @@ export type RouterSwitch = {
  * @returns The port and mode the switch runs with.
  */
 export type PrepareSwitch<Router> = (router: Router) => QueuedSwitch;
-
-// One queue per router key, made on the client the first time a mount subscribes or switches (never in render). The
-// hosts' keys never collide: Next keys on its navigator's `refresh` function, Start on a router object.
-const queues = new WeakMap<WeakKey, SwitchQueue>();
 
 // What one mount last committed under one router key.
 type Box<Router> = { current: PrepareSwitch<Router> };
@@ -45,29 +48,11 @@ const serverSnapshot = (): boolean => false;
 
 const newBoxes = <Router>(): Boxes<Router> => new WeakMap();
 
-function queueFor(key: WeakKey): SwitchQueue {
-  const existing = queues.get(key);
-  if (existing) {
-    return existing;
-  }
-  const created = createSwitchQueue();
-  queues.set(key, created);
-
-  return created;
-}
-
-// The callbacks a mount keeps past its render (subscribe, getSnapshot, switchLocale) are these module-level functions
-// bound to exactly the values each reads. A closure made in the hook's body would share its scope with the insertion
-// effect's, which holds the render's `prepare`, and a minifier inlining the hook's helpers can merge any two such
-// scopes; a bound function carries only its bound arguments.
-function subscribeTo(key: WeakKey, listener: () => void): () => void {
-  return queueFor(key).subscribe(listener);
-}
-
-function isPendingOn(key: WeakKey): boolean {
-  return queues.get(key)?.isPending() ?? false;
-}
-
+// The callbacks a mount keeps past its render (subscribe, getSnapshot, switchLocale) are module-level functions
+// (`subscribeTo` and `isPendingOn` from ./locale-switch, `switchThrough` below) bound to exactly the values each reads.
+// A closure made in the hook's body would share its scope with the insertion effect's, which holds the render's
+// `prepare`, and a minifier inlining the hook's helpers can merge any two such scopes; a bound function carries only
+// its bound arguments.
 function switchThrough<Router>(slot: Slot<Router>, locale: string): Promise<SwitchOutcome> {
   const { key, router, box } = slot;
   if (box === null) {

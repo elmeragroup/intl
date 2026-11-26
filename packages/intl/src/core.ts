@@ -15,13 +15,6 @@ export {
   type RelativeTimeOptions,
   type Translate,
 } from "./intl";
-export {
-  createLocaleSwitcher,
-  resolveIntlConfig,
-  type LocaleSwitchPort,
-  type RequestConfig,
-  type RequestLike,
-  type ServerAdapter,
-  type SwitchOutcome,
-} from "./adapter";
+export { resolveIntlConfig, type RequestConfig, type RequestLike, type ServerAdapter } from "./adapter";
+export { createLocaleSwitcher, type LocaleSwitchPort, type SwitchOutcome } from "./locale-switch";
 export { negotiateLocale, type NegotiateLocaleOptions } from "./negotiate";
