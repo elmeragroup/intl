@@ -12,7 +12,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import { posix } from "node:path";
 
 import { nodeSyncError, readText } from "./catalog-files";
-import type { ConfigLoaded } from "./project-config";
+import type { ConfigLoaded, ConfigSnapshot } from "./project-config";
 import {
   configInvalid,
   escapingGlob,
@@ -152,4 +152,55 @@ export const readConfig = /* @__PURE__ */ Effect.fn("elmera-intl.readConfig")(fu
       onSuccess: (text) => decodeConfig(text, path, paths.dirname(paths.resolve(path)), paths),
     })
   );
+});
+
+// Whether a path exists as Node's existsSync says, which `readConfig` asks, but through the file system's asynchronous
+// `access` and then `stat`, as existsSync stats a path `access` reached where that can succeed on a dangling link
+// (Windows; node src/node_file.cc, v26.13.0, lines 1099-1109). On POSIX `access` follows the link, so the stat changes
+// nothing there. Any failure to reach the path is absent, as existsSync swallows every error, except a check the
+// permission model denies, which existsSync throws, so it is the crash it is in `readConfig`.
+const existsAsNode = (files: FileSystem.FileSystem, path: string) =>
+  files.access(path).pipe(
+    Effect.andThen(files.stat(path)),
+    Effect.as(true),
+    Effect.catch((error) =>
+      Predicate.hasProperty(error.reason.cause, "code") && error.reason.cause.code === "ERR_ACCESS_DENIED"
+        ? Effect.die(nodeSyncError(error))
+        : Effect.succeed(false)
+    )
+  );
+
+/**
+ * The watch's read of the config (`followConfig`): `readConfig`'s config or problem, worded as there, and the text it
+ * read. One read, asynchronous and interruptible, with no check before it, so a read stalled on a mount never holds a
+ * stop. Only a read that failed asks whether the path exists, as `readConfig` asks first (Node's existsSync), and asks
+ * asynchronously too (`existsAsNode`), so a lookup stalled on a mount holds no stop either: "not found" when it does not
+ * (a missing file, a dangling or looping link, a file or an unreadable directory on the way), "not JSON" when it does.
+ *
+ * @param path - Path of `elmera-intl.json`, as the problems name it.
+ * @returns The text read (none when the file is missing or cannot be read) and the config, or the problem with it.
+ */
+export const readConfigSnapshot = /* @__PURE__ */ Effect.fn("elmera-intl.readConfigSnapshot")(function* (
+  path: string
+) {
+  const files = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const read = yield* Effect.result(readText(files, path));
+
+  if (Result.isSuccess(read)) {
+    return {
+      text: read.success,
+      loaded: decodeConfig(read.success, path, paths.dirname(paths.resolve(path)), paths),
+    } satisfies ConfigSnapshot;
+  }
+
+  const exists = yield* existsAsNode(files, path);
+
+  return {
+    text: undefined,
+    loaded: configInvalid(
+      path,
+      exists ? `not JSON: ${nodeSyncError(read.failure).message}` : `${path} not found`
+    ),
+  } satisfies ConfigSnapshot;
 });

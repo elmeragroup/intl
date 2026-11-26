@@ -1,10 +1,14 @@
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import { chmodSync, mkdirSync, symlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
 import { loadConfig, parseConfig } from "../src/project-config";
-import { decodeConfig, readConfig } from "../src/project-config-read";
+import { decodeConfig, readConfig, readConfigSnapshot } from "../src/project-config-read";
 import { NodePlatform } from "../src/project-services";
+import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 
 // Each test owns its project (see `Project`).
@@ -55,6 +59,81 @@ it("reads a config that starts with a byte order mark as withIntl reads it", asy
 
   expect(read).toEqual(loadConfig(path));
   expect(read._tag).toBe("ConfigInvalid");
+});
+
+// Unit under test: the watch's read of the config (`readConfigSnapshot`), one read with no existence check before it.
+// Oracle: `readConfig`, the one-shot commands' read, which asks Node's existsSync first: for every way a path fails
+// to be read, the same config or the same problem, word for word ("not found" for what existsSync calls missing,
+// "not JSON" with the read's error otherwise).
+it.for([
+  { path: "missing.json", setup: () => undefined },
+  { path: "a-directory", setup: (project: Project) => mkdirSync(project.path("a-directory")) },
+  {
+    path: "dangling.json",
+    setup: (project: Project) => symlinkSync(project.path("gone.json"), project.path("dangling.json")),
+  },
+  {
+    path: "loop.json",
+    setup: (project: Project) => symlinkSync(project.path("loop.json"), project.path("loop.json")),
+  },
+  { path: "file/elmera-intl.json", setup: (project: Project) => project.write("file", "") },
+  { path: "locked/elmera-intl.json", setup: (project: Project) => project.lock("locked") },
+  {
+    path: "unreadable.json",
+    setup: (project: Project) => {
+      project.write("unreadable.json", "{}");
+      chmodSync(project.path("unreadable.json"), 0o000);
+    },
+  },
+  {
+    path: "elmera-intl.json",
+    setup: (project: Project) => project.write("elmera-intl.json", '{ "include": ["src/**"] }'),
+  },
+])("reads $path in the watch as the commands read it", async ({ path, setup }, { project }) => {
+  setup(project);
+  const config = project.path(path);
+
+  const reread = await Effect.runPromise(readConfigSnapshot(config).pipe(Effect.provide(NodePlatform)));
+
+  expect(reread.loaded).toEqual(
+    await Effect.runPromise(readConfig(config).pipe(Effect.provide(NodePlatform)))
+  );
+});
+
+// Unit under test: the watch's read of the config (`readConfigSnapshot`), on a file system whose `access` succeeds on a
+// dangling link, as Windows' can, where Node's existsSync then stats the path too (node src/node_file.cc, v26.13.0,
+// lines 1099-1109). Oracle: `readConfig` on Node, whose existsSync calls a dangling link missing: "not found".
+it("reads a dangling link in the watch as not found where access reaches the link itself", async ({
+  project,
+}) => {
+  symlinkSync(project.path("gone.json"), project.path("dangling.json"));
+  const config = project.path("dangling.json");
+  const linkAccess = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.gen(function* () {
+      const live = yield* FileSystem.FileSystem;
+
+      return {
+        ...live,
+        access: Effect.fn("linkAccess")(function* (
+          path: string,
+          options?: Parameters<typeof live.access>[1]
+        ) {
+          if (path !== config) {
+            yield* live.access(path, options);
+          }
+        }),
+      };
+    })
+  );
+
+  const reread = await Effect.runPromise(
+    readConfigSnapshot(config).pipe(Effect.provide(Layer.provideMerge(linkAccess, NodePlatform)))
+  );
+
+  expect(reread.loaded).toEqual(
+    await Effect.runPromise(readConfig(config).pipe(Effect.provide(NodePlatform)))
+  );
 });
 
 // Unit under test: `decodeConfig`, the Schema decode the CLI, Vite and Vitest run. Oracles: `parseConfig`, the hand

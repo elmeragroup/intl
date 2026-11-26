@@ -16,10 +16,13 @@ import { CatalogFiles, ioFailureReason } from "../src/catalog-files";
 import type { CatalogSyncResult } from "../src/catalog-sync";
 import type { ProjectConfig } from "../src/project-config";
 import { loadConfig } from "../src/project-config";
+import { readConfigSnapshot } from "../src/project-config-read";
 import type { ProjectServices } from "../src/project-services";
 import { projectServices } from "../src/project-services";
 import type { SyncResult, SyncServices, Watching, WatchMode, WatchOutput, WatchServices } from "../src/watch";
 import { CatalogSync, SyncFailed, watchCatalogs } from "../src/watch";
+import type { Following } from "../src/watch-follow";
+import { followConfig } from "../src/watch-follow";
 import type { TreeListener } from "../src/watch-trees";
 import { FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
@@ -218,14 +221,16 @@ export function syncing(
   );
 }
 
-/** A watch a test started on the test clock (see `launchWatch`). */
-export type ClockedWatch = {
+/** A watch a test started on the test clock (see `launchWatch`): `watching` is what its start returned. */
+export type ClockedWatch<A = Watching> = {
   /** The tag of each result the watch reported, in order, unless the test writes them itself. */
   readonly reports: Array<SyncResult["_tag"]>;
+  /** Each result the watch reported, in order, unless the test writes them itself. */
+  readonly results: Array<SyncResult>;
   readonly stop: Deferred.Deferred<void>;
   /** The watch's own scope, inside the test's. */
   readonly scope: Scope.Closeable;
-  readonly watching: Watching;
+  readonly watching: A;
 };
 
 /**
@@ -273,28 +278,40 @@ export type ClockedWatchOptions = {
   readonly strategy?: "sequential" | "parallel";
   /** The stop signal; a new one unless a test gives it before the watch starts or as its trees open. */
   readonly stop?: Deferred.Deferred<void>;
+  /** The file system the project is read through; the synchronous one unless a test holds or breaks a read. */
+  readonly fileSystem?: Layer.Layer<FileSystem.FileSystem>;
 };
 
-/**
- * Start the watch in a scope of its own inside the test's, with its sync step built in that scope so it lives as long
- * as the watch. It starts from a test-clock wake, so its poll and its debounce time from 1 ms. Its reads are Node's
- * synchronous ones (`SYNC_FILE_SYSTEM`), so each sync completes within the clock's move.
- *
- * @param project - The watched project.
- * @param options - What the test changes about the watch.
- * @returns Once the start has run up to its first suspension (a held first sync), the run, with the fiber that
- *   finishes the start.
- */
-export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
+/** How `launchFollow` starts `followConfig`. */
+export type FollowOptions = ClockedWatchOptions & {
+  /** The config's path relative to the root; `elmera-intl.json` unless a test follows one elsewhere. */
+  readonly config?: string;
+  /** Whether the test hands the follow its first read of the config, as the CLI does, or the follow reads it itself. */
+  readonly first?: "handed" | "own";
+};
+
+// The watch's caller, which starts it on its path, its mode, its stop and the test's output.
+type Begin<A> = (
+  path: string,
+  mode: WatchMode,
+  stop: Deferred.Deferred<void>,
+  output: WatchOutput<never>
+) => Effect.Effect<A, never, WatchServices | ProjectServices | Scope.Scope>;
+
+// Starts the watch in a scope of its own inside the test's (see `launchWatch`).
+const launch = /* @__PURE__ */ Effect.fnUntraced(function* <A>(
   project: Project,
-  options: ClockedWatchOptions = {}
+  options: FollowOptions,
+  begin: Begin<A>
 ) {
   const reports: Array<SyncResult["_tag"]> = [];
+  const results: Array<SyncResult> = [];
   const scope = yield* Scope.fork(yield* Effect.scope, options.strategy ?? "sequential");
   const stop = options.stop ?? (yield* Deferred.make<void>());
+  const platform = Layer.merge(options.fileSystem ?? SYNC_FILE_SYSTEM, NodePath.layer);
   const services = yield* Layer.buildWithScope(
     Layer.merge(
-      Layer.provide(options.layer ?? CatalogSync.layer(), projectServices(options.files, SYNC_PLATFORM)),
+      Layer.provideMerge(options.layer ?? CatalogSync.layer(), projectServices(options.files, platform)),
       options.events ?? FileEvents.layer()
     ),
     scope
@@ -305,19 +322,54 @@ export const launchWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
       ((result) =>
         Effect.sync(() => {
           reports.push(result._tag);
+          results.push(result);
         })),
     ready: Effect.void,
   };
-  const starting = watchCatalogs(projectConfig(project), options.mode ?? POLLING, stop, output).pipe(
-    Scope.provide(scope),
-    Effect.provideContext(services)
-  );
+  const starting = begin(
+    project.path(options.config ?? "elmera-intl.json"),
+    options.mode ?? POLLING,
+    stop,
+    output
+  ).pipe(Scope.provide(scope), Effect.provideContext(services));
   const clocked =
     options.clock === undefined ? starting : starting.pipe(Effect.provideService(Clock.Clock, options.clock));
   const watching = yield* wake(clocked);
 
-  return { reports, stop, scope, watching };
+  return { reports, results, stop, scope, watching };
 });
+
+/**
+ * Start `watchCatalogs` on the config as read now, in a scope of its own inside the test's, with its sync step built in
+ * that scope so it lives as long as the watch. It starts from a test-clock wake, so its poll and its debounce time from
+ * 1 ms. Its reads are Node's synchronous ones (`SYNC_FILE_SYSTEM`), so each sync completes within the clock's move.
+ *
+ * @param project - The watched project.
+ * @param options - What the test changes about the watch.
+ * @returns Once the start has run up to its first suspension (a held first sync), the run, with the fiber that
+ *   finishes the start.
+ */
+export const launchWatch = (project: Project, options: ClockedWatchOptions = {}) =>
+  launch(project, options, (_path, mode, stop, output) =>
+    watchCatalogs(projectConfig(project), mode, stop, output)
+  );
+
+/**
+ * Start `followConfig` on the config's path, as `launchWatch` starts `watchCatalogs`: handed the test's read of the
+ * config, as the CLI hands it, unless the follow reads it itself.
+ *
+ * @param project - The watched project.
+ * @param options - What the test changes about the follow.
+ * @returns Once the start has run up to its first suspension, the run, with the fiber that finishes the start.
+ */
+export const launchFollow = (project: Project, options: FollowOptions = {}) =>
+  launch(project, options, (path, mode, stop, output) =>
+    options.first === "own"
+      ? followConfig(path, undefined, mode, stop, output)
+      : readConfigSnapshot(path).pipe(
+          Effect.flatMap((first) => followConfig(path, first, mode, stop, output))
+        )
+  );
 
 /**
  * Start the watch (see `launchWatch`) and wait for its start.
@@ -335,6 +387,22 @@ export const startWatch = /* @__PURE__ */ Effect.fnUntraced(function* (
   return { ...run, watching: yield* Fiber.join(watching) } satisfies ClockedWatch;
 });
 
+/**
+ * Start the follow (see `launchFollow`) and wait for its start.
+ *
+ * @param project - The watched project.
+ * @param options - What the test changes about the follow.
+ * @returns The started follow.
+ */
+export const startFollow = /* @__PURE__ */ Effect.fnUntraced(function* (
+  project: Project,
+  options: FollowOptions = {}
+) {
+  const { watching, ...run } = yield* launchFollow(project, options);
+
+  return { ...run, watching: yield* Fiber.join(watching) } satisfies ClockedWatch<Following>;
+});
+
 /** File events a test delivers itself: the listener of each tree the watch has open. */
 export type DeliveredEvents = {
   /** The `FileEvents` the watch listens through. */
@@ -345,6 +413,8 @@ export type DeliveredEvents = {
   readonly opening: () => number;
   /** How many times the watch has called `FileEvents.watch`. */
   readonly calls: () => number;
+  /** How many trees the watch has closed. */
+  readonly closes: () => number;
   /**
    * The listener of an open tree, to deliver an event or an error to.
    *
@@ -370,6 +440,11 @@ export type DeliveredEventsOptions = {
   readonly refuses?: { readonly dir: string; readonly error: Error };
   /** Each tree's close dies with this, as a watcher that fails to close. */
   readonly closeFails?: Error;
+  /**
+   * When a close that fails dies: on a later turn, as a host watcher that closes asynchronously, unless `"at once"`,
+   * inside the step that closes it, as `fs.watch`'s synchronous `close()`.
+   */
+  readonly closeFailsWhen?: "later" | "at once";
   /** What each tree's close waits for before it closes, as a host watcher that closes asynchronously; called as it begins. */
   readonly releasing?: (dir: string) => Promise<void>;
 };
@@ -383,12 +458,15 @@ export type DeliveredEventsOptions = {
 export function deliveredEvents(options: DeliveredEventsOptions = {}): DeliveredEvents {
   const listeners = new Map<string, TreeListener>();
   let calls = 0;
+  let closes = 0;
 
   return {
     layer: Layer.succeed(FileEvents, {
       watch: Effect.fn("DeliveredEvents.watch")(function* (dir: string, listener: TreeListener) {
         calls += 1;
         const opening = options.opening?.(dir);
+        // Handled at once: a refusal the watch awaits a turn later (or never, a stop landing first) is not unhandled.
+        opening?.catch(() => undefined);
 
         if (opening !== undefined) {
           yield* Effect.promise(() => opening);
@@ -408,22 +486,27 @@ export function deliveredEvents(options: DeliveredEventsOptions = {}): Delivered
               })
             )
           ),
-          () =>
-            Effect.promise(() => options.releasing?.(dir) ?? Promise.resolve()).pipe(
-              Effect.andThen(
-                Effect.suspend(() => {
-                  listeners.delete(dir);
+          () => {
+            const close = Effect.suspend(() => {
+              listeners.delete(dir);
+              closes += 1;
 
-                  return options.closeFails === undefined ? Effect.void : Effect.die(options.closeFails);
-                })
-              )
-            )
+              return options.closeFails === undefined ? Effect.void : Effect.die(options.closeFails);
+            });
+
+            return options.closeFailsWhen === "at once"
+              ? close
+              : Effect.promise(() => options.releasing?.(dir) ?? Promise.resolve()).pipe(
+                  Effect.andThen(close)
+                );
+          }
         );
       }),
     }),
     open: () => [...listeners.keys()],
     opening: () => calls - listeners.size,
     calls: () => calls,
+    closes: () => closes,
     listener: (dir) => {
       const listener = listeners.get(dir);
 
