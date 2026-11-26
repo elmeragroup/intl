@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 
 import { Button } from "@elmeragroup/fuse/button";
 
-import { DocumentRoot } from "../components/document-root";
+import { StatusDocument } from "../components/status-document";
 import { SITE_NAME } from "../lib/site";
 
 type GlobalErrorProps = {
@@ -22,17 +22,12 @@ type GlobalErrorProps = {
  */
 export default function GlobalError({ retry }: GlobalErrorProps): ReactElement {
   return (
-    <DocumentRoot>
-      <body className="m-0 grid min-h-dvh place-items-center bg-background p-6 font-sans text-foreground antialiased">
-        <title>{`Something went wrong · ${SITE_NAME}`}</title>
-        <main className="flex max-w-md flex-col items-start gap-4">
-          <h1 className="m-0 font-heading text-2xl font-semibold">Something went wrong</h1>
-          <p className="m-0 text-muted-foreground">
-            This page could not be shown. Try again, or reload the page if the site was just updated.
-          </p>
-          <Button onClick={retry}>Try again</Button>
-        </main>
-      </body>
-    </DocumentRoot>
+    <StatusDocument heading="Something went wrong">
+      <title>{`Something went wrong · ${SITE_NAME}`}</title>
+      <p className="m-0 text-muted-foreground">
+        This page could not be shown. Try again, or reload the page if the site was just updated.
+      </p>
+      <Button onClick={retry}>Try again</Button>
+    </StatusDocument>
   );
 }

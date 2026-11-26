@@ -17,7 +17,7 @@ const WEIGHTS = [500, 600] as const;
 /** A font as `ImageResponse` takes it. */
 type OgFont = {
   readonly name: string;
-  readonly data: ArrayBuffer;
+  readonly data: Buffer;
   readonly weight: (typeof WEIGHTS)[number];
   readonly style: "normal";
 };
@@ -31,7 +31,7 @@ export function loadOgFonts(): Array<OgFont> {
   return WEIGHTS.map((weight) => {
     // Tracing cannot resolve a path built at runtime and would otherwise pull in the whole project; next.config.ts
     // names these files instead.
-    const file = readFileSync(
+    const data = readFileSync(
       join(
         /* turbopackIgnore: true */ process.cwd(),
         `node_modules/@fontsource/inter/files/inter-latin-${String(weight)}-normal.woff`
@@ -40,7 +40,7 @@ export function loadOgFonts(): Array<OgFont> {
 
     return {
       name: OG_FONT_FAMILY,
-      data: file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
+      data,
       weight,
       style: "normal",
     };

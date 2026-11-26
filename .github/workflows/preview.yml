@@ -34,7 +34,8 @@ name: Preview
 #
 # GitHub runs no pull_request workflow for a PR with merge conflicts, so a PR that closes conflicted gets no teardown.
 # Every `azure` run therefore ends with a reconcile (docs-container-app.sh): labels of PRs GitHub reports closed are
-# removed, and every active revision no label points at is deactivated.
+# removed, the triggering PR's included, and every active revision no label points at is deactivated, a failed
+# deploy's candidate among them.
 
 on:
   pull_request:
@@ -65,8 +66,9 @@ jobs:
             echo "A maintainer can push the branch to $GITHUB_REPOSITORY to get one."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Builds and pushes the PR's image, and the placeholder when the app has no bootstrap revision. Nothing here changes
-  # the app. `deploy` is true only when an image was pushed for the `azure` job to deploy.
+  # Builds and pushes the PR's image, and the placeholder when the app has no bootstrap revision to reactivate. Nothing
+  # here changes the app. `image` is set only when an image was pushed for the `azure` job to deploy, and `origin` is
+  # the preview URL baked into it, which the deploy reports.
   build:
     if: >-
       github.event.action != 'closed' &&
@@ -82,8 +84,8 @@ jobs:
       id-token: write
       pull-requests: read
     outputs:
-      deploy: ${{ steps.image.outputs.image != '' }}
       image: ${{ steps.image.outputs.image }}
+      origin: ${{ steps.origin.outputs.origin }}
       bootstrap-image: ${{ steps.bootstrap.outputs.image }}
     steps:
       - name: Checkout the automation
@@ -163,9 +165,10 @@ jobs:
             DOCS_ORIGIN=${{ steps.origin.outputs.origin }}
           cache-scope: intl-docs
 
-      # Only when the app has lost its bootstrap revision: the `azure` job recreates it from this image.
+      # Only when the app has no bootstrap revision, active or not: the `azure` job recreates it from this image. An
+      # inactive one is reactivated instead.
       - name: Checkout the PR base
-        if: steps.probe.outputs.bootstrap == 'missing'
+        if: steps.probe.outputs.placeholder == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -174,7 +177,7 @@ jobs:
           persist-credentials: false
 
       - name: Find the placeholder
-        if: steps.probe.outputs.bootstrap == 'missing'
+        if: steps.probe.outputs.placeholder == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -186,7 +189,7 @@ jobs:
       # The environment pulls only from the preview registry, so the placeholder lives there too.
       - name: Push placeholder
         id: bootstrap
-        if: steps.probe.outputs.bootstrap == 'missing'
+        if: steps.probe.outputs.placeholder == 'true'
         uses: ./.github/actions/push-docs-image
         with:
           registry: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
@@ -203,7 +206,7 @@ jobs:
       !cancelled() &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       vars.AZURE_CLIENT_ID_PREVIEW != '' &&
-      (github.event.action == 'closed' || needs.build.outputs.deploy == 'true')
+      (github.event.action == 'closed' || needs.build.outputs.image != '')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -241,13 +244,15 @@ jobs:
 
       # Deploy: waits until Azure reports the new revision ready (the runner is not on the VPN, so it cannot request
       # the preview), then moves the PR's label to it. Teardown: removes the PR's label. Reports `outcome` (deployed,
-      # removed, nothing or skipped), and on a deploy `url` and `revision` as soon as the label is written.
+      # removed, nothing or skipped), and on a deploy `url` (the origin the build baked in) and `revision` as soon as
+      # the label is written, with no Azure read in between.
       - name: Change the preview
         id: change
         if: steps.login.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ needs.build.outputs.image }}
+          ORIGIN: ${{ needs.build.outputs.origin }}
           BOOTSTRAP_IMAGE: ${{ needs.build.outputs.bootstrap-image }}
           ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APPS_ENVIRONMENT_PREVIEW }}
           REGISTRY: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
@@ -255,14 +260,6 @@ jobs:
           # Run ID also changes on reopen, even if the head is unchanged.
           SUFFIX: ${{ format('pr-{0}-{1}-{2}', github.event.pull_request.number, github.run_id, github.run_attempt) }}
         run: bash .github/scripts/docs-container-app.sh "$MODE"
-
-      # Runs whatever the change step did, so a failed deploy's leftover revision is cleaned up too; a failure here
-      # fails the job without touching the outcome above.
-      - name: Reconcile the app
-        if: ${{ !cancelled() && steps.login.outcome == 'success' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/docs-container-app.sh reconcile
 
       - name: Update the preview comment
         if: >-
@@ -293,3 +290,11 @@ jobs:
             } else if (OUTCOME === "deployed") {
               await github.rest.issues.createComment({ ...issue, body });
             }
+
+      # Runs whatever the change step and the comment did, so a failed deploy's leftover revision is cleaned up too; a
+      # failure here fails the job without touching the outcome or the comment above.
+      - name: Reconcile the app
+        if: ${{ !cancelled() && steps.login.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/docs-container-app.sh reconcile

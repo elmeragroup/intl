@@ -6,9 +6,10 @@ set -euo pipefail
 # script owns the preview app and its revisions, including the app's first deployment. Production is not set up.
 #
 #   origin-preview  print the origin the PR's preview serves, before its image is built
-#   probe           print `bootstrap=present` or `bootstrap=missing`: whether the app has its active bootstrap revision
+#   probe           print `placeholder=true` when the app has no bootstrap revision to reactivate, so the build must push
+#                   the placeholder image, and `placeholder=false` otherwise
 #   deploy          deploy the image as the PR's revision, labelled pr-<n>; report `outcome` (deployed or skipped), and
-#                   the URL and revision once the label is written
+#                   the URL and revision as soon as the label is written
 #   teardown        remove the PR's label; report `outcome` (removed, nothing or skipped)
 #   reconcile       bring the app back to its rest state after either (see reconcile below)
 #
@@ -29,6 +30,9 @@ case "$mode" in
 esac
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 bootstrap="${APP}--bootstrap"
+# azure-cli's `core.only_show_errors` setting, read from the environment (knack's AZURE_<section>_<option>), in place of
+# `--only-show-errors` on every call.
+export AZURE_CORE_ONLY_SHOW_ERRORS=true
 
 # The environment lives in another resource group than the app, so it is named by its full resource ID: a bare name
 # would be looked up in the app's resource group.
@@ -53,8 +57,7 @@ require_digest() {
 # image before the app exists. A preview is its `pr-<n>` label URL, `<app>---pr-<n>.<domain>`.
 if [[ "$mode" == origin-preview ]]; then
   require_environment_id
-  domain=$(az containerapp env show --ids "$ENVIRONMENT" \
-    --query properties.defaultDomain --output tsv --only-show-errors)
+  domain=$(az containerapp env show --ids "$ENVIRONMENT" --query properties.defaultDomain --output tsv)
   if [[ -z "$domain" ]]; then
     echo "Container Apps environment $ENVIRONMENT reported no default domain." >&2
     exit 1
@@ -63,28 +66,45 @@ if [[ "$mode" == origin-preview ]]; then
   exit 0
 fi
 
+# The live gate (docs-preview-gate.sh) for PR #<pr>, from inside this serialized section: the PR can change while the
+# run waits in the queue or deploys. Returns 0 when the run may act, 3 when the PR has moved on, and 1 when the gate
+# itself failed. A third argument replaces the step summary the gate explains a skip in.
+live_gate() {
+  local out
+  out=$(mktemp)
+  if PR="$2" GITHUB_OUTPUT="$out" GITHUB_STEP_SUMMARY="${3:-$GITHUB_STEP_SUMMARY}" \
+    bash "$script_dir/docs-preview-gate.sh" "$1" >&2; then
+    case "$(sed -n 's/^act=//p' "$out")" in
+      true) return 0 ;;
+      false) return 3 ;;
+    esac
+  fi
+  echo "The live gate failed." >&2
+  return 1
+}
+
 # Container Apps rejects a change while another operation is provisioning the app (409 ContainerAppOperationInProgress)
 # or holds its lock (409 ContainerAppLockConflict), such as the platform's own work after a deploy. Each change waits
 # out that rejection, bounded to about four minutes. A rejected change applied nothing, and each `az` change re-reads
 # the app before writing it, so repeating it is safe. Any other error fails at once.
 #
-# `change_app --gate <mode> ...` runs the live gate (docs-preview-gate.sh) before every attempt, so a wait of minutes
-# never applies a decision the PR has since overturned (a `no-preview` label added, a PR reopened): it returns 3 when
-# the gate says the PR moved on.
+# `change_app --gate <mode> <pr> [summary] -- ...` runs the live gate for PR #<pr> before every attempt, so a wait of
+# minutes never applies a decision the PR has since overturned (a `no-preview` label added, a PR reopened). Returns 0
+# when the change applied, 3 only when the gate says the PR moved on, and 1 for every failure, the gate's or Azure's:
+# az exits 3 too (ResourceNotFoundError), which must never read as a skip.
 change_app() {
-  local gate="" attempt error status act
+  local gate_args=() attempt error status
   if [[ "$1" == --gate ]]; then
-    gate="$2"
-    shift 2
+    shift
+    while [[ "$1" != -- ]]; do
+      gate_args+=("$1")
+      shift
+    done
+    shift
   fi
   for attempt in {1..24}; do
-    if [[ -n "$gate" ]]; then
-      act=$(gate_act "$gate")
-      case "$act" in
-        true) ;;
-        false) return 3 ;;
-        *) echo "The live gate failed." >&2; return 1 ;;
-      esac
+    if [[ "${#gate_args[@]}" -gt 0 ]]; then
+      live_gate "${gate_args[@]}" || return
     fi
     if error=$(az "$@" 2>&1); then
       return 0
@@ -93,48 +113,47 @@ change_app() {
     fi
     echo "$error" >&2
     if [[ "$error" != *ContainerAppOperationInProgress* && "$error" != *ContainerAppLockConflict* ]]; then
-      return "$status"
+      echo "az $1 $2 failed with status $status." >&2
+      return 1
     fi
     if [[ "$attempt" -eq 24 ]]; then
-      echo "Gave up after another operation kept the app busy." >&2
-      return "$status"
+      echo "Gave up after another operation kept the app busy (az status $status)." >&2
+      return 1
     fi
     # Jitter keeps runs that waited on the same operation from colliding again.
     sleep $((5 + RANDOM % 11))
   done
 }
 
-# The live gate, from inside this serialized section: the PR can change while the run waits in the queue or deploys.
-# Prints `true` or `false`, and nothing when the gate itself failed, which callers treat as fatal.
-gate_act() {
-  local out
-  out=$(mktemp)
-  GITHUB_OUTPUT="$out" bash "$script_dir/docs-preview-gate.sh" "$1" >&2 || return 0
-  sed -n 's/^act=//p' "$out"
-}
+# Whether the app exists. A successful list with no match means absent.
+app=$(az containerapp list --resource-group "$RESOURCE_GROUP" --query "[?name == '${APP}'].name" --output tsv)
+echo "App: ${app:-absent}." >&2
 
-# Whether the app exists, and whether its bootstrap revision is active: `absent`, `inactive` or `active`. A successful
-# list with no match means absent. `revision list` returns only active revisions unless given `--all` (azure-cli's
-# containerapp list_revisions), so the bootstrap lookup passes it to tell a deactivated revision from a missing one.
-app=$(az containerapp list --resource-group "$RESOURCE_GROUP" \
-  --query "[?name == '${APP}'].name" --output tsv --only-show-errors)
-bootstrap_state=absent
-if [[ -n "$app" ]]; then
-  bootstrap_active=$(az containerapp revision list --all --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "[?name == '${bootstrap}'].to_string(properties.active)" --output tsv --only-show-errors)
-  case "$bootstrap_active" in
+# Whether the app's bootstrap revision is active: `absent`, `inactive` or `active`. `revision list` returns only active
+# revisions unless given `--all` (azure-cli's containerapp list_revisions), so the lookup passes it to tell a deactivated
+# revision, which the deploy reactivates, from a missing one, which it recreates from the placeholder image. Only the
+# probe and the deploy read it; teardown and reconcile need only the app's ingress.
+read_bootstrap_state() {
+  local active
+  bootstrap_state=absent
+  [[ -n "$app" ]] || return 0
+  active=$(az containerapp revision list --all --name "$APP" --resource-group "$RESOURCE_GROUP" \
+    --query "[?name == '${bootstrap}'].to_string(properties.active)" --output tsv)
+  case "$active" in
     true) bootstrap_state=active ;;
     false) bootstrap_state=inactive ;;
   esac
-fi
-echo "App: ${app:-absent}; bootstrap revision: $bootstrap_state." >&2
+  echo "Bootstrap revision: $bootstrap_state." >&2
+}
 
 if [[ "$mode" == probe ]]; then
-  if [[ "$bootstrap_state" == active ]]; then echo "bootstrap=present"; else echo "bootstrap=missing"; fi
+  read_bootstrap_state
+  if [[ "$bootstrap_state" == absent ]]; then echo "placeholder=true"; else echo "placeholder=false"; fi
   exit 0
 fi
 
 : "${GITHUB_OUTPUT:?Set GITHUB_OUTPUT}"
+: "${GITHUB_STEP_SUMMARY:?Set GITHUB_STEP_SUMMARY}"
 : "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY}"
 
 # The app's default route is the `bootstrap` revision, which runs the placeholder image (apps/docs/placeholder) and
@@ -144,6 +163,7 @@ fi
 # preview identity and pulls its images with it.
 ensure_bootstrap() {
   local weight
+  read_bootstrap_state
   case "$bootstrap_state" in
     absent)
       require_digest BOOTSTRAP_IMAGE "${BOOTSTRAP_IMAGE:-}"
@@ -158,25 +178,62 @@ ensure_bootstrap() {
           --revisions-mode multiple --revision-suffix bootstrap \
           --min-replicas 0 --max-replicas 3 \
           --scale-rule-name http --scale-rule-type http --scale-rule-http-concurrency 50 \
-          --output none --only-show-errors
+          --output none
       else
         echo "$APP has no bootstrap revision; creating it from the placeholder."
         change_app containerapp update --name "$APP" --resource-group "$RESOURCE_GROUP" \
-          --image "$BOOTSTRAP_IMAGE" --revision-suffix bootstrap --output none --only-show-errors
+          --image "$BOOTSTRAP_IMAGE" --revision-suffix bootstrap --output none
       fi ;;
     inactive)
       echo "Reactivating $bootstrap."
       change_app containerapp revision activate --name "$APP" --resource-group "$RESOURCE_GROUP" \
-        --revision "$bootstrap" --output none --only-show-errors ;;
+        --revision "$bootstrap" --output none ;;
     active) ;;
   esac
   weight=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic[?revisionName == '${bootstrap}'].weight | [0]" \
-    --output tsv --only-show-errors)
+    --query "properties.configuration.ingress.traffic[?revisionName == '${bootstrap}'].weight | [0]" --output tsv)
   if [[ "$weight" != 100 ]]; then
     echo "Pinning $APP's default traffic to $bootstrap (it held '${weight}')."
     change_app containerapp ingress traffic set --name "$APP" --resource-group "$RESOURCE_GROUP" \
-      --revision-weight "${bootstrap}=100" --output none --only-show-errors
+      --revision-weight "${bootstrap}=100" --output none
+  fi
+}
+
+# The preview identity exists to pull images, so no container may request tokens for it: its lifecycle is `None`, which
+# still lets the platform pull with it ("Use this when you have a managed identity that is only used for ACR image pull,
+# scale rules, or Key Vault secrets", learn.microsoft.com/azure/container-apps/managed-identity, "Control managed
+# identity availability"). Azure's default, `All`, would hand its tokens to every PR's code over IMDS. This sets it on a
+# new app and on one created before it, before any PR revision exists, and changes nothing when it already holds.
+#
+# azure-cli 2.84's containerapp module has no flag for `identitySettings` (`create` and `update` build their bodies from
+# their own arguments), so this is a generic `az resource patch` at the module's own API version (_clients.py
+# CURRENT_API_VERSION), which waits for the operation as `az` does for every long-running one. A PATCH merges
+# `configuration` and replaces the array, so the array is rebuilt from the current entries. The module's own changes
+# send only what they edit (`update` PATCHes the template, the label commands only `ingress.traffic`), so they keep it.
+ensure_identity_lifecycle() {
+  local api_version=2025-07-01 app_json current settings
+  app_json=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --output json |
+    jq -c '{id, settings: (.properties.configuration.identitySettings // [])}')
+  current=$(jq -r --arg id "$MANAGED_IDENTITY_ID" \
+    '[.settings[] | select((.identity | ascii_downcase) == ($id | ascii_downcase)) | .lifecycle] | .[0] // "All (default)"' \
+    <<< "$app_json")
+  if [[ "$current" == None ]]; then
+    echo "The preview identity's lifecycle is None."
+    return 0
+  fi
+  echo "The preview identity's lifecycle is $current; setting it to None."
+  settings=$(jq -c --arg id "$MANAGED_IDENTITY_ID" \
+    '{configuration: {identitySettings: ([.settings[] | select((.identity | ascii_downcase) != ($id | ascii_downcase))]
+      + [{identity: $id, lifecycle: "None"}])}}' <<< "$app_json")
+  change_app resource patch --ids "$(jq -r .id <<< "$app_json")" --api-version "$api_version" \
+    --properties "$settings" --output none
+  current=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --output json |
+    jq -r --arg id "$MANAGED_IDENTITY_ID" \
+      '[(.properties.configuration.identitySettings // [])[] | select((.identity | ascii_downcase) == ($id | ascii_downcase)) | .lifecycle] | .[0] // "All (default)"')
+  echo "The preview identity's lifecycle is now $current."
+  if [[ "$current" != None ]]; then
+    echo "The preview identity's lifecycle did not change to None; no PR revision is deployed." >&2
+    exit 1
   fi
 }
 
@@ -185,66 +242,83 @@ ensure_bootstrap() {
 show_routes() {
   local traffic active
   traffic=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic" --output json --only-show-errors | jq -c .)
+    --query "properties.configuration.ingress.traffic" --output json | jq -c .)
   active=$(az containerapp revision list --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "[].name" --output json --only-show-errors | jq -c .)
+    --query "[].name" --output json | jq -c .)
   echo "$1: traffic $traffic"
   echo "$1: active revisions $active"
+}
+
+# What Azure reports of a revision: its whole `properties` but its template, so a state, a replica count or a
+# provisioning error no decision reads still shows.
+describe_revision() {
+  az containerapp revision show --name "$APP" --resource-group "$RESOURCE_GROUP" --revision "$1" --output json |
+    jq -c '{name} + (.properties | del(.template))'
 }
 
 # Deactivates a revision. Returns non-zero on failure; the caller decides whether that is fatal.
 deactivate() {
   echo "Deactivating $1."
   change_app containerapp revision deactivate --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --revision "$1" --output none --only-show-errors
+    --revision "$1" --output none
+}
+
+# Removes the label `pr-<n>` while GitHub reports PR #<n> closed: the teardown gate runs for that PR before every
+# attempt, including each retry after a 409, so a PR that reopens meanwhile keeps its label. Returns change_app's
+# status: 0 removed, 3 the PR is open again, 1 failed. A second argument replaces the gate's step summary.
+remove_label() {
+  echo "Removing the label pr-$1."
+  change_app --gate teardown "$1" ${2:+"$2"} -- containerapp revision label remove \
+    --name "$APP" --resource-group "$RESOURCE_GROUP" --label "pr-$1" --output none
 }
 
 # After the triggering PR's own change, under the lock, one rule brings the app back to its rest state:
 #
-#   1. a label `pr-<m>` stays unless GitHub reports PR #m closed now (a PR that closed without its teardown, which
-#      GitHub skips for a PR with merge conflicts, loses its label here);
+#   1. a label `pr-<m>` stays unless GitHub reports PR #m closed, checked before each attempt to remove it. This covers
+#      a PR that closed without its teardown, which GitHub skips for a PR with merge conflicts, the triggering PR
+#      included if it closed while its deploy wrote the label; an open PR, such as the one just deployed, is a skip;
 #   2. an active revision stays only if it is `bootstrap` or a label points at it (an older revision of a PR, or a
-#      candidate a stopped run left behind, is deactivated).
+#      candidate a failed or stopped deploy left behind, is deactivated). Labels are read after step 1, from Azure, so a
+#      label write that applied although the CLI reported a failure keeps its revision.
 #
 # It runs as its own step after the deploy or teardown, under the same lock, so its failure shows on its own and never
 # hides an outcome already reported.
 #
 # Changes for the triggering PR must succeed; changes for any other PR are best effort, logged per PR, and never fail
-# the run, so one PR's stale state cannot block another's preview.
+# the run, so one PR's stale state cannot block another's preview. A failure for the triggering PR still lets the rest
+# of the sweep run, then fails the step.
 reconcile() {
-  local labels label number state labelled revisions revision
+  local labels label number status labelled revisions revision failed=false
   labels=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic[?label].label" --output tsv --only-show-errors)
+    --query "properties.configuration.ingress.traffic[?label].label" --output tsv)
   for label in $labels; do
     [[ "$label" =~ ^pr-([0-9]+)$ ]] || continue
     number="${BASH_REMATCH[1]}"
-    [[ "$number" == "$PR" ]] && continue
-    if ! state=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${number}" --jq .state); then
-      echo "Reconcile PR #$number: could not read its state; leaving its label." >&2
-      continue
-    fi
-    if [[ "$state" != closed ]]; then
-      continue
-    fi
-    echo "Reconcile PR #$number: closed; removing its label."
-    change_app containerapp revision label remove --name "$APP" --resource-group "$RESOURCE_GROUP" \
-      --label "$label" --output none --only-show-errors ||
-      echo "Reconcile PR #$number: could not remove its label." >&2
+    status=0
+    # An open PR is the usual case, not news for the run's summary.
+    remove_label "$number" /dev/null || status=$?
+    case "$status" in
+      0) echo "Reconcile PR #$number: closed; its label is removed." ;;
+      3) echo "Reconcile PR #$number: not closed; its label stays." ;;
+      *)
+        echo "Reconcile PR #$number: could not remove its label." >&2
+        [[ "$number" == "$PR" ]] && failed=true ;;
+    esac
   done
   labelled=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic[?label].revisionName" --output tsv --only-show-errors)
+    --query "properties.configuration.ingress.traffic[?label].revisionName" --output tsv)
   revisions=$(az containerapp revision list --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "[?properties.active].name" --output tsv --only-show-errors)
+    --query "[?properties.active].name" --output tsv)
   for revision in $revisions; do
     if [[ "$revision" == "$bootstrap" ]] || grep -qxF "$revision" <<< "$labelled"; then
       continue
     fi
-    if [[ "$revision" == "${APP}--pr-${PR}-"* ]]; then
-      deactivate "$revision"
-    else
-      deactivate "$revision" || echo "Reconcile: could not deactivate $revision; leaving it." >&2
+    if ! deactivate "$revision"; then
+      echo "Reconcile: could not deactivate $revision." >&2
+      [[ "$revision" == "${APP}--pr-${PR}-"* ]] && failed=true
     fi
   done
+  [[ "$failed" == false ]]
 }
 
 # Readiness is Azure's own signal: the app's latestReadyRevisionName reaching the candidate, polled every 10 seconds for
@@ -254,11 +328,8 @@ reconcile() {
 wait_until_ready() {
   local attempt revision_json app_json
   for attempt in {1..30}; do
-    # The revision's whole `properties` but its template, so a state, a replica count or a provisioning error the
-    # decision does not read still shows.
-    revision_json=$(az containerapp revision show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-      --revision "$candidate" --output json --only-show-errors | jq -c '{name} + (.properties | del(.template))')
-    app_json=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --output json --only-show-errors |
+    revision_json=$(describe_revision "$candidate")
+    app_json=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --output json |
       jq -c '{provisioningState: .properties.provisioningState, latestRevisionName: .properties.latestRevisionName, latestReadyRevisionName: .properties.latestReadyRevisionName}')
     echo "Poll $attempt: revision $revision_json"
     echo "Poll $attempt: app      $app_json"
@@ -284,17 +355,19 @@ if [[ "$mode" == reconcile ]]; then
     echo "No preview app exists; nothing to reconcile."
     exit 0
   fi
-  reconcile
+  status=0
+  reconcile || status=$?
   show_routes "After the run"
-  exit 0
+  exit "$status"
 fi
 
 if [[ "$mode" == teardown ]]; then
-  act=$(gate_act teardown)
-  case "$act" in
-    true) ;;
-    false) echo "outcome=skipped" >> "$GITHUB_OUTPUT"; exit 0 ;;
-    *) echo "The live gate failed." >&2; exit 1 ;;
+  status=0
+  live_gate teardown "$PR" || status=$?
+  case "$status" in
+    0) ;;
+    3) echo "outcome=skipped" >> "$GITHUB_OUTPUT"; exit 0 ;;
+    *) exit 1 ;;
   esac
   if [[ -z "$app" ]]; then
     echo "No preview app exists; nothing to remove."
@@ -302,19 +375,17 @@ if [[ "$mode" == teardown ]]; then
     exit 0
   fi
   label=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic[?label == 'pr-${PR}'].label | [0]" --output tsv --only-show-errors)
+    --query "properties.configuration.ingress.traffic[?label == 'pr-${PR}'].label | [0]" --output tsv)
   own=$(az containerapp revision list --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "[?properties.active && starts_with(name, '${APP}--pr-${PR}-')].name" --output tsv --only-show-errors)
+    --query "[?properties.active && starts_with(name, '${APP}--pr-${PR}-')].name" --output tsv)
   outcome=nothing
   if [[ -n "$label" ]]; then
-    echo "Removing the label pr-${PR}."
     status=0
-    change_app --gate teardown containerapp revision label remove --name "$APP" --resource-group "$RESOURCE_GROUP" \
-      --label "pr-${PR}" --output none --only-show-errors || status=$?
+    remove_label "$PR" || status=$?
     case "$status" in
       0) outcome=removed ;;
       3) outcome=skipped ;;
-      *) exit "$status" ;;
+      *) exit 1 ;;
     esac
   elif [[ -n "$own" ]]; then
     # No label, but revisions of the PR's: the reconcile step deactivates them.
@@ -325,29 +396,36 @@ if [[ "$mode" == teardown ]]; then
   exit 0
 fi
 
+# The preview's URL is the origin the build baked into the image (origin-preview), checked here, before anything
+# changes, so nothing stands between the label write and the outcome that announces it.
 : "${IMAGE:?Set IMAGE}"
+: "${ORIGIN:?Set ORIGIN}"
 : "${MANAGED_IDENTITY_ID:?Set MANAGED_IDENTITY_ID}"
 : "${SUFFIX:?Set SUFFIX}"
 require_digest IMAGE "$IMAGE"
 require_environment_id
+if [[ ! "$ORIGIN" =~ ^"https://${APP}---pr-${PR}."[a-z0-9.-]+$ ]]; then
+  echo "ORIGIN must be https://${APP}---pr-${PR}.<environment domain>, got: '$ORIGIN'" >&2
+  exit 1
+fi
 ensure_bootstrap
+ensure_identity_lifecycle
 show_routes "Before the deploy"
 
+# A candidate that fails at any point below carries no label, so the reconcile step that follows deactivates it from the
+# labels Azure reports: this step never deactivates on its own, since a label write the CLI reports failed may still
+# have applied.
 candidate="${APP}--${SUFFIX}"
 echo "Deploying $IMAGE as $candidate."
-# A failed update can still leave the candidate behind; it carries no label, so the next run's reconcile deactivates it.
 if ! change_app containerapp update --name "$APP" --resource-group "$RESOURCE_GROUP" \
-  --image "$IMAGE" --revision-suffix "$SUFFIX" --output none --only-show-errors; then
+  --image "$IMAGE" --revision-suffix "$SUFFIX" --output none; then
   echo "The update failed. What Azure reports of $candidate, if it exists:" >&2
-  az containerapp revision show --name "$APP" --resource-group "$RESOURCE_GROUP" --revision "$candidate" \
-    --output json --only-show-errors | jq -c '{name} + (.properties | del(.template))' >&2 ||
-    echo "(no such revision, or it could not be read)" >&2
+  describe_revision "$candidate" >&2 || echo "(no such revision, or it could not be read)" >&2
   exit 1
 fi
 ready=false
 wait_until_ready
 if [[ "$ready" != true ]]; then
-  deactivate "$candidate"
   exit 1
 fi
 
@@ -356,24 +434,19 @@ fi
 # the reconcile step that follows cannot take it back.
 echo "Labelling $candidate pr-${PR}."
 status=0
-change_app --gate deploy containerapp revision label add --name "$APP" --resource-group "$RESOURCE_GROUP" \
-  --revision "$candidate" --label "pr-${PR}" --yes --output none --only-show-errors || status=$?
+change_app --gate deploy "$PR" -- containerapp revision label add --name "$APP" --resource-group "$RESOURCE_GROUP" \
+  --revision "$candidate" --label "pr-${PR}" --yes --output none || status=$?
 case "$status" in
   0) ;;
   3)
     echo "The PR moved on before $candidate could take its label; it takes none."
     echo "outcome=skipped" >> "$GITHUB_OUTPUT"
-    deactivate "$candidate"
     exit 0 ;;
-  *)
-    deactivate "$candidate" || echo "Could not deactivate $candidate; the reconcile step retries." >&2
-    exit "$status" ;;
+  *) exit 1 ;;
 esac
-fqdn=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-  --query properties.configuration.ingress.fqdn --output tsv --only-show-errors)
 {
   echo "outcome=deployed"
-  echo "url=https://${APP}---pr-${PR}.${fqdn#*.}"
+  echo "url=${ORIGIN}"
   echo "revision=${candidate}"
 } >> "$GITHUB_OUTPUT"
 echo "PR #$PR's preview: $candidate."
