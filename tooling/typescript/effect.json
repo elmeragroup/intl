@@ -19,19 +19,15 @@
         "namespaceImportPackages": ["effect"],
         // The unstable APIs the workspace uses (effect marks them unstable: a minor release may break them, and the
         // exact catalog pin means only a deliberate bump brings one). Each entry covers its submodules. The tools'
-        // CLI: effect/cli parses it, effect/Stdio gives the executable its arguments, and effect/Terminal and
-        // effect/process build the stand-ins for the services effect/cli requires but the CLI does not use. The tools
-        // read the project through effect/FileSystem and effect/Path, failing with effect/PlatformError;
+        // CLI parses its arguments itself, and effect/Stdio gives the executable its arguments. The tools read the
+        // project through effect/FileSystem and effect/Path, failing with effect/PlatformError;
         // @effect/platform-node-shared provides Node's Stdio, FileSystem and Path.
         "allowedUnstableApis": [
-          "effect/cli",
           "effect/Stdio",
           "@effect/platform-node-shared",
           "effect/FileSystem",
           "effect/Path",
-          "effect/PlatformError",
-          "effect/Terminal",
-          "effect/process"
+          "effect/PlatformError"
         ],
         // effectFnOpportunity also reports an exported arrow that returns Effect.gen, with the span name it infers.
         "effectFn": ["span", "inferred-span", "suggested-span"],
