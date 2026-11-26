@@ -1,7 +1,17 @@
 import { describe, expect } from "@effect/vitest";
 import type { ChildProcess } from "node:child_process";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath } from "node:url";
@@ -13,6 +23,8 @@ import { component, CONFIG, IMPORT, it, lockedRoot, POLL_MS } from "./watch-proj
 
 // The built executable, as the CLI ships: the watch's output and signal handling are the bin's.
 const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
+// The workspace, which a watch under Node's permission model reads its own code and dependencies from.
+const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 const HEADER = `msgid ""
 msgstr ""
 "Content-Type: text/plain; charset=utf-8\\n"
@@ -55,6 +67,8 @@ function translations(project: Project): ReadonlyMap<string, string> {
 }
 
 type Watcher = {
+  /** The exit code once the watch has ended; undefined while it runs. */
+  readonly exited: () => number | null | undefined;
   /** stdout from the start until the watch was live: the first sync's report and the ready line. */
   readonly startup: () => string;
   readonly output: () => { readonly stdout: string; readonly stderr: string };
@@ -65,9 +79,9 @@ type Watcher = {
 // taken before its first sync, so every edit after the ready line is seen. Nothing the test did before is still
 // pending then: the files it wrote are in that walk, and the first sync, which has ended, wrote the catalog as its own.
 // So a test acts on a settled watch, and no sync it did not cause can overlap what it does next. The watch is killed
-// at the project's deadline, and when the test ends.
-async function startWatch(project: Project): Promise<Watcher> {
-  const child: ChildProcess = spawn(execPath, [BIN, "extract", "--watch", "--poll", POLL_MS], {
+// at the project's deadline, and when the test ends. `node` is Node's own flags, if any.
+async function startWatch(project: Project, node: ReadonlyArray<string> = []): Promise<Watcher> {
+  const child: ChildProcess = spawn(execPath, [...node, BIN, "extract", "--watch", "--poll", POLL_MS], {
     cwd: project.root,
     ...project.spawnGuard(),
   });
@@ -79,13 +93,16 @@ async function startWatch(project: Project): Promise<Watcher> {
   child.stderr?.setEncoding("utf8").on("data", (text: string) => {
     stderr += text;
   });
+  let code: number | null | undefined;
   const closed = new Promise<number | null>((done) => {
-    child.on("close", (code) => {
-      done(code);
+    child.on("close", (status) => {
+      code = status;
+      done(status);
     });
   });
   let live = { stdout: 0, stderr: 0 };
   const watcher: Watcher = {
+    exited: () => code,
     startup: () => stdout.slice(0, live.stdout),
     output: () => ({ stdout: stdout.slice(live.stdout), stderr: stderr.slice(live.stderr) }),
     kill: (signal) => {
@@ -233,6 +250,44 @@ msgstr ""
     rmSync(project.path("messages/nb.po"), { recursive: true });
     project.write("src/second.tsx", component("Second"));
     await expect.poll(() => project.read("messages/nb.po"), project.guard()).toContain(`msgid "Second"`);
+  });
+
+  // A config edit whose catalogs Node's permission model denies: the restart's watch fails as its trees open (its
+  // existence check throws ERR_ACCESS_DENIED), which is `WatchFailed`, and the next edit starts a watch again. The
+  // follow never ends on it. Oracle: 5063a1f, which reported the restart as one that did not start and kept following.
+  it("reports a restart whose catalogs the permission model denies, and follows the next edit", async ({
+    project,
+  }) => {
+    const root = realpathSync(project.root);
+    const denied = realpathSync(mkdtempSync(join(tmpdir(), "elmera-intl-denied-")));
+    project.defer(() => {
+      rmSync(denied, { recursive: true, force: true });
+    });
+    const { exited, output } = await startWatch(project, [
+      "--permission",
+      "--no-warnings",
+      // The extractor's parser is a native addon.
+      "--allow-addons",
+      `--allow-fs-read=${REPOSITORY}`,
+      `--allow-fs-read=${root}`,
+      `--allow-fs-write=${root}`,
+    ]);
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, catalogs: join(denied, "{locale}.po") }));
+    await expect
+      .poll(() => exited() !== undefined || output().stderr.includes("did not start"), project.guard())
+      .toBe(true);
+    const failed = { exited: exited(), reported: output().stderr.includes("WatchFailed") };
+
+    project.write("elmera-intl.json", JSON.stringify({ ...CONFIG, locales: ["nb", "sv"] }));
+    await expect
+      .poll(() => exited() !== undefined || existsSync(project.path("messages/sv.po")), project.guard())
+      .toBe(true);
+
+    expect([failed, exited(), existsSync(project.path("messages/sv.po"))]).toEqual([
+      { exited: undefined, reported: true },
+      undefined,
+      true,
+    ]);
   });
 
   // Oracle: the report lines, written out by hand: the first sync's catalogs, then the ready line naming the project

@@ -12,10 +12,11 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 
 import { NO_RECORD, syncCatalogs } from "../src/catalog-sync";
 import type { ProjectConfig } from "../src/project-config";
-import type { SyncResult, WatchMode } from "../src/watch";
+import type { SyncResult, Watching, WatchMode } from "../src/watch";
 import type { TreeListener } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
-import type { DeliveredEvents } from "./watch-project";
+import { ending } from "./watch-follow-project";
+import type { ClockedWatch, ClockedWatchOptions, DeliveredEvents } from "./watch-project";
 import {
   afterCatalogWrite,
   component,
@@ -103,6 +104,21 @@ describe("extract --watch on the test clock", () => {
 
     return { layer, calls: () => calls };
   }
+
+  // How a start settled, then how its `done` ended: the start takes nothing, so `done` is the end's recipient.
+  const settled = Effect.fnUntraced(function* (watching: Fiber.Fiber<Watching>) {
+    const exit = yield* Fiber.await(watching);
+
+    return Exit.isSuccess(exit)
+      ? [exit.value._tag, yield* ending(exit.value.done)]
+      : [String(Cause.squash(exit.cause))];
+  });
+
+  // A source saved, and time for its sync.
+  const changeSource = Effect.fnUntraced(function* (_run: ClockedWatch, project: Project) {
+    project.write("src/a.tsx", component("A"));
+    yield* TestClock.adjust("1 second");
+  });
 
   // Closes the watch's scope while `gate` holds a sync: the close is still pending a turn later, and ends once the sync
   // is released.
@@ -675,8 +691,9 @@ describe("extract --watch on the test clock", () => {
   );
 
   // The start is the stop's too: a stop before it, or during it, ends it only once the stop has run, with no first sync,
-  // nothing reported and no watcher left open; a failure the stop ends with (a write that failed for good, a watcher that
-  // failed to close) fails the start. Oracle: that contract, by hand, per case.
+  // nothing reported and no watcher left open. The start then says who began the stop (`Stopped`, or `Halted` on its
+  // own) and takes nothing: a failure the stop ends with (a write that failed for good, a watcher that failed to close)
+  // is `done`'s. Oracle: that contract, by hand, per case.
   it.effect("opens no tree and reports nothing when stopped before it starts", ({ project }) =>
     Effect.gen(function* () {
       const stop = yield* Deferred.make<void>();
@@ -769,41 +786,35 @@ describe("extract --watch on the test clock", () => {
         expect([events.open(), events.opening()]).toEqual([[project.path("messages")], 1]);
 
         yield* Deferred.succeed(stop, undefined);
-        const exit = yield* Fiber.await(watching);
 
-        expect([Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit, events.open()]).toEqual([
-          new Error("close failed"),
-          [],
-        ]);
+        expect([yield* settled(watching), events.open()]).toEqual([["Stopped", "Error: close failed"], []]);
       })
   );
 
-  it.effect("fails the start with a write that fails for good while a tree still opens", ({ project }) =>
-    Effect.gen(function* () {
-      mkdirSync(project.path("messages"));
-      const src = Promise.withResolvers<void>();
-      const events = deliveredEvents({
-        opening: (dir) => (dir === project.path("src") ? src.promise : undefined),
-      });
-      const { watching } = yield* launchWatch(project, {
-        mode: NATIVE,
-        events: events.layer,
-        report: (result) => (result._tag === "Failed" ? Effect.die(new Error("stderr gone")) : Effect.void),
-      });
-      yield* Effect.addFinalizer(() => Effect.sync(() => src.resolve()));
-      expect(events.open()).toEqual([project.path("messages")]);
+  it.effect(
+    "halts with a write that fails for good while a tree still opens, `done` ending with it",
+    ({ project }) =>
+      Effect.gen(function* () {
+        mkdirSync(project.path("messages"));
+        const src = Promise.withResolvers<void>();
+        const events = deliveredEvents({
+          opening: (dir) => (dir === project.path("src") ? src.promise : undefined),
+        });
+        const { watching } = yield* launchWatch(project, {
+          mode: NATIVE,
+          events: events.layer,
+          report: (result) => (result._tag === "Failed" ? Effect.die(new Error("stderr gone")) : Effect.void),
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => src.resolve()));
+        expect(events.open()).toEqual([project.path("messages")]);
 
-      events.listener(project.path("messages")).error(new Error("EMFILE: too many open files"));
-      const exit = yield* Fiber.await(watching);
+        events.listener(project.path("messages")).error(new Error("EMFILE: too many open files"));
 
-      expect([Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit, events.open()]).toEqual([
-        new Error("stderr gone"),
-        [],
-      ]);
-    })
+        expect([yield* settled(watching), events.open()]).toEqual([["Halted", "Error: stderr gone"], []]);
+      })
   );
 
-  it.effect("fails the start with the close failure of a watcher acquired as the stop lands", ({ project }) =>
+  it.effect("ends `done` with the close failure of a watcher acquired as the stop lands", ({ project }) =>
     Effect.gen(function* () {
       const acquiring = Promise.withResolvers<void>();
       const stop = yield* Deferred.make<void>();
@@ -816,12 +827,8 @@ describe("extract --watch on the test clock", () => {
       yield* Deferred.succeed(stop, undefined);
       yield* Effect.yieldNow;
       acquiring.resolve();
-      const exit = yield* Fiber.await(watching);
 
-      expect([Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit, events.open()]).toEqual([
-        new Error("close failed"),
-        [],
-      ]);
+      expect([yield* settled(watching), events.open()]).toEqual([["Stopped", "Error: close failed"], []]);
     })
   );
 
@@ -848,23 +855,21 @@ describe("extract --watch on the test clock", () => {
       // The first sync's result is still being written: the stop has not drained.
       const settledBeforeDrain = watching.pollUnsafe() !== undefined;
       yield* Deferred.succeed(reporting, undefined);
-      const exit = yield* Fiber.await(watching);
 
-      expect({ settledBeforeDrain, exit: Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit }).toEqual({
+      expect({ settledBeforeDrain, settled: yield* settled(watching) }).toEqual({
         settledBeforeDrain: false,
-        exit: new Error("close failed"),
+        settled: ["Stopped", "Error: close failed"],
       });
     })
   );
 
-  // A defect in a sync is no lost worker: it stops the watch, and the start (for the first sync) or `done` (for a
-  // later one) ends with it.
-  it.effect("fails the start with a defect in the first sync", ({ project }) =>
+  // A defect in a sync is no lost worker: it halts the watch, and `done` ends with it, the start (for the first sync)
+  // saying the watch halted on its own.
+  it.effect("halts on a defect in the first sync, `done` ending with it", ({ project }) =>
     Effect.gen(function* () {
       const { watching } = yield* launchWatch(project, { layer: dying(1) });
-      const exit = yield* Fiber.await(watching);
 
-      expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("extract died"));
+      expect(yield* settled(watching)).toEqual(["Halted", "Error: extract died"]);
     })
   );
 
@@ -877,6 +882,56 @@ describe("extract --watch on the test clock", () => {
 
       expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(new Error("extract died"));
     })
+  );
+
+  // The stop signal is the caller's input only: the watch never completes it, and says who began its stop on `halted`,
+  // the caller (its stop, or its scope closing) or the watch on its own (a defect, a write that fails for good).
+  it.effect.each([
+    {
+      by: "the caller's stop",
+      options: (): ClockedWatchOptions => ({}),
+      act: (run: ClockedWatch, _project: Project) => Deferred.succeed(run.stop, undefined),
+      expected: { stopped: true, halted: "Stopped" },
+    },
+    {
+      by: "its scope closing",
+      options: (): ClockedWatchOptions => ({}),
+      act: (run: ClockedWatch, _project: Project) => Scope.close(run.scope, Exit.void),
+      expected: { stopped: false, halted: "Stopped" },
+    },
+    {
+      by: "a later sync's defect",
+      options: (): ClockedWatchOptions => ({ layer: dying(2) }),
+      act: changeSource,
+      expected: { stopped: false, halted: "Halted" },
+    },
+    {
+      by: "a write that fails for good",
+      options: (): ClockedWatchOptions => {
+        let writes = 0;
+
+        return {
+          report: () => {
+            writes += 1;
+
+            return writes > 1 ? Effect.die(new Error("stderr gone")) : Effect.void;
+          },
+        };
+      },
+      act: changeSource,
+      expected: { stopped: false, halted: "Halted" },
+    },
+  ])(
+    "never completes its caller's stop, and says who began it: $by",
+    ({ options, act, expected }, { project }) =>
+      Effect.gen(function* () {
+        const run = yield* startWatch(project, options());
+        yield* act(run, project);
+        yield* Effect.exit(run.watching.done);
+        // Asserted before `halted` is read, so a watch that completes its caller's stop fails here.
+        expect(Deferred.isDoneUnsafe(run.stop)).toBe(expected.stopped);
+        expect(yield* run.watching.halted).toBe(expected.halted);
+      })
   );
 
   // A burst that lands while a sync holds: every batch admitted meanwhile is one classification once the sync ends,

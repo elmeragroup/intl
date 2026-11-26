@@ -1,6 +1,6 @@
 // `extract --watch` on a config it follows (#73): `watchCatalogs` (watch.ts) once per config text, one after another,
-// each in a scope of its own with its own halt, run by one loop. One fiber rereads the config, and one fiber writes
-// every output in order.
+// each in a scope of its own that only the loop closes, stopped by the follow's end. One fiber rereads the config, and
+// one fiber writes every output in order.
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -11,10 +11,9 @@ import * as Scope from "effect/Scope";
 import { basename } from "node:path";
 
 import type { Problem } from "./problem";
-import type { ProjectConfig } from "./project-config";
 import type { ConfigSnapshot } from "./project-config-read";
 import { readConfigSnapshot } from "./project-config-read";
-import type { Output, Watching, WatchMode, WatchOutput } from "./watch";
+import type { Halt, Output, WatchMode, WatchOutput } from "./watch";
 import { failed, handOff, watchCatalogs, writeResult } from "./watch";
 
 // How often the follow reads the config when the trees take native events: often enough that an edit is followed
@@ -29,35 +28,14 @@ const CONFIG_READ_MS = 250;
  */
 export type Following = { readonly _tag: "Ready" | "Stopped"; readonly done: Effect.Effect<void> };
 
-// A watch the follow runs on one config, and who completed its halt (the host's stop, the follow), recorded in the
-// step that completes it; never written when the watch halted on its own.
-type Generation = {
-  readonly scope: Scope.Closeable;
-  readonly halt: Deferred.Deferred<void>;
-  claimed: "host" | "follow" | undefined;
-};
-
-const haltedOnOwn = (generation: Generation) =>
-  Deferred.isDoneUnsafe(generation.halt) && generation.claimed === undefined;
-
-// The record is written before the halt completes, never after: completing it resumes its waiters at once, and the
-// generation's whole stop, and the loop reading the record, can run inside that call.
-const claim = (generation: Generation, by: "host" | "follow") =>
-  Effect.sync(() => {
-    if (!Deferred.isDoneUnsafe(generation.halt)) {
-      generation.claimed = by;
-      Deferred.doneUnsafe(generation.halt, Effect.void);
-    }
-  });
-
 /**
  * `watchCatalogs` on the config at `path`, following its edits: one watch per config text, each in a scope of its own
- * with its own halt, run one after another by one loop. One fiber reads the config (`readConfigSnapshot`) each poll
- * interval, or each `CONFIG_READ_MS` on native events, after the previous read ends; a text other than the last read
- * is written as `ConfigChanged` at once and kept, the newest only, until the watch running or starting has ended.
- * Only a stop interrupts a start. A valid config starts a watch, which writes `Restarted` after its first sync's result
- * (the first to sync writes the ready line); an invalid one writes its problem; a watch that fails to start once the
- * follow has started writes `WatchFailed`.
+ * that only the loop closes, its stop the follow's end, run one after another by one loop. One fiber reads the config
+ * (`readConfigSnapshot`) each poll interval, or each `CONFIG_READ_MS` on native events, after the previous read ends; a
+ * text other than the last read is written as `ConfigChanged` at once and kept, the newest only, until the watch
+ * running or starting has ended. Only a stop interrupts a start. A valid config starts a watch, which writes
+ * `Restarted` after its first sync's result (the first to sync writes the ready line); an invalid one writes its
+ * problem; a watch that fails to start once the follow has started writes `WatchFailed`.
  *
  * The start is `Ready` once an iteration has written its first result with no newer config waiting, and `Stopped` when
  * a stop came first unless a watch had halted on its own before it; otherwise it fails with a write that failed for
@@ -82,8 +60,12 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
 ) {
   const own = yield* Scope.fork(yield* Effect.scope, "sequential");
   const generations = yield* Scope.fork(own, "sequential");
-  // The follow is ending: the host's stop, a fatal halt (its cause recorded in the same step) or the follow's end.
+  // The follow is ending: the host's stop, a fatal halt (its cause recorded in the same step) or the follow's end. Each
+  // watch's stop.
   const ending = yield* Deferred.make<void>();
+  // Open once the start has claimed the follow's end, or the release has run: only then do the reader and the loop
+  // start, so a close of the caller's scope never closes a watch's scope before the loop does.
+  const latch = yield* Deferred.make<void>();
   const ended = Deferred.await(ending);
   let writeFailure: Cause.Cause<never> | undefined;
   let defect: Cause.Cause<never> | undefined;
@@ -189,36 +171,9 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
     }
   });
 
-  // Starts a watch in a scope of its own, the host's stop and the follow's end forwarded into its halt.
-  const begin = Effect.fnUntraced(function* (config: ProjectConfig) {
-    const scope = yield* Scope.fork(generations, "sequential");
-    const generation: Generation = { scope, halt: yield* Deferred.make<void>(), claimed: undefined };
-    yield* Effect.raceFirst(
-      Deferred.await(stop).pipe(Effect.as("host" as const)),
-      ended.pipe(Effect.as("follow" as const))
-    ).pipe(
-      Effect.flatMap((by) => claim(generation, by)),
-      Effect.forkIn(scope, { startImmediately: true })
-    );
-    const started = yield* Effect.exit(
-      watchCatalogs(config, mode, generation.halt, generationOutput).pipe(Scope.provide(scope))
-    );
-
-    return { generation, started };
-  });
-  // Halts a watch, unless it has halted, and closes its scope, ending as its stop ended (a start that failed, with that).
-  const retire = Effect.fnUntraced(function* (generation: Generation, started: Exit.Exit<Watching>) {
-    yield* claim(generation, "follow");
-    const end = Exit.isSuccess(started)
-      ? yield* Effect.exit(started.value.done)
-      : Exit.failCause(started.cause);
-    yield* Scope.close(generation.scope, Exit.void);
-
-    return end;
-  });
   // How the loop left: how it ended, and whether the host's stop stopped it, no watch in hand halted on its own first.
-  const leave = (generation: Generation | undefined, end: Exit.Exit<void>) => ({
-    byHost: Deferred.isDoneUnsafe(stop) && (generation === undefined || !haltedOnOwn(generation)),
+  const leave = (halt: Halt | undefined, end: Exit.Exit<void>) => ({
+    byHost: Deferred.isDoneUnsafe(stop) && halt !== "Halted",
     end,
   });
   // At an iteration's first written result, the start unsettled: leave when a stop has come; otherwise the start
@@ -233,9 +188,9 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
   const loop = Effect.gen(function* () {
     let snapshot = yield* untilEnded(Deferred.await(firstRead));
 
-    while (snapshot !== undefined) {
+    // No watch starts once a stop has come.
+    while (snapshot !== undefined && !stopping()) {
       const { loaded } = snapshot;
-      let generation: Generation | undefined;
 
       if (loaded._tag === "ConfigInvalid") {
         yield* queued(failed(loaded.problem));
@@ -246,42 +201,42 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
 
         yield* Effect.raceFirst(edited, ended);
       } else {
-        const begun = yield* begin(loaded.config);
-        const { started } = begun;
-        ({ generation } = begun);
+        const scope = yield* Scope.fork(generations, "sequential");
+        const watching = yield* watchCatalogs(loaded.config, mode, ending, generationOutput).pipe(
+          Scope.provide(scope)
+        );
 
-        // A stop halted the start (the host's, or the follow's end): it ends the follow, as the start's watch ended.
-        if (generation.claimed !== undefined) {
-          return leave(generation, yield* retire(generation, started));
+        if (watching._tag === "Started") {
+          yield* watching.reported;
+
+          if (!leavesUnsettled()) {
+            yield* Effect.raceAll([edited, ended, watching.halted]);
+          }
         }
 
-        if (Exit.isSuccess(started)) {
-          yield* started.value.reported;
+        // The watch's end is its close's: nothing else closes its scope or takes its `done`. Who began its stop is
+        // settled by then.
+        const end = yield* Effect.exit(Scope.close(scope, Exit.void));
+        const halt = yield* watching.halted;
 
-          if (leavesUnsettled()) {
-            return leave(generation, yield* retire(generation, started));
+        // A stop halted the start (the host's, or the follow's end), or the watch ended, failed or halted on its own:
+        // it ends the follow, as the watch ended (a clean stop, as at the check below). A start halted on its own is a
+        // restart that failed to start once the start has settled; before, it goes round only when its close failed, a
+        // newer config waits and no stop has come: a clean close always ends the follow.
+        if (watching._tag !== "Halted") {
+          if (watching._tag === "Stopped" || Exit.isFailure(end) || halt === "Halted") {
+            return leave(halt, end);
           }
-
-          yield* Effect.raceAll([edited, ended, Deferred.await(generation.halt)]);
-          const end = yield* retire(generation, started);
-
-          if (Exit.isFailure(end) || haltedOnOwn(generation)) {
-            return leave(generation, end);
-          }
-        } else {
-          const end = yield* retire(generation, started);
-
-          if (Deferred.isDoneUnsafe(ready)) {
-            yield* queued(failed(didNotStart(path, started.cause)));
-            yield* Effect.raceFirst(edited, ended);
-          } else if (stopping() || Queue.sizeUnsafe(mailbox) === 0) {
-            return leave(generation, end);
-          }
+        } else if (Exit.isFailure(end) && Deferred.isDoneUnsafe(ready)) {
+          yield* queued(failed(didNotStart(path, end.cause)));
+          yield* Effect.raceFirst(edited, ended);
+        } else if (Exit.isSuccess(end) || stopping() || Queue.sizeUnsafe(mailbox) === 0) {
+          return leave(halt, end);
         }
       }
 
       if (stopping()) {
-        return leave(generation, Exit.void);
+        return leave(undefined, Exit.void);
       }
 
       snapshot = yield* Queue.take(mailbox);
@@ -293,12 +248,17 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
   // failure, then a defect, then as the loop left.
   const following = Effect.fnUntraced(
     function* (writing: Fiber.Fiber<void>) {
-      yield* Deferred.await(stop).pipe(Effect.andThen(Deferred.succeed(ending, undefined)), Effect.forkChild);
+      yield* Deferred.await(stop).pipe(
+        Effect.andThen(Deferred.succeed(ending, undefined)),
+        Effect.forkChild({ startImmediately: true })
+      );
+      yield* Deferred.await(latch);
       const reading = yield* supervised(reader).pipe(Effect.forkChild);
       const left = yield* Effect.exit(supervised(loop));
       yield* Deferred.succeed(ending, undefined);
       yield* Fiber.interrupt(reading);
-      yield* Scope.close(generations, Exit.void);
+      // A watch the loop held when it died: its end is the loop's defect.
+      yield* Effect.exit(Scope.close(generations, Exit.void));
       yield* Queue.end(writes);
       yield* Fiber.join(writing);
       const fatal = writeFailure ?? defect;
@@ -316,7 +276,12 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
   // Registered before the reader or any watch starts, so the caller's scope closing at any moment ends the follow.
   yield* Effect.acquireRelease(
     Effect.forkDetach(writeInOrder).pipe(Effect.flatMap((writing) => Effect.forkDetach(following(writing)))),
-    () => Deferred.succeed(ending, undefined).pipe(Effect.andThen(outcome.unclaimed))
+    () =>
+      // `ending` first: opening the latch resumes the follow inline, so `stopping()` must already hold.
+      Effect.sync(() => {
+        Deferred.doneUnsafe(ending, Effect.void);
+        Deferred.doneUnsafe(latch, Effect.void);
+      }).pipe(Effect.andThen(outcome.unclaimed))
   ).pipe(Scope.provide(own));
   // Ready, or the follow's end, which the start claims in this step, so a scope's close leaves it to the start until
   // the start has settled: unless the host stopped it, the start takes that end, failing with it or, a clean end (the
@@ -325,9 +290,15 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
   const start = yield* outcome.claiming(
     () => stoppedByHost,
     (end) =>
-      Effect.raceFirst(
-        Deferred.await(ready).pipe(Effect.as("Ready" as const)),
-        end.pipe(Effect.as("Stopped" as const))
+      // The latch opens here, once the claim is registered, never before: else a close could take an end the start
+      // claims.
+      Deferred.succeed(latch, undefined).pipe(
+        Effect.andThen(
+          Effect.raceFirst(
+            Deferred.await(ready).pipe(Effect.as("Ready" as const)),
+            end.pipe(Effect.as("Stopped" as const))
+          )
+        )
       )
   );
 

@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import type * as Layer from "effect/Layer";
 import * as References from "effect/References";
+import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync } from "node:fs";
@@ -525,13 +526,19 @@ describe("followConfig's start", () => {
 // Unit under test: `handOff` (watch.ts), the one hand-off of a watch's end, through `watchCatalogs` and `followConfig`.
 // Oracle: the contract by hand: a watch's end has one recipient. The host stops, a watcher then fails to close, and
 // the caller's scope closes before anyone takes `done`: the close reports the failure, and a `done` taken after the
-// close ends clean. (`watchCatalogs`' start, when the stop lands during its first sync, fails with the failure and is
-// its one recipient: `watch-clock.test.ts` holds that.) Each row on
-// the default scheduler and with every fiber yielding after each operation, so who is handed the end never rests on
-// which fiber runs first. The order where `done` is taken before the close is the held-sync matrix's above.
+// close ends clean; neither start takes it, `watchCatalogs`' saying only who began the stop. Each row on the default
+// scheduler and with every fiber yielding after each operation, so who is handed the end never rests on which fiber
+// runs first. The order where `done` is taken before the close is the held-sync matrix's above.
 describe("a watch's end, the caller's scope closing before `done` is taken", () => {
   it.effect.each(
     [
+      {
+        unit: "watchCatalogs",
+        when: "during its first sync",
+        start: "Stopped",
+        closed: "Error: watcher close failed",
+        done: "clean",
+      },
       {
         unit: "watchCatalogs",
         when: "after its start",
@@ -565,25 +572,14 @@ describe("a watch's end, the caller's scope closing before `done` is taken", () 
         const sync = holding(() => gate.first);
         const events = deliveredEvents({ closeFails: new Error("watcher close failed") });
         const options = { mode: NATIVE, events: events.layer, layer: sync.layer };
-        // How the start settled (`watchCatalogs` has one outcome), and its `done`.
-        const { stop, scope, settles } =
+        // How the start settled, and its `done`.
+        const { stop, scope, watching } =
           unit === "watchCatalogs"
-            ? yield* launchWatch(project, options).pipe(
-                Effect.map(({ watching, ...run }) => ({
-                  ...run,
-                  settles: Fiber.await(watching).pipe(
-                    Effect.map(Exit.map(({ done }) => ({ settled: "Started", done })))
-                  ),
-                }))
-              )
-            : yield* launchFollow(project, options).pipe(
-                Effect.map(({ watching, ...run }) => ({
-                  ...run,
-                  settles: Fiber.await(watching).pipe(
-                    Effect.map(Exit.map(({ _tag, done }) => ({ settled: _tag, done })))
-                  ),
-                }))
-              );
+            ? yield* launchWatch(project, options)
+            : yield* launchFollow(project, options);
+        const settles = Fiber.await<{ readonly _tag: string; readonly done: Effect.Effect<void> }, never>(
+          watching
+        );
         yield* gate.release;
         const duringFirstSync = when === "during its first sync";
 
@@ -604,7 +600,7 @@ describe("a watch's end, the caller's scope closing before `done` is taken", () 
           : undefined;
 
         expect({
-          start: Exit.isSuccess(settled) ? settled.value.settled : String(Cause.squash(settled.cause)),
+          start: Exit.isSuccess(settled) ? settled.value._tag : String(Cause.squash(settled.cause)),
           closed,
           done,
           open: events.open(),
@@ -629,7 +625,7 @@ describe.for(["watchCatalogs", "followConfig"])(
       const output = { report: () => Effect.void, ready: Effect.void };
       const path = project.path("elmera-intl.json");
 
-      // How the start settled (`followConfig`'s outcome; `watchCatalogs` has one), and its `done`.
+      // How the start settled, and its `done`.
       const starting: Effect.Effect<
         { readonly settled: string; readonly done: Effect.Effect<void> },
         never,
@@ -641,7 +637,7 @@ describe.for(["watchCatalogs", "followConfig"])(
               { _tag: "native" },
               Deferred.makeUnsafe<void>(),
               output
-            ).pipe(Effect.map(({ done }) => ({ settled: "Started", done })))
+            ).pipe(Effect.map(({ _tag, done }) => ({ settled: _tag, done })))
           : readConfigSnapshot(path).pipe(
               Effect.flatMap((first) =>
                 followConfig(path, first, { _tag: "native" }, Deferred.makeUnsafe<void>(), output)
@@ -654,11 +650,12 @@ describe.for(["watchCatalogs", "followConfig"])(
 
     // With the scheduler yielding after each number of operations a budget allows, the start is interrupted after each
     // number of its yields in turn, until it has ended before that, and then the scope closes: an interrupted start
-    // takes nothing, so wherever the interruption lands the close settles, clean, with every watcher closed. Each budget
-    // lines the interruptions up with the start's steps differently: in `followConfig`'s start, 4 and 6 land one between
-    // a claim on the follow's end and its release (`handOff` in watch.ts), which, left interruptible, leaves the close
-    // waiting for ever. They are an alignment with the start's steps as they are now; a change to them can move it.
-    it.for([1, 4, 6])(
+    // takes nothing, so wherever the interruption lands the close settles, clean, with every watcher closed. Each
+    // budget lines the interruptions up with the start's steps differently: in `followConfig`'s start, 1, 4 and 8 each
+    // land one between a claim on the follow's end and its release (`handOff` in watch.ts), which, left interruptible,
+    // leaves the close waiting for ever. They are an alignment with the start's steps as they are now; a change to them
+    // can move it, so check them by making that step interruptible and seeing each hang.
+    it.for([1, 4, 8])(
       "settles the close wherever an interruption lands in the start, yielding every %i operations",
       async (budget, { project }) => {
         const events = deliveredEvents();
@@ -712,13 +709,13 @@ describe.for(["watchCatalogs", "followConfig"])(
         "the start"
       );
 
-      // A scope closed before the start is no failure: a follow's start is stopped, and its end clean.
+      // A scope closed before the start is no failure: the start is stopped, and its end clean.
       expect([
         Exit.isSuccess(exit) ? exit.value : exit,
         events.calls(),
         events.open(),
         existsSync(project.path("messages/nb.po")),
-      ]).toEqual([[start === "watchCatalogs" ? "Started" : "Stopped", Exit.void], 0, [], false]);
+      ]).toEqual([["Stopped", Exit.void], 0, [], false]);
     });
 
     // With the scheduler yielding after every operation, the close lands after each number of the start's yields in
@@ -768,3 +765,196 @@ describe.for(["watchCatalogs", "followConfig"])(
     });
   }
 );
+
+// Unit under test: `followConfig`'s ownership of its watches' scopes: the follow's own scope closes its finalizers in
+// order, its release before the scope that holds its watches, so a close of the caller's scope from another fiber never
+// closes a watch's scope before the follow's loop does. Oracle: the contract by hand: wherever such a close lands in
+// the start, the start ends as one of the outcomes below, and the close and the follow's end settle clean, with every
+// watcher closed; the sweep reaches the outcomes on each side of the start's claim. It goes red when those finalizers
+// run in parallel (start `Stopped`, close `EACCES`). It does not guard where the startup latch opens: on this scheduler
+// the follow reaches no watch in the few steps between the release's registration and the start's claim, so the sweep
+// passes with the latch opened before the claim, or with no latch (the last test here guards that). Each sweep runs on
+// the synchronous file system and the test clock with every fiber yielding after each operation, so every run takes the
+// same steps (see the sweeps above); fresh file events each offset, since a refused tree refuses once.
+describe("followConfig's start, the caller's scope closed from another fiber", { timeout: 20_000 }, () => {
+  // A first tree refused, its cleanup held. Closed before the start claims the follow's end: stopped, no tree opened.
+  // After the refusal: the refusal's own failure, which the start takes, never the close. Closed as its trees open
+  // (`also`): stopped, the tree it opened closed, as `Following` says of a stop that came first with no watch halted on
+  // its own; allowed, not required, since it depends on where the trees' steps fall. (A started generation with an
+  // empty mailbox is the close sweep's last offset above.)
+  const reached = [
+    { start: "Error: EACCES: permission denied, watch", closed: "clean", done: undefined, opened: true },
+    { start: "Stopped", closed: "clean", done: "clean", opened: false },
+  ];
+  const also = [{ start: "Stopped", closed: "clean", done: "clean", opened: true }];
+
+  it("ends the start as an allowed outcome wherever the close lands, on a refused first tree", async ({
+    project,
+  }) => {
+    const path = project.path("elmera-intl.json");
+    const output = { report: () => Effect.void, ready: Effect.void };
+    // An outcome as text, to compare.
+    const keyOf = (each: { start: string; closed: string; done: string | undefined; opened: boolean }) =>
+      [each.start, each.closed, String(each.done), String(each.opened)].join(" | ");
+    const sweep = Effect.gen(function* () {
+      // Each outcome reached, as text.
+      const seen = new Set<string>();
+      const unsettled: Array<number> = [];
+      // The offset from which the start had settled, or its refused tree's cleanup begun, before the close.
+      let past: number | undefined;
+
+      for (let yields = 0; yields < 1_000 && (past === undefined || yields < past + 10); yields += 1) {
+        const held = Promise.withResolvers<void>();
+        const cleanup = { begun: false };
+        const events = twoTrees(project, {
+          opening: refusedOnce(project, "src"),
+          releasing: () => {
+            cleanup.begun = true;
+
+            return held.promise;
+          },
+        });
+        const scope = yield* Scope.make();
+        const starting = yield* readConfigSnapshot(path).pipe(
+          Effect.flatMap((first) => followConfig(path, first, NATIVE, Deferred.makeUnsafe<void>(), output)),
+          Scope.provide(scope),
+          Effect.provide([syncCatalogServices(), events.layer]),
+          Effect.forkDetach
+        );
+
+        for (let turn = 0; turn < yields; turn += 1) {
+          yield* Effect.yieldNow;
+        }
+
+        if (past === undefined && (starting.pollUnsafe() !== undefined || cleanup.begun)) {
+          past = yields;
+        }
+
+        const closing = yield* Effect.forkDetach(ending(Scope.close(scope, Exit.void)));
+        yield* Effect.yieldNow;
+        held.resolve();
+        const closed = yield* Fiber.join(closing);
+        const exit = yield* Fiber.await(starting);
+        const settled = {
+          start: Exit.isSuccess(exit) ? exit.value._tag : String(Cause.squash(exit.cause)),
+          closed,
+          done: Exit.isSuccess(exit) ? yield* ending(exit.value.done) : undefined,
+          opened: events.calls() > 0,
+        };
+        seen.add(keyOf(settled));
+
+        if (
+          ![...reached, ...also].some((each) => keyOf(each) === keyOf(settled)) ||
+          events.open().length > 0
+        ) {
+          unsettled.push(yields);
+        }
+      }
+
+      return { missed: reached.map((each) => keyOf(each)).filter((key) => !seen.has(key)), unsettled };
+    }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 1), Effect.provide(TestClock.layer()));
+
+    expect(await project.within(Effect.runPromise(sweep), "the sweep")).toEqual({
+      missed: [],
+      unsettled: [],
+    });
+  });
+
+  // The latch's placement: the start's fiber stands still after each number of its operations in turn (the scheduler
+  // parks its continuation), every other fiber running on until all are suspended, and then the caller's scope closes.
+  // Parked between registering its release and claiming its end, the start has opened no latch, so the follow has
+  // begun no watch, and the close finds it stopped; never the close taking the refusal's failure. Red with the latch
+  // opened before the claim (start `Stopped`, close `EACCES`).
+  it("never hands the close a start's failure wherever the start stands still", async ({ project }) => {
+    const path = project.path("elmera-intl.json");
+    const output = { report: () => Effect.void, ready: Effect.void };
+    const inner = new Scheduler.MixedScheduler();
+    const shared = inner.makeDispatcher();
+    // Tasks queued and not yet run, a parked one aside.
+    let pending = 0;
+    // Until every fiber has stayed suspended for two turns of the event loop.
+    const idle = Effect.gen(function* () {
+      for (let quiet = 0; quiet < 2; quiet = pending === 0 ? quiet + 1 : 0) {
+        yield* Effect.callback<void>((resume) => {
+          setImmediate(() => resume(Effect.void));
+        });
+      }
+    });
+    // A scheduler that parks its target's continuation after `ops` operations; every other task runs as queued.
+    const parking = (ops: number) => {
+      // The fiber to park, set once it is forked; how many operations it has run; whether its next task parks.
+      const target = new Set<Fiber.Fiber<unknown, unknown>>();
+      const park = { counted: 0, next: false };
+      const parked: Array<() => void> = [];
+      const scheduler: Scheduler.Scheduler = {
+        executionMode: "async",
+        shouldYield: (fiber) => {
+          park.next = target.has(fiber) && (park.counted += 1) === ops;
+
+          return park.next || inner.shouldYield(fiber);
+        },
+        makeDispatcher: () => ({
+          scheduleTask: (task, priority) => {
+            if (park.next) {
+              park.next = false;
+              parked.push(task);
+            } else {
+              pending += 1;
+              shared.scheduleTask(() => {
+                pending -= 1;
+                task();
+              }, priority);
+            }
+          },
+          flush: () => shared.flush(),
+        }),
+      };
+
+      return { target, parked, scheduler };
+    };
+    const sweep = Effect.gen(function* () {
+      const outcomes = new Set<string>();
+
+      for (let ops = 1; ops < 2_000; ops += 1) {
+        const held = Promise.withResolvers<void>();
+        const events = twoTrees(project, {
+          opening: refusedOnce(project, "src"),
+          releasing: () => held.promise,
+        });
+        const { target, parked, scheduler } = parking(ops);
+        const scope = yield* Scope.make();
+        const starting = yield* readConfigSnapshot(path).pipe(
+          Effect.flatMap((first) => followConfig(path, first, NATIVE, Deferred.makeUnsafe<void>(), output)),
+          Scope.provide(scope),
+          Effect.provide([syncCatalogServices(), events.layer]),
+          Effect.provideService(Scheduler.Scheduler, scheduler),
+          Effect.forkDetach
+        );
+        target.add(starting);
+        yield* idle;
+
+        if (parked.length === 0) {
+          break;
+        }
+
+        const closing = yield* Effect.forkDetach(ending(Scope.close(scope, Exit.void)));
+        yield* idle;
+        held.resolve();
+        yield* idle;
+        parked.splice(0).forEach((task) => shared.scheduleTask(task, 0));
+        const closed = yield* Fiber.join(closing);
+        const exit = yield* Fiber.await(starting);
+        outcomes.add(
+          `${Exit.isSuccess(exit) ? exit.value._tag : String(Cause.squash(exit.cause))}, close ${closed}`
+        );
+      }
+
+      return [...outcomes].toSorted();
+    });
+
+    expect(await project.within(Effect.runPromise(sweep), "the sweep")).toEqual([
+      "Error: EACCES: permission denied, watch, close clean",
+      "Stopped, close clean",
+    ]);
+  });
+});
