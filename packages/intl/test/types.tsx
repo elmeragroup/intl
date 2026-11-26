@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import type { CreateIntlOptions, Descriptor, NegotiateLocaleOptions } from "@elmeragroup/intl/core";
 import { createIntl, msg, negotiateLocale } from "@elmeragroup/intl/core";
 import { CurrentIntl } from "@elmeragroup/intl/effect";
+import type { RequestConfig } from "@elmeragroup/intl/next/server";
 import { createRequestConfig } from "@elmeragroup/intl/next/server";
 import { Select, Val } from "@elmeragroup/intl/react";
 
@@ -113,6 +114,18 @@ const _fixed: Effect.Effect<string> = Effect.provide(greet, CurrentIntl.layer(fi
 // The request config resolves the whole IntlConfig: an adapter without a time zone would leave dates in the host's.
 // @ts-expect-error createRequestConfig needs resolveTimeZone
 createRequestConfig({ resolveLocale: () => "en", loadCatalog: () => Promise.resolve(english()) });
+// A request config gives the server its onError: createRequestConfig's second argument, which the config it resolves
+// carries, as a hand-written RequestConfig's may.
+const adapter = {
+  resolveLocale: () => "en",
+  resolveTimeZone: () => "UTC",
+  loadCatalog: () => Promise.resolve(english()),
+};
+createRequestConfig(adapter, { onError: (error, key) => [error.message, key] });
+declare const resolvedConfig: Awaited<ReturnType<RequestConfig>>;
+const _onError: ((error: Error, key: string) => void) | undefined = resolvedConfig.onError;
+// @ts-expect-error onError is a function of the error and its key
+createRequestConfig(adapter, { onError: "x" });
 
 // negotiateLocale infers the locales from the list and checks the aliases against them, never widening the list.
 declare const header: string | null;

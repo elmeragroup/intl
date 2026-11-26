@@ -1,5 +1,5 @@
 // The framework adapter contract: how a request picks its locale and catalog, and how a host reads the result.
-import type { Catalog, Formats, IntlConfig } from "./intl";
+import type { Catalog, CreateIntlOptions, Formats, IntlConfig } from "./intl";
 
 /** The part of a request locale resolution reads: a `Request`, or the request Next's `createRequestConfig` builds. */
 export type RequestLike = {
@@ -18,8 +18,11 @@ export type ServerAdapter = {
   readonly formats?: Formats;
 };
 
-/** How a host reads the current request's `IntlConfig`, per call (Next: `createRequestConfig(adapter)`). */
-export type RequestConfig = () => Promise<IntlConfig>;
+/**
+ * How a host reads the current request's options, per call (Next: `createRequestConfig(adapter, { onError })`): the
+ * `IntlConfig`, and the server's `onError`, which `getIntl` hands `createIntl` with it.
+ */
+export type RequestConfig = () => Promise<CreateIntlOptions>;
 
 /**
  * Resolve a request's `IntlConfig` through the app's adapter: the value both the server translator and the client

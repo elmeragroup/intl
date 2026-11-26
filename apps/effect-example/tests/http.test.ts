@@ -14,6 +14,9 @@ import { EXPECTED_TEXT } from "./expected-text.ts";
 // asks of a response that varies by Accept-Language: `Content-Language` (§8.5) naming the language, `Vary` (§12.5.5)
 // naming the header among its field names, which compare case-insensitively, and, since the body is per request,
 // `Cache-Control: private, no-store` (RFC 9111 §5.2.2). The server runs in New York, so a date written in Oslo's day proves the configured zone won over the host's.
+// And its stderr: the API gives the translator no `onError`, so a report would reach the runtime's default, a line
+// starting `@elmeragroup/intl:`; every message it formats is extracted and every format it names configured, so none
+// may appear.
 const APP_DIR = fileURLToPath(new URL("..", import.meta.url));
 
 // The Accept-Language a client in each locale sends: its language with a region first, as browsers and HTTP clients do.
@@ -28,13 +31,16 @@ type Locale = keyof typeof ACCEPT_LANGUAGE;
 
 const LOCALES = ["en", "nb", "sv", "fi"] as const satisfies ReadonlyArray<Locale>;
 
-let server: ChildProcessByStdio<null, Readable, null> | undefined;
-// The server's exit, captured when it starts: an exit before teardown has already happened by the time `afterAll` runs.
-let exited: Promise<unknown> | undefined;
+let server: ChildProcessByStdio<null, Readable, Readable> | undefined;
+// The server's close (its exit, once its output has ended), captured when it starts: a close before teardown has already
+// happened by the time `afterAll` runs.
+let closed: Promise<unknown> | undefined;
+// Everything the server wrote to stderr, which the run also forwards to its own.
+let stderr = "";
 let origin = "";
 
-// The server's origin, from the line it logs once it listens; the run fails if it exits first, with what it wrote.
-function listeningOrigin(child: ChildProcessByStdio<null, Readable, null>): Promise<string> {
+// The server's origin, from the line it logs once it listens; the run fails if it closes first, with what it wrote.
+function listeningOrigin(child: ChildProcessByStdio<null, Readable, Readable>): Promise<string> {
   return new Promise((resolve, reject) => {
     let output = "";
 
@@ -47,8 +53,8 @@ function listeningOrigin(child: ChildProcessByStdio<null, Readable, null>): Prom
         resolve(listening[1]);
       }
     });
-    child.once("exit", (code) => {
-      reject(new Error(`The server exited (${String(code)}) before it listened:\n${output}`));
+    child.once("close", (code) => {
+      reject(new Error(`The server exited (${String(code)}) before it listened:\n${output}${stderr}`));
     });
   });
 }
@@ -57,20 +63,26 @@ beforeAll(async () => {
   server = spawn(process.execPath, ["src/main.ts"], {
     cwd: APP_DIR,
     env: { ...process.env, PORT: "0", TZ: "America/New_York" },
-    stdio: ["ignore", "pipe", "inherit"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  exited = once(server, "exit");
+  server.stderr.setEncoding("utf8");
+  server.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+    process.stderr.write(chunk);
+  });
+  closed = once(server, "close");
   origin = await listeningOrigin(server);
 });
 
 afterAll(async () => {
-  if (server === undefined || exited === undefined) {
+  if (server === undefined || closed === undefined) {
     return;
   }
 
-  // A no-op on a process that has exited; its exit promise has then settled already.
+  // A no-op on a process that has exited; its close promise has then settled already.
   server.kill("SIGTERM");
-  await exited;
+  await closed;
+  expect(stderr.split(/\r?\n/u).filter((line) => line.startsWith("@elmeragroup/intl:"))).toEqual([]);
 });
 
 function get(path: string, acceptLanguage?: string): Promise<Response> {

@@ -99,13 +99,20 @@ function run(flags: ReadonlyArray<string>, script: string, input?: string) {
 // `react-server` condition resolving `/react` through the export map (no Vitest alias), rendered by React's server
 // components renderer, its payload rendered to HTML by a second process without the condition. Oracle: the children
 // as written, the inner `<T>` translated by its own entry; translated, the inner `<T>` would get the outer
-// translation's text and render `ABC`. A server component
-// has no `onError` to report to (#100), so the render is the assertion.
+// translation's text and render `ABC`. The request module gives no `onError`, so the report reaches the runtime's
+// default, `console.error("@elmeragroup/intl:", JSON.stringify(key), error)`, on the server's stderr (Node prints the
+// error as `Error: <message>` and its stack below), under the outer message's key; the client process, which replays
+// no server console calls, writes nothing.
 it(
   "the server <T>, rendered as a server component, renders a <T> inside it as written, the inner <T> translated",
   () => {
     const server = run(["--conditions=react-server"], SERVER);
-    expect({ status: server.status, stderr: server.stderr }).toEqual({ status: 0, stderr: "" });
+    // The report's prefix: the default's form and the error, not the remediation wording the message goes on with.
+    const reported = '@elmeragroup/intl: "a <x0>b</x0> c" Error: <T> cannot contain another <T>';
+    expect({ status: server.status, firstLine: server.stderr.slice(0, reported.length) }).toEqual({
+      status: 0,
+      firstLine: reported,
+    });
 
     const client = run([], CLIENT, server.stdout);
     expect({ status: client.status, stderr: client.stderr, html: client.stdout }).toEqual({

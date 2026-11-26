@@ -360,6 +360,19 @@ test.describe(`client chunks, ${BUILD}`, () => {
   });
 });
 
+// Unit under test: createRequestConfig's onError (`/next/server`), given by the fixture's request module behind
+// withIntl's alias, as the handler of the server translator getIntl builds. Oracle: the key a format name missing from
+// `formats` reports under, the method (`format.dateTime`), as the page renders it from what the handler received in
+// that request; were the option not forwarded, the report would reach the default and the list would be empty. From
+// the server's HTML, so no browser console exists for the dev pass to replay the handler's log into.
+test.describe(`next fixture, ${BUILD}, the request config's onError`, () => {
+  test("receives the server translator's reports", async ({ request }) => {
+    const html = await (await request.get(`${NEXT_URL}/reports`)).text();
+
+    expect(/<output id="reports">([^<]*)<\/output>/u.exec(html)?.[1]).toBe("format.dateTime");
+  });
+});
+
 // A string only the fixture's request module (intl/fixture-request.ts) holds, in an error path it keeps.
 const REQUEST_SENTINEL = "FORESPORSELVAKT-5R8";
 // The stub's guidance, each part as a token that survives HTML escaping: the server-code setup (withIntl and the

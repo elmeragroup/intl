@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { createContext, use, useMemo } from "react";
 
 import type { Format, IntlConfig, IntlInstance, Translate } from "./intl";
-import { createIntl } from "./intl";
+import { createIntl, reportToConsole } from "./intl";
 import { useLatestRef } from "./latest-ref";
 import { renderT } from "./resolve";
 
@@ -18,8 +18,11 @@ const IntlContext = /* @__PURE__ */ createContext<IntlInstance | null>(null);
 /** Props of `<IntlProvider>`: a serializable `IntlConfig`, so a server layout or a route loader can pass it. */
 export type IntlProviderProps = IntlConfig & {
   /**
-   * `createIntl`'s `onError`: a message that fails to format or is not extracted yet, or a failed `format` call. A new
-   * function each render does not re-create the translator; a changed handler takes effect from the next commit.
+   * `createIntl`'s `onError`: a message that fails to format or is not extracted yet, or a failed `format` call. With
+   * none, each distinct problem is written once to `console.error`. A new function each render does not re-create the
+   * translator; a handler given at mount applies from the first render, and one added, changed or removed later from
+   * the next commit. Under a Next server layout, a function cannot cross to this client provider: a `"use client"`
+   * component that renders it with `onError` gives it one.
    */
   readonly onError?: (error: Error, key: string) => void;
   readonly children: ReactNode;
@@ -49,7 +52,12 @@ export function IntlProvider({
         timeZone,
         formats,
         onError: (error, key) => {
-          latestOnError.current?.(error, key);
+          // By truthiness, as in `createIntl`: a JavaScript app's `onError={enabled ? report : null}` gets the default.
+          if (latestOnError.current) {
+            latestOnError.current(error, key);
+          } else {
+            reportToConsole(error, key);
+          }
         },
       }),
     [locale, catalog, timeZone, formats, latestOnError]

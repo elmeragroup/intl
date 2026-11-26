@@ -109,7 +109,7 @@ export type RichFormat = <R>(message: MessageRef, values: RichValues<R>) => Form
 /** Key of the rich formatter on an `IntlInstance`; only the package's `<T>` reads it. */
 export const FORMAT: unique symbol = Symbol("elmera.intl.format");
 
-/** Key of the error reporter on an `IntlInstance` (the `onError` option); only the package's `<T>` reads it. */
+/** Key of the error reporter on an `IntlInstance` (`onError`, or the default); only the package's `<T>` reads it. */
 export const REPORT: unique symbol = Symbol("elmera.intl.report");
 
 /** One locale's translator. */
@@ -127,10 +127,47 @@ export type CreateIntlOptions = IntlConfig & {
   /**
    * Called with the message's key when a message fails to format (the call then throws: a caller bug the types and
    * `check` rule out) or is missing from the catalog though it has ICU syntax (it renders raw: not extracted yet), and
-   * with the method (`format.dateTime`) when a `format` call fails (next-intl's fallback renders instead).
+   * with the method (`format.dateTime`) when a `format` call fails (next-intl's fallback renders instead). It receives
+   * every report and replaces the default, which writes each distinct problem once to `console.error`, in every
+   * environment.
    */
   readonly onError?: (error: Error, key: string) => void;
 };
+
+// Each (key, message) pair the default has logged in this loaded copy of the runtime, so a problem a page or request
+// hits on every render logs once. Cleared at REPORTED_LIMIT, which bounds the memory a long-lived server keeps: past
+// it a pair may log again.
+const reported = new Set<string>();
+const REPORTED_LIMIT = 1000;
+
+/**
+ * The default for a report with no `onError`: `console.error("@elmeragroup/intl:", JSON.stringify(key), error)`, once
+ * per key and message. The key is never the first argument, which a console reads as a format string (`%d` in a
+ * source). It never changes what renders or what throws: whatever it throws itself is dropped.
+ *
+ * @param error - The reported error, passed as is so its stack shows.
+ * @param key - The message's key, or the formatter method (`format.dateTime`).
+ */
+export function reportToConsole(error: Error, key: string): void {
+  try {
+    const identity = JSON.stringify([key, error.message]);
+
+    if (reported.has(identity)) {
+      return;
+    }
+
+    if (reported.size >= REPORTED_LIMIT) {
+      reported.clear();
+    }
+
+    // Before the call, so a console that throws is not called again for this pair.
+    reported.add(identity);
+    console.error("@elmeragroup/intl:", JSON.stringify(key), error);
+  } catch {
+    // Dropped: a throwing console, an error whose `message` getter throws, or a cause whose inspection throws must not
+    // change the fallback or the error the caller sees.
+  }
+}
 
 /**
  * Declare a message for later translation with `t.from`. The text must be a literal (the extractor reads it here).
@@ -227,7 +264,8 @@ function lookup(catalog: Catalog, key: string): Entry | undefined {
  * entry, in `locale`, or in `en` for an entry compiled from the source for want of a translation. A key the catalog
  * lacks renders its plain source as is; dates and times format in `timeZone`, named styles resolve through `formats`.
  *
- * @param options - Locale, catalog, time zone, named styles and an optional error callback.
+ * @param options - Locale, catalog, time zone, named styles and an optional error callback (with none, each distinct
+ *   problem is written once to `console.error`).
  * @returns The translator.
  * @throws When the catalog comes from another catalog version (mismatched packages: a defect).
  */
@@ -236,7 +274,13 @@ export function createIntl(options: CreateIntlOptions): IntlInstance {
   const settings: FormatSettings = { locale, timeZone, formats: resolveFormats(formats) };
   const sourceSettings: FormatSettings = { ...settings, locale: SOURCE_LOCALE };
   const report = (error: Error, key: string) => {
-    onError?.(error, key);
+    // By truthiness, not `=== undefined`: a JavaScript app passes `onError: enabled ? report : null`, which gets the
+    // default as an absent handler does (main's `onError?.()` skipped it), not a TypeError in place of the fallback.
+    if (onError) {
+      onError(error, key);
+    } else {
+      reportToConsole(error, key);
+    }
   };
   // Up front, so a catalog of another version fails at construction, not at its first message.
   decodedOf(catalog);
