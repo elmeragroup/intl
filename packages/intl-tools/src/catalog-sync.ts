@@ -187,11 +187,12 @@ type OwnWrites = ReadonlyMap<string | undefined, ReadonlySet<string>>;
  * definition the write guard and the watch's record of its own writes share. A text this sync wrote to a path with the
  * same snapshot is its own: paths that name one file (a link, a hard link) read one snapshot once the sync's check
  * before its first write passed. So is a text it wrote to a path that was absent at the read: that write may create a
- * directory (one a `..` before the locale climbs out of) that makes it, or a later path, reach a file another path
- * names through a link, and the sync cannot know which. Anything else, a text this sync wrote over another present
- * snapshot included, is a save since: a catalog a translator copies onto another mid-sync is kept when the copied
- * catalog existed at the read. Left: when two paths' snapshots are one text, or a copied catalog was just created, a
- * copy between them cannot be told from the sync's own write through a link, since content is all this knows.
+ * directory that makes another catalog's dangling link (`sv/catalog.po -> ../da/../nb/catalog.po`, once da's write
+ * creates `da/`) reach a file another path names, and the sync cannot know which. Anything else, a text this sync
+ * wrote over another present snapshot included, is a save since: a catalog a translator copies onto another mid-sync
+ * is kept when the copied catalog existed at the read. Left: when two paths' snapshots are one text, or a copied
+ * catalog was just created, a copy between them cannot be told from the sync's own write through a link, since
+ * content is all this knows.
  *
  * @param own - What the sync wrote, by snapshot.
  * @param snapshot - The path's text as the sync read it (undefined: absent).

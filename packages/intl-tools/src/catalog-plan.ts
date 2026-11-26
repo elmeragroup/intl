@@ -19,6 +19,8 @@ export type CatalogText = {
   readonly shown: string;
   /** The PO's text; undefined when it does not exist. */
   readonly text: string | undefined;
+  /** When the PO does not exist, the directory that does not either that its path climbs out of (`..`), as shown. */
+  readonly climbsOutOf: string | undefined;
 };
 
 /** A catalog file with the exact text written to it. */
@@ -50,11 +52,13 @@ export type ParsedCatalog =
  * Parse a PO as read.
  *
  * @param catalog - The PO's text and where it is.
- * @returns Its entries, or a `CatalogUnreadable` problem naming the PO.
+ * @returns Its entries, or a `CatalogUnreadable` or `CatalogClimbsMissing` problem naming the PO.
  */
 export function parseCatalog(catalog: CatalogText): ParsedCatalog {
   if (catalog.text === undefined) {
-    return { _tag: "Read", file: undefined };
+    return catalog.climbsOutOf === undefined
+      ? { _tag: "Read", file: undefined }
+      : { _tag: "Problem", problem: climbsMissing(catalog.climbsOutOf, catalog) };
   }
 
   const parsed = parsePo(catalog.text);
@@ -73,6 +77,26 @@ export function parseCatalog(catalog: CatalogText): ParsedCatalog {
   }
 
   return { _tag: "Read", file: parsed.file };
+}
+
+/**
+ * The problem that a catalog's path climbs with `..` out of a directory that does not exist (#29): the write would
+ * create it, and the path then reach a file the read never saw. Refused wherever the `..` would lead: telling is the
+ * guess #14 forbids, and a refusal costs a `mkdir`.
+ *
+ * @param missing - The directory, as problems show it.
+ * @param at - The catalog.
+ * @returns A `CatalogClimbsMissing` problem naming both fixes.
+ */
+function climbsMissing(missing: string, at: CatalogText): Problem {
+  return {
+    code: "CatalogClimbsMissing",
+    message: `the catalogs pattern climbs out of ${missing}, which does not exist, so what the path reaches would change once the write created it`,
+    // A running watch matches no event to the directory: it is neither a source nor a configured catalog path.
+    fix: `create ${missing} (or, when it is a link, its target), or write "catalogs" without the ".."; a running watch syncs again on the next change to a source`,
+    file: at.shown,
+    locale: at.locale,
+  };
 }
 
 /**
