@@ -414,8 +414,8 @@ const PEERS = new Map<string, Readonly<Record<string, StatedPeer>>>([
     "@elmeragroup/intl",
     {
       react: {
-        optional: false,
-        why: "/react, /server, /next and /start render with it; only /core and /effect do not",
+        optional: true,
+        why: "/react, /server, /next and /start render with it (/next/server through next); /core and /effect do not",
       },
       next: { optional: true, why: "/next and /next/server only" },
       "@tanstack/react-router": { optional: true, why: "/start only" },

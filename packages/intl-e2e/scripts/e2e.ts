@@ -115,20 +115,28 @@ function installPacked(packed: ReadonlyArray<Packed>): void {
   });
 }
 
-// The archive keeps `effect` an optional peer, so an app that never imports `/effect` installs nothing more: a declared
-// peer, marked optional, and in neither `dependencies` nor `optionalDependencies`. The consumer below links it as an
-// app that uses `/effect` installs it, which would hide a peer that is no longer optional.
-function assertOptionalEffectPeer(packed: PackedManifest): void {
-  const optional =
-    packed.peerDependencies?.effect !== undefined &&
-    packed.peerDependenciesMeta?.effect?.optional === true &&
-    packed.dependencies?.effect === undefined &&
-    packed.optionalDependencies?.effect === undefined;
+// The peers the archive must keep optional, so an app that never imports a subpath needing one installs nothing more:
+// `effect`, which only `/effect` needs, and `react`, which neither `/core` nor `/effect` does. The consumer below links
+// `effect` as an app that uses `/effect` installs it, which would hide a peer that is no longer optional; it never
+// links `react`, so its run shows `/core` and `/effect` load without it, but not whether an installer would add it.
+// Only the manifest shows that, for both.
+const OPTIONAL_PEERS = ["effect", "react"] as const;
 
-  if (!optional) {
-    process.stderr.write("effect consumer: the packed runtime does not keep effect an optional peer\n");
-    process.exit(1);
-  }
+// Each peer in OPTIONAL_PEERS is a declared peer, marked optional, and in neither `dependencies` nor
+// `optionalDependencies`.
+function assertOptionalPeers(packed: PackedManifest): void {
+  OPTIONAL_PEERS.forEach((name) => {
+    const optional =
+      packed.peerDependencies?.[name] !== undefined &&
+      packed.peerDependenciesMeta?.[name]?.optional === true &&
+      packed.dependencies?.[name] === undefined &&
+      packed.optionalDependencies?.[name] === undefined;
+
+    if (!optional) {
+      process.stderr.write(`effect consumer: the packed runtime does not keep ${name} an optional peer\n`);
+      process.exit(1);
+    }
+  });
 }
 
 // A new directory under the system's temp dir, removed when the process exits, however it exits: every early exit is a
@@ -140,16 +148,14 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-// The Effect consumer's own directory, as an app that installs the runtime and its optional peer: the packed runtime as
-// a real copy with its dependencies linked (without @schummar/icu-type-parser the type-check would accept any ICU
-// argument), `effect` linked from the runtime's devDependency (never this package's, which the Next and Start fixtures
-// resolve through), the consumer and the catalogs compiled from its nb.po. Outside the workspace, so nothing else
-// resolves.
+// The Effect consumer's own directory, as an app that installs the runtime and `effect`, without React: the packed
+// runtime as a real copy with its dependencies linked (without @schummar/icu-type-parser the type-check would accept
+// any ICU argument), `effect` linked from the runtime's devDependency (never this package's, which the Next and Start
+// fixtures resolve through), the consumer and the catalogs compiled from its nb.po. Outside the workspace, so nothing
+// else resolves.
 function installEffectConsumer(runtimeTarball: string): string {
   const dir = tempDir("intl-effect-");
-  assertOptionalEffectPeer(
-    unpack(runtimeTarball, join(dir, "node_modules", runtimeManifest.name), runtimeSource)
-  );
+  assertOptionalPeers(unpack(runtimeTarball, join(dir, "node_modules", runtimeManifest.name), runtimeSource));
   symlinkSync(
     realpathSync(join(runtimeSource, "node_modules", "effect")),
     join(dir, "node_modules", "effect")
@@ -191,25 +197,52 @@ function installEffectConsumer(runtimeTarball: string): string {
   return dir;
 }
 
-// The URL Node resolves a specifier to from a directory.
-function resolveFrom(cwd: string, specifier: string): string {
+// The URL Node resolves a specifier to from a directory, under the given Node options.
+function resolveFrom(cwd: string, specifier: string, options: ReadonlyArray<string> = []): string {
   return execFileSync(
     process.execPath,
-    ["--input-type=module", "--eval", `console.log(import.meta.resolve(${JSON.stringify(specifier)}))`],
+    [
+      ...options,
+      "--input-type=module",
+      "--eval",
+      `console.log(import.meta.resolve(${JSON.stringify(specifier)}))`,
+    ],
     { cwd, encoding: "utf8" }
   ).trim();
 }
 
-// The real path of `effect/Effect` as Node resolves it from a directory.
-function effectFrom(cwd: string): string {
-  return realpathSync(fileURLToPath(resolveFrom(cwd, "effect/Effect")));
+// Node's option for everything the consumer runs: each module resolves its imports from its own path inside the
+// consumer, never from the real path a link points at. The consumer's `effect` and the runtime's dependencies are
+// links into this workspace's store, where its hoisted React resolves; without this, a linked dependency that
+// imported React would load it here and fail only in an app that has none.
+const CONSUMER_NODE = ["--preserve-symlinks"] as const;
+
+// Whether Node, as the consumer runs it, reports a specifier missing from a directory. Any other failure is not
+// evidence of absence.
+function missingFrom(cwd: string, specifier: string): boolean {
+  return spawnSync(
+    process.execPath,
+    [...CONSUMER_NODE, "--input-type=module", "--eval", `import.meta.resolve(${JSON.stringify(specifier)})`],
+    { cwd, encoding: "utf8" }
+  ).stderr.includes("ERR_MODULE_NOT_FOUND");
 }
 
-// The packed `/effect`, as a consumer gets it: one `effect` for the consumer and the package (a second copy would hold
-// its own Context), its declarations type-check the consumer, and two overlapping requests get their own locale.
+// The packed `/effect` and `/core`, as a consumer gets them: `react` is missing from the consumer and from the
+// package, and every module, linked ones included, resolves from its path in the consumer (CONSUMER_NODE), so the run
+// below proves nothing it loads reaches React; one `effect` for the consumer and the package (a second copy would hold
+// its own Context); its declarations type-check the consumer; and two overlapping requests get their own locale.
 function assertEffectConsumer(dir: string): void {
-  const consumerEffect = effectFrom(dir);
-  const packageEffect = effectFrom(join(dir, "node_modules", runtimeManifest.name, "dist"));
+  const packageDist = join(dir, "node_modules", runtimeManifest.name, "dist");
+  const reactFrom = [dir, packageDist].find((cwd) => !missingFrom(cwd, "react"));
+
+  if (reactFrom !== undefined) {
+    process.stderr.write(`effect consumer: react is not missing from ${reactFrom}\n`);
+    process.exit(1);
+  }
+
+  // Under CONSUMER_NODE a module is one instance per path, links unresolved, so one `effect` is one URL.
+  const consumerEffect = resolveFrom(dir, "effect/Effect", CONSUMER_NODE);
+  const packageEffect = resolveFrom(packageDist, "effect/Effect", CONSUMER_NODE);
 
   if (consumerEffect !== packageEffect) {
     process.stderr.write(
@@ -219,14 +252,19 @@ function assertEffectConsumer(dir: string): void {
   }
 
   run(bin("tsrs"), ["--noEmit", "-p", dir, "--customConditions", "null"], root, {});
-  const answered = execFileSync(process.execPath, ["server.ts"], { cwd: dir, encoding: "utf8" }).trim();
+  const answered = execFileSync(process.execPath, [...CONSUMER_NODE, "server.ts"], {
+    cwd: dir,
+    encoding: "utf8",
+  }).trim();
 
   if (answered !== JSON.stringify(["Hei, Ada", "Hello, Ada"])) {
     process.stderr.write(`effect consumer: the nb and en requests answered ${answered}\n`);
     process.exit(1);
   }
 
-  process.stdout.write(`effect consumer, packed runtime: nb and en requests answer ${answered}\n`);
+  process.stdout.write(
+    `effect consumer, packed runtime without react: nb and en requests answer ${answered}\n`
+  );
 }
 
 // A plain build behaves the same on either install, so the pass proves which copy it built against: every package
