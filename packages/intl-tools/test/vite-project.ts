@@ -40,15 +40,37 @@ export const SERVER_WATCH = { watch: { usePolling: true, interval: POLL_MS } };
 /** Probe writes spaced past the watch's 100 ms debounce, so a rewrite does not postpone the sync it waits for. */
 export const PROBE_INTERVAL_MS = 500;
 
+/** The chokidar variables Vite's watcher reads as a dev server is made, and the dev watch with it. */
+export const CHOKIDAR_VARIABLES = ["CHOKIDAR_USEPOLLING", "CHOKIDAR_INTERVAL"] as const;
+
 /**
  * The Vite tests' `it`: each test owns its project (see `Project`), synced and translated: `<T>Hello</T>` -> "Hei";
  * the entry has no messages, the extractor scans the rest. Every helper takes the project, so a test that overruns
  * cannot touch the next test's files, and every wait ends by the project's deadline. What a test starts (a dev server,
- * a watch build) it closes through `project.defer`, before the root is removed.
+ * a watch build) it closes through `project.defer`, before the root is removed. Each test runs with no chokidar variable
+ * set, so a developer's exported `CHOKIDAR_USEPOLLING` makes no dev server poll; the variables are restored as they
+ * were once what the test started has closed, or failed to.
  */
 export const it = test.extend("project", async ({ task }, { onCleanup }) => {
   const { project, close } = openProject("elmera-intl-vite-", task.timeout);
-  onCleanup(close);
+  // The variables change only once their restore is registered, and it runs whether or not the teardown rejects.
+  const saved = CHOKIDAR_VARIABLES.map((name) => [name, process.env[name]] as const);
+  onCleanup(async () => {
+    try {
+      await close();
+    } finally {
+      saved.forEach(([name, value]) => {
+        if (value === undefined) {
+          Reflect.deleteProperty(process.env, name);
+        } else {
+          process.env[name] = value;
+        }
+      });
+    }
+  });
+  CHOKIDAR_VARIABLES.forEach((name) => {
+    Reflect.deleteProperty(process.env, name);
+  });
   project.write("elmera-intl.json", JSON.stringify(CONFIG));
   project.write("src/main.ts", "export const answer = 42;\n");
   project.write("src/page.tsx", component("Hello"));
@@ -333,15 +355,17 @@ export type CountedServices = {
  * them once, so `[built, disposed]` counts the sessions begun and ended.
  *
  * @param sync - The watch's sync step; `CatalogSync.layer()` unless a test holds it.
+ * @param events - The platform's file events; `FileEvents.layer()` unless a test delivers its own.
  * @returns The services and their counts.
  */
 export function countedServices(
-  sync: Layer.Layer<CatalogSync, never, SyncServices> = CatalogSync.layer()
+  sync: Layer.Layer<CatalogSync, never, SyncServices> = CatalogSync.layer(),
+  events: Layer.Layer<FileEvents> = FileEvents.layer()
 ): CountedServices {
   const counts = { built: 0, disposed: 0 };
   const layer = Layer.mergeAll(
     Layer.provideMerge(sync, projectServices()),
-    FileEvents.layer(),
+    events,
     Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.sync(() => {
