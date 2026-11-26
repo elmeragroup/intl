@@ -5,6 +5,7 @@ import type { CallExpression, Node, Program, VariableDeclarator } from "oxc-pars
 import { parseSync } from "oxc-parser";
 import { transformSync } from "oxc-transform";
 
+import type { IntlInstance } from "@elmeragroup/intl/core";
 import { keyOf } from "@elmeragroup/intl/internal/message";
 
 import { childNodes } from "./ast-children.ts";
@@ -51,10 +52,38 @@ export type ExtractResult =
   | { readonly _tag: "Failed"; readonly failures: ReadonlyArray<ExtractFailure> };
 
 const JSX_RUNTIMES = new Set(["react/jsx-runtime", "react/jsx-dev-runtime"]);
+// The pragma that compiles a file's JSX to `factory(type, props, ...children)` (the classic runtime), read only to word a
+// failure: an instance given as such a call's props (`<Row {...intl}>`) is told how to copy it. oxc reads it from a
+// leading comment; a comment anywhere that names it only changes that wording, never what fails.
+const CLASSIC_PRAGMA = /@jsxRuntime\s+classic\b/u;
 const HOOK_NAME = /^use[A-Z]/u;
-// Only t-returning factories must be bound: a bare t is called by name, so a wrapper would hide it. IntlInstance objects
-// may flow, but a `.t(…)` call on one the file cannot trace to its factory fails.
+// React's hooks that take a dependency array, each with the arguments it takes when the array is given: the array is
+// the last. React keeps it in hook state and never hands it back, so `[t]` or `[intl]` there goes nowhere; every other
+// React hook may keep the array (`useState`, `useRef`, `useReducer`'s initial state).
+const DEPENDENCY_HOOKS: ReadonlyMap<string, number> = new Map([
+  ["useEffect", 2],
+  ["useLayoutEffect", 2],
+  ["useInsertionEffect", 2],
+  ["useMemo", 2],
+  ["useCallback", 2],
+  ["useImperativeHandle", 3],
+]);
+// A translator and an IntlInstance are each bound where it is used, so extraction sees every call. A bare t is called by
+// name, so a wrapper of a t-returning factory would hide it. An IntlInstance used as a value fails where it is bound
+// (checkInstance), and a `.t(…)` call on one the file cannot trace to its factory fails.
 const T_FACTORIES = ["useT", "getT"];
+
+// The members an IntlInstance declares, its string keys (the `satisfies` keeps them equal to the type's, both ways): the
+// only ones an instance may be read through, looked up with `Object.hasOwn`. None hands back a translator or an instance;
+// the inherited `valueOf`, which `in` would find, returns the instance itself.
+const INSTANCE_MEMBERS = {
+  t: true,
+  format: true,
+  locale: true,
+  timeZone: true,
+  catalog: true,
+  formats: true,
+} as const satisfies Record<Extract<keyof IntlInstance, string>, true>;
 // Components whose meaning is their JSX children: called as functions, their message is invisible.
 const JSX_ONLY = new Set(["T", "Val", "Plural", "Select"]);
 
@@ -95,11 +124,16 @@ export function extractMessages(filename: string, code: string): ExtractResult {
 
   const { program } = parseSync(filename.replace(/\.[cm]?[jt]sx?$/u, ".js"), compiled.code);
   // Type-only imports are erased by the compiler, so whether a file uses the package is read from the source.
-  const importsPackage = importsPackageIn(parseSync(filename, code).program);
+  const source = parseSync(filename, code);
+  const importsPackage = importsPackageIn(source.program);
   const toSource = createSourceMapper(compiled.map.mappings);
   const sourcePosition = (offset: number) =>
     toSource(positionAt(compiled.code, offset)) ?? { line: 1, column: 0 };
-  const extraction = new Extraction(importsPackage, compiled.code, analyzeScopes(program));
+  const extraction = new Extraction(
+    { importsPackage, classicJsx: source.comments.some((comment) => CLASSIC_PRAGMA.test(comment.value)) },
+    compiled.code,
+    analyzeScopes(program)
+  );
   extraction.run(program);
 
   if (extraction.failures.length > 0) {
@@ -131,6 +165,9 @@ function importsPackageIn(program: Program): boolean {
 }
 
 type Use = { readonly parent: Node | undefined; readonly child: Node | undefined; readonly index: number };
+// What the walk reads from the source as written, not the compiled code: whether it imports the package (type-only
+// imports are erased) and whether its JSX compiles to the classic runtime's calls.
+type SourceFacts = { readonly importsPackage: boolean; readonly classicJsx: boolean };
 type PendingFailure = { readonly message: string; readonly offset: number };
 
 // One file's walk. Names resolve through the scope tree; the walk itself only tracks where it is (current scope,
@@ -143,11 +180,13 @@ class Extraction {
   private scope: Scope;
 
   private readonly importsPackage: boolean;
+  private readonly classicJsx: boolean;
   private readonly code: string;
   private readonly tree: ScopeTree;
 
-  constructor(importsPackage: boolean, code: string, tree: ScopeTree) {
+  constructor({ importsPackage, classicJsx }: SourceFacts, code: string, tree: ScopeTree) {
     this.importsPackage = importsPackage;
+    this.classicJsx = classicJsx;
     this.code = code;
     this.tree = tree;
     this.scope = tree.root;
@@ -199,21 +238,30 @@ class Extraction {
     return this.packageImport(node) === name;
   }
 
+  // The export of `react` a node names: a named or renamed import, or a static member of its default or namespace
+  // import (`React.useEffect`).
+  private reactExport(node: Node): string | undefined {
+    const imported = this.importOf(node);
+
+    if (imported !== undefined) {
+      return imported.source === "react" && imported.imported !== "default" && imported.imported !== "*"
+        ? imported.imported
+        : undefined;
+    }
+
+    const namespace = node.type === "MemberExpression" ? this.importOf(node.object) : undefined;
+
+    return namespace?.source === "react" && (namespace.imported === "default" || namespace.imported === "*")
+      ? this.staticMemberName(node)
+      : undefined;
+  }
+
   private isFragment(type: Node): boolean {
     const imported = this.importOf(type);
 
-    if (imported) {
-      return (
-        imported.imported === "Fragment" && (imported.source === "react" || JSX_RUNTIMES.has(imported.source))
-      );
-    }
-
-    const namespace = type.type === "MemberExpression" ? this.importOf(type.object) : undefined;
-
     return (
-      namespace?.source === "react" &&
-      (namespace.imported === "default" || namespace.imported === "*") &&
-      this.staticMemberName(type) === "Fragment"
+      this.reactExport(type) === "Fragment" ||
+      (imported !== undefined && JSX_RUNTIMES.has(imported.source) && imported.imported === "Fragment")
     );
   }
 
@@ -235,8 +283,13 @@ class Extraction {
     return this.bindings.originOf(node, this.scope);
   }
 
-  // A translator cannot be passed, so a value derived from an npm import never holds one, though it may hold an
-  // IntlInstance (whose `.t` calls are checked on their own).
+  // A `{ t }` over an unrelated or derived value, and a bare `t(…)` bound from one, are treated as another library's
+  // translator and allowed (`const { t } = useTranslation()`). A translator bound in code extraction scans reaches a
+  // derived value through the custom-hook residual (`Origin` in bindings.ts says why), and fails where it is handed on
+  // any other way. One from code it never reads (a package outside `include`, or one whose scope reads as npm's) may
+  // arrive through any wrapper, and an instance received from there may be passed on. These are README residual rows,
+  // whose `t` is not caught. A `.t(…)` on a derived value still fails as untraced (checkCall), since it
+  // may be an IntlInstance.
   private cannotHoldT(node: Node | null | undefined): boolean {
     const origin = this.originOf(node);
 
@@ -284,7 +337,7 @@ class Extraction {
     const outer = this.scope;
     this.scope = this.tree.scopeOf(node) ?? outer;
 
-    if (node.type === "Identifier" && parent && isReference(node, parent)) {
+    if (node.type === "Identifier" && parent && isReference(node, parent, this.ancestors.at(-3))) {
       this.checkIdentifier(node.name, node, parent);
     }
 
@@ -345,9 +398,15 @@ class Extraction {
 
   // `CurrentIntl` is read only as `yield* CurrentIntl` and provided only by calling `.layer(…)` or `.provide(…)`: any
   // other read (`.use`, `Effect.map(CurrentIntl, …)`, an alias) reaches the translator where extraction cannot see it.
+  // `yield* CurrentIntl` is an IntlInstance expression, checked where it is used.
   private checkService(name: string, node: Node): void {
     const { parent, child, index } = this.useOf(VALUE_TRANSPARENT);
     const yielded = parent?.type === "YieldExpression" && parent.delegate && parent.argument === child;
+
+    if (yielded && this.importsPackage) {
+      this.checkInstance(parent, () => `yield* ${name}`, index);
+    }
+
     const member =
       parent?.type === "MemberExpression" && parent.object === child
         ? this.staticMemberName(parent)
@@ -364,7 +423,8 @@ class Extraction {
     }
   }
 
-  // A package binding or a bound t may only be called, aliased or (for t) used as t.from; IntlInstance objects may flow.
+  // A package binding or a bound t may only be called, aliased or (for t) used as t.from or in a dependency array. An
+  // exported t is checkExport's, and an IntlInstance checkInstance's.
   private checkIdentifier(name: string, node: Node, parent: Node): void {
     if (this.bindings.isService(node, this.scope)) {
       this.checkService(name, node);
@@ -382,14 +442,8 @@ class Extraction {
         ? this.staticMemberName(parent)
         : undefined;
     const tFrom = member === "from";
-    // [t] as a hook's dependency array (exhaustive-deps requires it) is a reference, not a use.
     const grand = this.ancestors.at(-3);
-    const hookDependency =
-      parent.type === "ArrayExpression" &&
-      grand?.type === "CallExpression" &&
-      grand.callee.type === "Identifier" &&
-      HOOK_NAME.test(grand.callee.name) &&
-      grand.arguments.at(-1) === parent;
+    const hookDependency = this.isDependencyArray(parent, grand);
     const imported = this.packageImport(node);
 
     if (
@@ -425,11 +479,121 @@ class Extraction {
       !called &&
       !aliased &&
       !tFrom &&
-      !(hookDependency && kind === "t") &&
+      !((hookDependency || parent.type === "ExportSpecifier") && kind === "t") &&
       (imported !== undefined || kind === "t")
     ) {
       this.fail(node, `\`${name}\` is passed or stored; call it with a literal message where it is used`);
     }
+
+    if (kind === "intl" && this.importsPackage) {
+      this.checkInstance(node, () => name);
+    }
+  }
+
+  // An IntlInstance stays in the file that binds it, as `t` does: the file it reaches (a child given it as a prop, a
+  // context's reader, a helper) may read `t` off it where extraction cannot see, and one that does not import the package
+  // is not checked at all. So it may only be read through its own members, bound by an unexported declaration, listed
+  // in a dependency array, spread into an object, given as the props of a createElement bound to a `react` import,
+  // discarded or made `void`; any other use fails here, once per site. The paths that already classify an expression call it: an
+  // identifier (checkIdentifier), a factory call (checkCall) and `yield* CurrentIntl` (checkService), the expression at
+  // ancestor `at`. A failure names the expression by `form`, as written, never by a slice of the compiled code, which a
+  // multi-line `createIntl({ … })` would garble.
+  private checkInstance(node: Node, form: () => string, at = this.ancestors.length - 1): void {
+    const { parent, child, index } = this.useOf(AWAIT_TRANSPARENT, at);
+
+    if (this.isInstanceUse(node, parent, child, index)) {
+      return;
+    }
+
+    // In a classic-runtime file, the props slot of any other factory is where `<Row {...intl}>` puts the instance.
+    this.fail(
+      node,
+      this.classicJsx && parent?.type === "CallExpression" && isPropsSlot(parent, child)
+        ? instanceAsClassicProps(form())
+        : instanceUsedAsValue(form())
+    );
+  }
+
+  // The uses an IntlInstance may have, seen through parentheses, optional chains and `await`.
+  private isInstanceUse(
+    node: Node,
+    parent: Node | undefined,
+    child: Node | undefined,
+    index: number
+  ): boolean {
+    switch (parent?.type) {
+      // A member it declares, by name; a key the extractor cannot name is checkMember's.
+      case "MemberExpression": {
+        const name = this.memberName(parent);
+
+        return (
+          parent.object === child &&
+          (name._tag === "Unresolved" || Object.hasOwn(INSTANCE_MEMBERS, name.name))
+        );
+      }
+      // Called, it is no instance to the code it reaches (`const t = useIntl(); t()` fails as an untraced t). As the
+      // props of a createElement bound to a `react` import (`<Row {...intl}>` under the classic JSX runtime with
+      // `React` imported), it is copied as a spread is: own enumerable keys only. Any other factory may keep the object
+      // itself as the props, as the automatic runtime's `jsx(Row, intl)` does, so it fails, as any other argument does:
+      // under the classic runtime that is `<Row {...intl}>` with `React` a global or a `@jsx` factory.
+      case "CallExpression":
+        return (
+          parent.callee === child ||
+          (isPropsSlot(parent, child) && this.reactExport(parent.callee) === "createElement")
+        );
+      // Bound, unless the binding is exported (`export const intl = createIntl(cfg)`): a pattern binds its members.
+      case "VariableDeclarator":
+        return (
+          parent.init === child &&
+          !(parent.id.type === "Identifier" && this.ancestors[index - 2]?.type === "ExportNamedDeclaration")
+        );
+      // The target of a plain assignment (`intl = undefined`) is written, not read; its value is the right side's,
+      // checked on its own. A compound assignment (`intl ??= other`) reads it, so it fails.
+      case "AssignmentExpression":
+        return parent.operator === "=" && parent.left === child;
+      // Discarded, it goes nowhere; a `void` operand is discarded too, and its value is `undefined`.
+      case "ExpressionStatement":
+        return true;
+      case "UnaryExpression":
+        return parent.operator === "void";
+      // An object spread copies the config and the symbol keys `[FORMAT]` and `[REPORT]`, neither a translator, and never
+      // the non-enumerable `t` or `format`.
+      case "SpreadElement":
+        return this.ancestors[index - 1]?.type === "ObjectExpression";
+      // A dependency array lists bindings: an identifier element, never a factory's call (`[useIntl()]`).
+      case "ArrayExpression":
+        return (
+          node.type === "Identifier" &&
+          child === node &&
+          this.isDependencyArray(parent, this.ancestors[index - 1])
+        );
+      default:
+        return false;
+    }
+  }
+
+  // Whether an array is a hook's dependency array (exhaustive-deps requires `[t]` and `[intl]` there), by how the hook is
+  // bound. One bound to a `react` import is one of React's dependency hooks, given the array as its last argument at its
+  // dependency slot. A bare `use*` callee bound to anything else (a custom effect hook) is given two or more arguments,
+  // the array last; it may keep the array (README, residuals). A member of anything but React (`Hooks.useEffect`) is not.
+  private isDependencyArray(array: Node, call: Node | undefined): boolean {
+    if (
+      array.type !== "ArrayExpression" ||
+      call?.type !== "CallExpression" ||
+      call.arguments.at(-1) !== array
+    ) {
+      return false;
+    }
+
+    const react = this.reactExport(call.callee);
+
+    if (react !== undefined) {
+      return DEPENDENCY_HOOKS.get(react) === call.arguments.length;
+    }
+
+    return (
+      call.callee.type === "Identifier" && HOOK_NAME.test(call.callee.name) && call.arguments.length >= 2
+    );
   }
 
   private checkMember(node: Node & { readonly type: "MemberExpression" }): void {
@@ -595,7 +759,11 @@ class Extraction {
     }
 
     for (const specifier of node.specifiers) {
-      if (specifier.local.type === "Identifier" && this.kindOf(specifier.local) === "t") {
+      if (
+        specifier.local.type === "Identifier" &&
+        isReference(specifier.local, specifier, node) &&
+        this.kindOf(specifier.local) === "t"
+      ) {
         this.fail(specifier, message);
       }
     }
@@ -604,6 +772,18 @@ class Extraction {
   private checkCall(node: CallExpression): void {
     const [first, second] = node.arguments;
     const callee = unwrap(node.callee, VALUE_TRANSPARENT) ?? node.callee;
+    const imported = this.packageImport(callee);
+
+    // Only a package import's call can be an IntlInstance factory's (`useIntl()`, `createIntl(cfg)`).
+    if (
+      this.importsPackage &&
+      imported !== undefined &&
+      node.callee.type === "Identifier" &&
+      this.kindOf(node) === "intl"
+    ) {
+      const { name } = node.callee;
+      this.checkInstance(node, () => `${name}(${node.arguments.length > 0 ? "…" : ""})`);
+    }
 
     // useT()("x") / (await getT())("x"): assign t first so the call site is plain. The advice binds the caller's own
     // expression, so a server action is never told to call a hook.
@@ -616,7 +796,7 @@ class Extraction {
     }
 
     // A factory result must be bound where it is created, or a wrapper hook would hide every call site.
-    const factory = T_FACTORIES.find((name) => this.isPackageBinding(callee, name));
+    const factory = T_FACTORIES.find((name) => name === imported);
 
     if (factory !== undefined) {
       const { parent, child } = this.useOf(AWAIT_TRANSPARENT);
@@ -638,7 +818,7 @@ class Extraction {
       extractT(this.reader(), node, second);
     }
 
-    if (this.isPackageBinding(callee, "msg")) {
+    if (imported === "msg") {
       extractMsg(this.reader(), node, first, second);
 
       return;
@@ -756,8 +936,26 @@ function untracedT(appImport: string | undefined, importsPackage: boolean): stri
     : `${base}. If this \`t\` is another library's translator, have its module expose it under another name, or move the code that uses it to a file without the intl package and give that file a legacy-only remedy too (see the README's migration section)`;
 }
 
-// Whether an identifier is read here, rather than declared or used as a property or label name.
-function isReference(node: Node, parent: Node): boolean {
+// Why an IntlInstance used as a value is not extractable, and where to bind one instead.
+function instanceUsedAsValue(form: string): string {
+  return `\`${form}\` is an IntlInstance (or a promise of one) used as a value, not through its own members, so wherever it goes its \`t\` is not extracted; bind one where it is used (\`useT()\` or \`useIntl()\` in the child, \`await getIntl()\`, \`yield* CurrentIntl\` provided by \`CurrentIntl.layer(options)\` or \`CurrentIntl.provide(effect)\`, or \`createIntl(config)\` with the config passed), or pass \`msg()\` descriptors, its \`format\` or its \`locale\``;
+}
+
+// Whether a node is a call's second argument, the props of `createElement(type, props, ...children)`. A spread before it
+// (`createElement(...[Row, null], intl)`) moves the slot to an index the extractor cannot know.
+function isPropsSlot(call: CallExpression, node: Node | undefined): boolean {
+  return call.arguments[1] === node && call.arguments[0]?.type !== "SpreadElement";
+}
+
+// Why an IntlInstance given as the props of a classic-runtime factory other than React's `createElement` is not
+// extractable, and the two rewrites.
+function instanceAsClassicProps(form: string): string {
+  return `\`${form}\` is an IntlInstance given as the second argument of a call the extractor cannot bind to React's \`createElement\`, where a classic JSX factory takes its props: under \`@jsxRuntime classic\`, \`<Row {...${form}}>\` compiles to \`React.createElement(Row, ${form})\` with \`React\` a global, or to the \`@jsx\` pragma's factory, which may keep the instance itself as the props, so its \`t\` reaches the child unextracted; copy it yourself, \`<Row {...{ ...${form} }}>\` (\`{ ...${form} }\` in a hand-written call), or use the automatic JSX runtime (or, with \`React\` as the factory, \`import React from "react"\`)`;
+}
+
+// Whether an identifier is read here, rather than declared or used as a property or label name. `grand` is the parent's
+// parent: an export specifier under `export … from "…"` names the other module's binding, not a local one.
+function isReference(node: Node, parent: Node, grand: Node | undefined): boolean {
   switch (parent.type) {
     case "MemberExpression":
       return parent.object === node || parent.computed;
@@ -777,7 +975,13 @@ function isReference(node: Node, parent: Node): boolean {
     case "ContinueStatement":
       return false;
     case "ExportSpecifier":
-      return parent.local === node;
+      return parent.local === node && !(grand?.type === "ExportNamedDeclaration" && grand.source !== null);
+    // `export * as name from "…"` names an export of this module, not a local binding.
+    case "ExportAllDeclaration":
+      return false;
+    // `import.meta` and `new.target` are syntax, not a binding named `meta` or `target`.
+    case "MetaProperty":
+      return false;
     default:
       return true;
   }

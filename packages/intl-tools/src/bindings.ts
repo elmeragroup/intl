@@ -13,9 +13,13 @@ export type Kind = "t" | "intl" | "other";
 
 /**
  * Where a value comes from, for a receiver of `.t(…)` or a destructured `{ t }`: a translator or IntlInstance bound from
- * the package (`t`, `intl`), provably not one (`unrelated`), read or returned from an npm import (`derived`: it may hold
- * an IntlInstance passed in elsewhere, as in `setI(createIntl(cfg))`, but never a translator, which cannot be passed),
- * or anything the extractor cannot follow (`untraced`).
+ * the package (`t`, `intl`), provably not one (`unrelated`), read or returned from an npm import (`derived`), or anything
+ * the extractor cannot follow (`untraced`). A `derived` value may hold an IntlInstance handed to it by code extraction
+ * never reads, or kept from its dependency array by a `use*` hook not imported from `react` (`useStore(cb, [intl])`, a
+ * README residual); one this file hands it any other way fails where it is bound. An instance or translator bound in
+ * code extraction scans reaches it through that residual, and fails where it is handed on any other way; one that arrived
+ * from code extraction never reads may be passed on, and that code may hand it one through any wrapper (a package
+ * outside `include`, or one whose scope reads as npm's): the README's residual rows on those.
  */
 export type Origin = "t" | "intl" | "unrelated" | "derived" | "untraced";
 
