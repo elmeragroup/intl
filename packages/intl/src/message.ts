@@ -306,8 +306,9 @@ function emit(nodes: ReadonlyArray<MessageNode>, after: string): string {
         case "el":
           return `<x${node.index}>${emit(node.children, "<")}</x${node.index}>`;
         case "plural": {
+          // `sort` on the fresh array `Object.entries` returns: the runtime's floor is ES2022, which has no `toSorted`.
           const forms = Object.entries(node.forms)
-            .toSorted(([a], [b]) => compareForms(a, b))
+            .sort(([a], [b]) => compareForms(a, b))
             .map(
               ([form, text]) => `${form.startsWith("_") ? `=${form.slice(1)}` : form} {${escapeForm(text)}}`
             );

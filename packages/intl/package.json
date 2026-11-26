@@ -123,7 +123,7 @@
     "test:run": "vitest run",
     "ci:checks": "pnpm type-check && pnpm test:run",
     "tcw": "tsrs --noEmit --watch",
-    "type-check": "tsrs --noEmit"
+    "type-check": "node scripts/type-check.ts"
   },
   "dependencies": {
     "@schummar/icu-type-parser": "catalog:",

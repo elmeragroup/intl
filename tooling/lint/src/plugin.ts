@@ -7,6 +7,7 @@ import { fileCopies } from "./rules/file-copies.ts";
 import { globalNames } from "./rules/global-names.ts";
 import { importBoundaries } from "./rules/import-boundaries.ts";
 import { instanceNames } from "./rules/instance-names.ts";
+import { noUsing } from "./rules/no-using.ts";
 import { publicSurface } from "./rules/public-surface.ts";
 import { sideEffectFree } from "./rules/side-effect-free.ts";
 import { vocabulary } from "./rules/vocabulary.ts";
@@ -20,6 +21,7 @@ const plugin: Plugin = {
     "global-names": globalNames,
     "import-boundaries": importBoundaries,
     "instance-names": instanceNames,
+    "no-using": noUsing,
     "public-surface": publicSurface,
     "side-effect-free": sideEffectFree,
     vocabulary,

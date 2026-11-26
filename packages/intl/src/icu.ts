@@ -297,12 +297,18 @@ const formattersByZone = new Map<string, Formatters>();
  */
 export function cachedNumberFormat(
   locales: Intl.LocalesArgument,
-  options: Intl.NumberFormatOptions | undefined
+  options: NumberStyle | undefined
 ): Intl.NumberFormat {
+  // SAFETY: a number style carries options and values ES2023's Intl.NumberFormat v3 added (`roundingMode`,
+  // `useGrouping: "always"`), which the runtime's ES2022 library does not declare. An ES2022 engine's
+  // InitializeNumberFormat (ECMA-402 9th edition) does not read an option it does not name; reads `useGrouping` with
+  // GetOption type "boolean", so ToBoolean makes every non-empty string (`"always"`, `"min2"`) `true`, the locale's
+  // ordinary grouping; and throws a RangeError on a value outside an enumeration it reads (`signDisplay: "negative"`),
+  // as the @throws above documents for any options `Intl` rejects.
   return memoized(
     numberFormats,
     JSON.stringify([locales, options]),
-    () => new Intl.NumberFormat(locales, options)
+    () => new Intl.NumberFormat(locales, options as Intl.NumberFormatOptions | undefined)
   );
 }
 

@@ -264,6 +264,58 @@
         ]
       }
     },
+    // The runtime's floor is ES2022 (packages/intl/tsconfig.floor.json), and these rules' fixes are ES2023
+    // (`toSorted`, `toReversed`, `findLast`): the runtime sorts or reverses a copy, and takes a last match with
+    // `filter(...).at(-1)`. `typescript/prefer-find` still holds first-match lookups. The restricted globals and
+    // properties are later built-ins the floor's type-check passes: @types/node (the shared `types: ["node"]`) and
+    // Effect's declarations add `esnext.disposable` and `esnext.float16` to its program, which no `lib` setting
+    // removes. Those declarations also mark native iterators disposable, so `elmera-workspace/no-using` rejects `using`.
+    {
+      "files": ["packages/intl/src/**"],
+      "rules": {
+        "unicorn/no-array-sort": "off",
+        "unicorn/no-array-reverse": "off",
+        "unicorn/prefer-array-find": "off",
+        "elmera-workspace/no-using": "error",
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "DisposableStack",
+            "message": "DisposableStack is not available on the runtime's ES2022 floor: run the cleanups from a callback list or try/finally."
+          },
+          {
+            "name": "AsyncDisposableStack",
+            "message": "AsyncDisposableStack is not available on the runtime's ES2022 floor: await the cleanups from a callback list or try/finally."
+          },
+          {
+            "name": "SuppressedError",
+            "message": "SuppressedError is not available on the runtime's ES2022 floor: use AggregateError, or an Error with `cause`."
+          },
+          {
+            "name": "Float16Array",
+            "message": "Float16Array is not available on the runtime's ES2022 floor: use Float32Array."
+          }
+        ],
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Symbol",
+            "property": "dispose",
+            "message": "Symbol.dispose is not available on the runtime's ES2022 floor: give the resource a plain close method, called from try/finally."
+          },
+          {
+            "object": "Symbol",
+            "property": "asyncDispose",
+            "message": "Symbol.asyncDispose is not available on the runtime's ES2022 floor: give the resource a plain async close method, awaited from try/finally."
+          },
+          {
+            "object": "Math",
+            "property": "f16round",
+            "message": "Math.f16round is not available on the runtime's ES2022 floor: use Math.fround, or a Float32Array."
+          }
+        ]
+      }
+    },
     // oxc's ESTree types share one `type` ("Literal") across string, number, boolean, regexp and bigint literals,
     // so `typeof value` is the discriminant; ast-children walks the fields `visitorKeys` names, which TypeScript
     // cannot index, and checks each is a node.
