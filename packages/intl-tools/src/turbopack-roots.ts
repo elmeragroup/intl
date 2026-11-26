@@ -1,7 +1,10 @@
 // Turbopack's roots as withIntl hands them to the PO loader, and whether Turbopack loads a file there. A leaf on
-// `node:*` alone: the loader imports it, and must not load next.ts. Every rule here can only turn a
-// refusal into an accept: a missed refusal leaves Turbopack's own `outside configured roots` error, while a false one
-// breaks a build that works, so the model is coarser than Turbopack's and errs towards accepting.
+// `node:*` alone: the loader imports it, and must not load next.ts. A missed refusal leaves Turbopack's own `outside
+// configured roots` error, while a false one breaks a build that works, so the model is coarser than Turbopack's and
+// errs towards accepting, for the roots of the config withIntl is given. A root added to the config after withIntl
+// ran is not one of them: an `experimental.turbopackAdditionalRoots` entry that a wrapper applied outside withIntl
+// adds refuses a config or formats module there that Turbopack loads. withIntl cannot see such a wrapper, so the
+// README has it go outermost.
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, sep } from "node:path";
 

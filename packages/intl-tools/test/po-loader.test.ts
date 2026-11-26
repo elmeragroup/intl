@@ -44,14 +44,15 @@ type Loaded = {
   readonly dependencies: ReadonlySet<string>;
 };
 
-// Turbopack's webpack-loader call: the loader's options, the file, and its result through `async()`.
+// Turbopack's webpack-loader call: the loader's options, the file (relative to the project, or absolute), and its result
+// through `async()`.
 async function load(project: Project, resource: string, given?: PoLoaderOptions): Promise<Loaded> {
   const options = given ?? { config: project.path("elmera-intl.json"), source: false };
   const done = Promise.withResolvers<Loaded>();
   const dependencies: Array<string> = [];
   poLoader.call(
     {
-      resourcePath: project.path(resource),
+      resourcePath: resolve(project.path("."), resource),
       getOptions: () => options,
       addDependency: (file) => {
         dependencies.push(file);
@@ -145,6 +146,8 @@ type Placement = {
   readonly written?: string;
   /** The formats module the config names, relative to the project. */
   readonly formats: string;
+  /** The catalogs as the config names them; `app/intl/{locale}.po` by its absolute path by default. */
+  readonly catalogs?: string;
   /** Links made before `withIntl` runs: `from` is a link to `to`, both relative to the project. */
   readonly links?: ReadonlyArray<{
     readonly from: string;
@@ -185,7 +188,7 @@ async function loadPlaced(project: Project, placement: Placement): Promise<Loade
     JSON.stringify({
       include: ["*.ts"],
       // Absolute: a config spelled through an alias lies lexically outside the root it names its catalogs in.
-      catalogs: project.path("app/intl/{locale}.po"),
+      catalogs: placement.catalogs ?? project.path("app/intl/{locale}.po"),
       locales: ["nb"],
       formats: project.path(placement.formats),
     })
@@ -251,7 +254,13 @@ async function loadPlaced(project: Project, placement: Placement): Promise<Loade
     throw new Error("withIntl wrote no rule for the catalog import");
   }
 
-  return load(project, placement.resource ?? "app/intl/nb.po", options);
+  // Turbopack hands the loader the imported file's real path (replayed for #63: the resource of `../intl/nb.po` under
+  // a root spelled through no link), not the spelling of the config or the project's temporary directory.
+  return load(
+    project,
+    join(realpathSync(project.path(".")), placement.resource ?? "app/intl/nb.po"),
+    options
+  );
 }
 
 // Unit under test: the placement problem a refused import fails with. Oracle: the tools' problem form (problem.ts,
@@ -454,7 +463,8 @@ it.for<{
 // (REPLAY.md cases in parentheses): a config and formats module inside the root load; so does each inside an
 // additional root (d1, d2), which Next resolves through its links before `..` (crates/next-api/src/additional_roots.rs)
 // and through a directory alias of it (h1); a config linked from inside the root to a file outside it (c1); one spelled
-// through a directory alias of the root (h4b), and through that alias and a link out of the root (w1). An adapter's
+// through a directory alias of the root (h4b; with catalogs relative to it, h3 and h4 of #63, which Turbopack imports
+// at their real path), and through that alias and a link out of the root (w1). An adapter's
 // modifyConfig runs after next.config and may add roots (server/config.js, applyModifyConfig), and Next selects one by
 // `adapterPath`, by `experimental.adapterPath` or by NEXT_ADAPTER_PATH (config-shared.js), so with an adapter a config
 // outside the root loads (ad1, ad3). Each registers the config and the formats module, as before.
@@ -581,6 +591,19 @@ it.for<{ readonly name: string; readonly placement: Placement }>([
       next: (project) => ({ turbopack: { root: project.path("app") } }),
     },
   },
+  // The catalogs relative to the config, so as the config spells them they lie in the alias, where the rule's real
+  // path pattern never finds them (#63).
+  {
+    name: "the config spelled through a directory alias of the root, with catalogs relative to it",
+    placement: {
+      config: "alias/elmera-intl.json",
+      written: "app/elmera-intl.json",
+      catalogs: "intl/{locale}.po",
+      links: [{ from: "alias", to: "app", type: "dir" }],
+      formats: "app/formats.ts",
+      next: (project) => ({ turbopack: { root: project.path("app") } }),
+    },
+  },
   {
     name: "the config through a directory alias of the root and a link out of it",
     placement: {
@@ -630,4 +653,43 @@ it.for<{ readonly name: string; readonly placement: Placement }>([
   expect(error).toBeNull();
   expect(new Map(Object.entries(new Object(module))).get("default")).toBeTypeOf("object");
   expect(dependencies).toEqual(new Set([project.path(placement.config), project.path(placement.formats)]));
+});
+
+// Unit under test: the loader, given one rule's options while `next dev` runs, across an edit of elmera-intl.json.
+// Oracle: Next serializes the rule's options once, at startup, while the loader reads the config afresh for each
+// import (#53's dependency); Turbopack hands it the catalog's real path (replayed for #63). So the import compiles under
+// the config as it is when the import runs: before the edit, catalogs named through a link inside the root
+// (`intl-link -> intl`), and after it the same catalogs named at their target, which the rule's real path still matches.
+it("compiles a catalog under the config as edited after withIntl ran", async ({ project }) => {
+  const app = project.path("app");
+  mkdirSync(project.path("app/intl"), { recursive: true });
+  symlinkSync(project.path("app/intl"), project.path("app/intl-link"), "dir");
+  mkdirSync(project.path("app/node_modules"), { recursive: true });
+  symlinkSync(NEXT, project.path("app/node_modules/next"), "dir");
+  const write = (catalogs: string) => {
+    project.write("app/elmera-intl.json", JSON.stringify({ include: ["*.ts"], catalogs, locales: ["nb"] }));
+  };
+  write("intl-link/{locale}.po");
+  const wrapped: IntlNextConfig = withIntl(
+    { turbopack: { root: app } },
+    { dir: app }
+  )("phase-development-server");
+  // SAFETY: the `*.po` rules withIntl writes (next.ts, poRule); another shape fails the lookup below.
+  const rules = new Map(Object.entries(wrapped.turbopack?.rules ?? {})).get("*.po") as ReadonlyArray<{
+    readonly loaders: readonly [{ readonly options: PoLoaderOptions }];
+  }>;
+  const options = rules.map((rule) => rule.loaders[0].options).find((candidate) => !candidate.source);
+
+  if (options === undefined) {
+    throw new Error("withIntl wrote no rule for the catalog import");
+  }
+
+  const resource = join(realpathSync(app), "intl/nb.po");
+
+  const linked = await load(project, resource, options);
+  write("intl/{locale}.po");
+  const edited = await load(project, resource, options);
+
+  expect(linked.error).toBeNull();
+  expect(edited.error).toBeNull();
 });

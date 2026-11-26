@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { realPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { TurbopackRoot, TurbopackRoots } from "./turbopack-roots";
@@ -131,11 +132,13 @@ function extend<C extends object & IntlNextConfig>(config: C, options: WithIntlO
   }
 
   const root = turbopackRoot(config, options.dir);
-  const path = catalogPathPattern(loaded.config, root);
+  const path = catalogRule(loaded.config, root);
   const aliases = requestAliases(config, options);
   const existing = new Map<string, unknown>(Object.entries(config.turbopack?.rules ?? {})).get(PO_GLOB);
   const roots = loaderRoots(config, root, options.dir);
-  const ours = [poRule(path, configPath, true, roots), poRule(path, configPath, false, roots)];
+  const loader: Omit<PoLoaderOptions, "source"> =
+    roots === undefined ? { config: configPath } : { config: configPath, roots };
+  const ours = [poRule(path, loader, true), poRule(path, loader, false)];
   const turbopack = {
     ...config.turbopack,
     rules: {
@@ -295,8 +298,8 @@ function requestTarget(options: WithIntlOptions): string | undefined {
   return below.startsWith("../") ? below : `./${below}`;
 }
 
-function poRule(path: RegExp, config: string, source: boolean, roots: TurbopackRoots | undefined) {
-  const options: PoLoaderOptions = roots === undefined ? { config, source } : { config, source, roots };
+function poRule(path: RegExp, loader: Omit<PoLoaderOptions, "source">, source: boolean) {
+  const options: PoLoaderOptions = { ...loader, source };
 
   return {
     condition: {
@@ -386,11 +389,21 @@ function additionalRoots(
   });
 }
 
-// The catalogs pattern as a RegExp over the path Turbopack matches: the catalog's path relative to its root, with
-// `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not RegExp.escape's hex
-// escapes): Turbopack evaluates the pattern in its own engine.
-function catalogPathPattern(config: ProjectConfig, { root, setting }: TurbopackRoot): RegExp {
+// The catalogs' rule path. Turbopack matches a rule's path against the module's path below its root after resolving its
+// links (replayed on Next 16.4.6 for #63: a link inside the root matches at its target, never as written), so the
+// pattern is the catalogs' real path below the root's (the catalog import finds the file it is handed at its real path,
+// project-catalogs.ts).
+// Catalogs written inside the root through a link out of it keep the pattern as written, unrefused: Turbopack refuses
+// that import itself (`the symlink target leaves the configured filesystem roots`), and a webpack loader cannot run in
+// an additional root, so a refusal here would add nothing.
+function catalogRule(config: ProjectConfig, { root, setting }: TurbopackRoot): RegExp {
   const catalogs = resolve(config.root, config.catalogs);
+  const real = realPath(catalogs);
+  const realRoot = canonical(root) ?? root;
+
+  if (isBelow(realRoot, real)) {
+    return catalogPathPattern(relative(realRoot, real));
+  }
 
   if (!isBelow(root, catalogs)) {
     throw new Error(
@@ -398,7 +411,14 @@ function catalogPathPattern(config: ProjectConfig, { root, setting }: TurbopackR
     );
   }
 
-  const pattern = relative(root, catalogs)
+  return catalogPathPattern(relative(root, catalogs));
+}
+
+// The catalogs pattern as a RegExp over the path Turbopack matches: the catalog's path relative to its root, with
+// `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not RegExp.escape's hex
+// escapes): Turbopack evaluates the pattern in its own engine.
+function catalogPathPattern(below: string): RegExp {
+  const pattern = below
     .split(sep)
     .join("/")
     .split("{locale}")
