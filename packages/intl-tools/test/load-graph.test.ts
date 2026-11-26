@@ -28,10 +28,10 @@ const NEXT_PROBE = `${RECORDER}
 import { join } from "node:path";
 const [root] = process.argv.slice(1);
 const { withIntl } = await import("@elmeragroup/intl-tools/next");
-const config = withIntl({ turbopack: { root } }, { dir: root });
+const config = withIntl({ turbopack: { root } }, { dir: root })("phase-production-build");
 let invalid = "accepted";
 try {
-  withIntl({ turbopack: { root } }, { dir: join(root, "bad-app") });
+  withIntl({ turbopack: { root } }, { dir: join(root, "bad-app") })("phase-production-build");
 } catch (error) {
   // The parser's own message after "not JSON: " varies by Node version.
   invalid = error.message.replace(/^withIntl: not JSON: .*?; /u, "withIntl: not JSON: …; ");

@@ -225,10 +225,11 @@ async function loadPlaced(project: Project, placement: Placement): Promise<Loade
   process.chdir(cwd);
   let wrapped: RowNextConfig;
   try {
+    // In the phase of `next build`, which compiles the import.
     wrapped = withIntl(placement.next(project), {
       dir: placement.dir ?? app,
       config: relative(resolve(cwd, placement.dir ?? app), project.path(placement.config)),
-    });
+    })("phase-production-build");
   } finally {
     process.chdir(start);
   }
