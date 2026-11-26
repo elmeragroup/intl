@@ -8,9 +8,20 @@ import { cookieHeader } from "./request-cookies";
 
 export type { RequestConfig, RequestLike, ServerAdapter } from "./adapter";
 
+/** `createRequestConfig`'s options: what the server translator does beside the adapter's config. */
+export type RequestConfigOptions = {
+  /**
+   * `createIntl`'s `onError` for every server translator the request config builds (`getIntl`, the server `<T>`):
+   * with none, each distinct problem is written once to `console.error`, on the server's stderr.
+   */
+  readonly onError?: (error: Error, key: string) => void;
+};
+
 /**
  * The app's request config: the default export of `intl/request.ts`, which `withIntl` resolves `getIntl`, `getT`,
- * `getFormat` and the server `<T>`/`useT` to. No page, layout, action or route imports it.
+ * `getFormat` and the server `<T>`/`useT` to. No page, layout, action or route imports it. Its `onError` option is the
+ * server translator's handler (a server component cannot pass one); the config it resolves carries it, and the
+ * translator never exposes it, so a layout passes its `IntlConfig` fields to the client provider.
  *
  * The adapter sees the request's headers, except `cookie`, which is written from `cookies()`: inside a server action,
  * `headers()` is the request as it arrived, so a locale cookie the action just set is only in `cookies()`, and the
@@ -26,9 +37,12 @@ export type { RequestConfig, RequestLike, ServerAdapter } from "./adapter";
  * itself still sees Next's store, and the old locale.
  *
  * @param adapter - Locale resolution, catalog loading, time zone and formats.
+ * @param options - The server's `onError`.
  * @returns The request config, read per call.
  */
-export function createRequestConfig(adapter: ServerAdapter): RequestConfig {
+export function createRequestConfig(adapter: ServerAdapter, options?: RequestConfigOptions): RequestConfig {
+  const onError = options?.onError;
+
   return async () => {
     const [incoming, jar] = await Promise.all([headers(), cookies()]);
     const request: RequestLike = {
@@ -38,6 +52,8 @@ export function createRequestConfig(adapter: ServerAdapter): RequestConfig {
       },
     };
 
-    return resolveIntlConfig(adapter, request);
+    const config = await resolveIntlConfig(adapter, request);
+
+    return onError === undefined ? config : { ...config, onError };
   };
 }

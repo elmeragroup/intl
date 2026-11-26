@@ -106,7 +106,7 @@ type ElementProps = { readonly children?: ReactNode };
  * @param self - The calling `<T>`, which its message may not contain.
  * @returns The translated content, with the children's elements around their translated text. An argument the
  *   extractor rejects (a reserved name, one name with two values) or a `<T>` at any depth inside this one is reported
- *   to `onError` (an app's own only, #100), and the children render untranslated, so every value shows as written and
+ *   (to `onError`, or the default), and the children render untranslated, so every value shows as written and
  *   an inner `<T>` translates itself; so do they when the catalog lacks a structured message (not extracted yet).
  * @throws When a child is not text, an element, `<Val>`, `<Plural>` or `<Select>`, a value component lacks its one
  *   value prop, or a `<Plural>` form or `<Select>` branch is malformed: the extractor rejects each, so reaching one is

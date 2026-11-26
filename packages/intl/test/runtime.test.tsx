@@ -2,9 +2,9 @@ import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import type { Catalog, Descriptor } from "@elmeragroup/intl/core";
+import type { Catalog, CreateIntlOptions, Descriptor } from "@elmeragroup/intl/core";
 import { createIntl, keyOf, msg, serialize } from "@elmeragroup/intl/core";
 import { hashKey } from "@elmeragroup/intl/internal/message";
 import { IntlProvider, Plural, Select, T, Val, useT } from "@elmeragroup/intl/react";
@@ -516,5 +516,172 @@ describe("the serializer on an ES2022 engine", () => {
     expect(key).toBe(
       "You have {count, plural, =2 {a pair} =12 {a dozen orders} few {# few} one {# order} other {# orders} zero {none}}"
     );
+  });
+});
+
+// `console.error`, spied for one test and restored after it, with what the spy does instead.
+function spyConsoleError(implementation: (...args: Array<unknown>) => void) {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(implementation);
+  onTestFinished(() => {
+    consoleError.mockRestore();
+  });
+
+  return consoleError;
+}
+
+// Unit under test: what a report reaches with no onError, and that a handler replaces it. Oracle: the runtime's
+// default as the contract states it (`console.error("@elmeragroup/intl:", JSON.stringify(key), error)`, once per key
+// and message in a loaded runtime), and each report's key, which for a message with no context is its source. Every
+// source and format name here is used by no other test in this file: what the default has logged persists within it.
+describe("reports with no onError", () => {
+  const nowhere = english();
+
+  it("logs each distinct problem once, across instances, and nothing when a handler is given", () => {
+    const consoleError = spyConsoleError(() => undefined);
+    const handled: Array<string> = [];
+    const firstIntl = createIntl({ locale: "en", catalog: nowhere, timeZone: OSLO });
+    // A catalog of its own with the same contents, so a history kept per catalog would log its problem again.
+    const secondIntl = createIntl({ locale: "en", catalog: english(), timeZone: OSLO });
+    const thirdIntl = createIntl({ locale: "en", catalog: nowhere, timeZone: OSLO });
+    const handledIntl = createIntl({
+      locale: "en",
+      catalog: nowhere,
+      timeZone: OSLO,
+      onError: (_error, key) => handled.push(key),
+    });
+    const date = new Date("2026-03-05T12:00:00Z");
+
+    expect([
+      firstIntl.t("Unextracted {who} reaches the console", { who: "Ada" }),
+      secondIntl.t("Unextracted {who} reaches the console", { who: "Ada" }),
+      thirdIntl.t("A second {what} reaches the console", { what: "problem" }),
+      thirdIntl.format.dateTime(date, "reportFirstName"),
+      thirdIntl.format.dateTime(date, "reportSecondName"),
+      handledIntl.t("Handled {who} stays off the console", { who: "Ada" }),
+      handledIntl.t("Handled {who} stays off the console", { who: "Ada" }),
+    ]).toEqual([
+      "Unextracted {who} reaches the console",
+      "Unextracted {who} reaches the console",
+      "A second {what} reaches the console",
+      String(date),
+      String(date),
+      "Handled {who} stays off the console",
+      "Handled {who} stays off the console",
+    ]);
+    expect(consoleError.mock.calls.map((call: ReadonlyArray<unknown>) => call.slice(0, 2))).toEqual([
+      ["@elmeragroup/intl:", '"Unextracted {who} reaches the console"'],
+      ["@elmeragroup/intl:", '"A second {what} reaches the console"'],
+      ["@elmeragroup/intl:", '"format.dateTime"'],
+      ["@elmeragroup/intl:", '"format.dateTime"'],
+    ]);
+    expect(consoleError.mock.calls[0]?.[2]).toMatchObject({
+      _tag: "MessageNotExtracted",
+      source: "Unextracted {who} reaches the console",
+    });
+    expect(consoleError.mock.calls.slice(2).map((call: ReadonlyArray<unknown>) => call[2])).toMatchObject([
+      { _tag: "FormatNotFound", format: "reportFirstName" },
+      { _tag: "FormatNotFound", format: "reportSecondName" },
+    ]);
+    expect(handled).toEqual(["Handled {who} stays off the console", "Handled {who} stays off the console"]);
+
+    // The same missing name through another method: the same message under another key, so a record kept by message
+    // alone would drop it.
+    thirdIntl.format.dateTimeRange(date, date, "reportFirstName");
+    expect(consoleError.mock.calls.slice(4).map((call: ReadonlyArray<unknown>) => call.slice(0, 2))).toEqual([
+      ["@elmeragroup/intl:", '"format.dateTimeRange"'],
+    ]);
+    expect(consoleError.mock.calls[4]?.[2]).toMatchObject({
+      _tag: "FormatNotFound",
+      format: "reportFirstName",
+    });
+  });
+
+  // A JavaScript app passes `onError: enabled ? report : null`, which the types rule out. Oracle: origin/main, where a
+  // null handler was skipped and the fallback rendered; it now gets the default, as an absent one does.
+  it("renders the fallback and logs through the default when onError is null", () => {
+    const consoleError = spyConsoleError(() => undefined);
+    const options: CreateIntlOptions = { locale: "en", catalog: nowhere, timeZone: OSLO };
+    // A JavaScript caller's null, set past the option's type, which rules it out.
+    Reflect.set(options, "onError", null);
+    const intl = createIntl(options);
+
+    expect([
+      intl.t("Null onError {who} falls back", { who: "Ada" }),
+      intl.t("Null onError {who} falls back", { who: "Ada" }),
+    ]).toEqual(["Null onError {who} falls back", "Null onError {who} falls back"]);
+    expect(consoleError.mock.calls.map((call: ReadonlyArray<unknown>) => call.slice(0, 2))).toEqual([
+      ["@elmeragroup/intl:", '"Null onError {who} falls back"'],
+    ]);
+  });
+
+  // The fallbacks and the thrown error are origin/main's, where no report reached the console.
+  it("renders and throws as without it when the console throws", () => {
+    const consoleThrew = new Error("the console is broken");
+    const consoleError = spyConsoleError(() => {
+      throw consoleThrew;
+    });
+    const translatedIntl = createIntl({
+      locale: "nb",
+      catalog: compiled("nb", { "Sum {s, number} when the console throws": "Sum {s}" }),
+      timeZone: OSLO,
+    });
+    const notExtracted = (
+      <T>
+        Unextracted <Val who="Ada" /> while the console throws
+      </T>
+    );
+    let thrown: unknown;
+
+    expect([
+      render("en", nowhere, notExtracted),
+      // Again: the pair was recorded before the console threw, so it is not logged a second time.
+      render("en", nowhere, notExtracted),
+      translatedIntl.format.number(1234, "reportWhileThrowing"),
+    ]).toEqual([
+      "Unextracted Ada while the console throws",
+      "Unextracted Ada while the console throws",
+      "1234",
+    ]);
+    try {
+      translatedIntl.t("Sum {s, number} when the console throws", { s: 1000 });
+    } catch (error) {
+      thrown = error;
+    }
+    // The error main throws, by its hand-written message, and the very object that was reported.
+    expect(thrown).toMatchObject({
+      message: 'argument "s" got a number: plain {s} takes text; use {s, number} or {s, date}',
+    });
+    expect(thrown).toBe(consoleError.mock.calls[2]?.[2]);
+    expect(consoleError).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws the formatting error itself when reading its message throws", () => {
+    const consoleError = spyConsoleError(() => undefined);
+    const unreadable = new Error("replaced by a getter");
+    Object.defineProperty(unreadable, "message", {
+      get: () => {
+        throw new Error("the message getter threw");
+      },
+    });
+    // A Date whose value cannot be read: formatting it throws `unreadable`, as a hostile value would.
+    class UnreadableDate extends Date {
+      override valueOf(): number {
+        throw unreadable;
+      }
+    }
+    const intl = createIntl({
+      locale: "en",
+      catalog: english("On {when, date} with an unreadable error"),
+      timeZone: OSLO,
+    });
+    let thrown: unknown;
+
+    try {
+      intl.t("On {when, date} with an unreadable error", { when: new UnreadableDate() });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(unreadable);
+    expect(consoleError).toHaveBeenCalledTimes(0);
   });
 });
