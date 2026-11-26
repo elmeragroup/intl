@@ -23,7 +23,7 @@ import { CatalogSync, SyncFailed, watchCatalogs } from "../src/watch";
 import type { Following } from "../src/watch-follow";
 import { followConfig } from "../src/watch-follow";
 import type { TreeListener } from "../src/watch-trees";
-import { FileEvents } from "../src/watch-trees";
+import { BetweenWalks, FileEvents } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 import { SYNC_FILE_SYSTEM } from "./sync-file-system";
@@ -261,6 +261,8 @@ export type ClockedWatchOptions = {
   readonly files?: Layer.Layer<CatalogFiles, never, FileSystem.FileSystem>;
   /** Writes each result; records its tag unless a test writes it. */
   readonly report?: (result: SyncResult) => Effect.Effect<void>;
+  /** Writes the ready line; nothing unless a test acts as it is written. */
+  readonly ready?: Effect.Effect<void>;
   /** The watch's clock; the test clock unless a test moves the wall clock alone. */
   readonly clock?: Clock.Clock;
   /** Where change events come from; the poll unless a test delivers native events itself. */
@@ -317,14 +319,20 @@ const launch = /* @__PURE__ */ Effect.fnUntraced(function* <A>(
           reports.push(result._tag);
           results.push(result);
         })),
-    ready: Effect.void,
+    ready: options.ready ?? Effect.void,
   };
   const starting = begin(
     project.path(options.config ?? "elmera-intl.json"),
     options.mode ?? POLLING,
     stop,
     output
-  ).pipe(Scope.provide(scope), Effect.provideContext(services));
+  ).pipe(
+    Scope.provide(scope),
+    Effect.provideContext(services),
+    // The poll's turn between two trees' walks, on Effect's scheduler, which the test clock waits for before it moves
+    // on, where a real `setImmediate` would be left to race the clock.
+    Effect.provideService(BetweenWalks, Effect.yieldNow)
+  );
   const clocked =
     options.clock === undefined ? starting : starting.pipe(Effect.provideService(Clock.Clock, options.clock));
   const watching = yield* wake(clocked);

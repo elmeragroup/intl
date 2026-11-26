@@ -500,28 +500,49 @@ describe("extract --watch on the test clock", () => {
     })
   );
 
-  // The poll's first interval runs from its first walk, taken before the first sync: a slow first sync does not push the
-  // next walk back, so a save made during it is synced a debounce after the first sync ends.
-  it.effect(
-    "times the first poll from the first walk, not from the end of a slow first sync",
-    ({ project }) =>
-      Effect.gen(function* () {
-        const gate = yield* Deferred.make<void>();
-        const sync = holding(gate, 1);
-        const { reports, watching } = yield* launchWatch(project, { layer: sync.layer });
-        // The first walk was taken at 1 ms; the first sync holds.
-        project.write("src/a.tsx", component("A"));
-        yield* TestClock.adjust("50 millis");
-        // Released at 52 ms: the walk at 51 ms saw the save, so its sync is due at 152 ms.
-        yield* woken(Deferred.succeed(gate, undefined));
-        yield* Fiber.join(watching);
-        yield* TestClock.adjust("99 millis");
-        expect(reports).toEqual(["Written"]);
+  // The poll walks no tree during the first sync, and next walks an interval after it: a save made during a slow first
+  // sync is seen by that walk and synced a debounce after it.
+  it.effect("syncs a save made during a slow first sync one debounce after a walk sees it", ({ project }) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const sync = holding(gate, 1);
+      const { reports, watching } = yield* launchWatch(project, { layer: sync.layer });
+      // The first walk was taken at 1 ms; the first sync holds.
+      project.write("src/a.tsx", component("A"));
+      yield* TestClock.adjust("50 millis");
+      // Released at 52 ms: the walk at 102 ms sees the save, so its sync is due at 202 ms.
+      yield* woken(Deferred.succeed(gate, undefined));
+      yield* Fiber.join(watching);
+      yield* TestClock.adjust("149 millis");
+      expect(reports).toEqual(["Written"]);
 
-        yield* TestClock.adjust("1 millis");
-        expect(reports).toEqual(["Written", "Written"]);
-        expect(project.read("messages/nb.po")).toContain(`msgid "A"`);
-      })
+      yield* TestClock.adjust("1 millis");
+      expect(reports).toEqual(["Written", "Written"]);
+      expect(project.read("messages/nb.po")).toContain(`msgid "A"`);
+    })
+  );
+
+  // A first sync that outlasts the interval is followed by the ready line, then by a walk an interval after the sync,
+  // not by an overdue walk at once, ahead of the line (#82): a source present from during the sync until the ready line
+  // is written is never seen, so no sync follows the first.
+  it.effect("writes the ready line before the next walk after a slow first sync", ({ project }) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const sync = holding(gate, 1);
+      const { reports, watching } = yield* launchWatch(project, {
+        layer: sync.layer,
+        ready: Effect.sync(() => {
+          rmSync(project.path("src/brief.tsx"));
+        }),
+      });
+      // The first walk was taken at 1 ms; the first sync holds past the walk due at 51 ms, and is released at 52 ms.
+      project.write("src/brief.tsx", component("Brief"));
+      yield* TestClock.adjust("50 millis");
+      yield* woken(Deferred.succeed(gate, undefined));
+      yield* Fiber.join(watching);
+      yield* TestClock.adjust("1 second");
+      expect([sync.calls(), reports]).toEqual([1, ["Written"]]);
+    })
   );
 
   // The watch's own scope closing stops it as a signal does: the close waits for the held sync and writes its result,

@@ -74,9 +74,9 @@ export function syncFailed(message: string): SyncResult {
 
 /**
  * Where change events come from. `native` is the platform's file events (`fs.watch`, recursive); `poll` stats every
- * watched file each `intervalMs`, for hosts whose native events arrive late or not at all (a container's bind mount,
- * a network drive, a macOS whose fseventsd is saturated): slower to notice and costlier, but it depends on no event
- * daemon.
+ * watched file again `intervalMs` after its previous pass over them ends, for hosts whose native events arrive late or
+ * not at all (a container's bind mount, a network drive, a macOS whose fseventsd is saturated): slower to notice and
+ * costlier, but it depends on no event daemon.
  */
 export type WatchMode = { readonly _tag: "native" } | { readonly _tag: "poll"; readonly intervalMs: number };
 
@@ -570,7 +570,7 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
  * while a sync runs) queues a trigger for the debounce; then one sync runs, and its result joins the outputs, which one
  * fiber writes in order. Syncs never overlap, and no sync waits for a write.
  *
- * Returns once the trees are watched (a poll's first walks taken, the next ones already timed from them) and the first
+ * Returns once the trees are watched (a poll's first walks taken, the next ones timed from the first sync) and the first
  * sync has run, so no change after it returns is missed. A stop during the start (or before it) ends the start once the
  * stop has run, with no first sync unless that had begun, and with the stop's outcome when that is a failure.
  *
@@ -640,7 +640,14 @@ export const watchCatalogs = /* @__PURE__ */ Effect.fn("elmera-intl.watch.start"
     isHalted()
       ? Effect.void
       : (mode._tag === "poll"
-          ? startPolling(roots, mode.intervalMs, prune, admit, owned.supervised)
+          ? startPolling(
+              roots,
+              mode.intervalMs,
+              prune,
+              admit,
+              owned.supervised,
+              Deferred.await(pipeline.firstSynced)
+            )
           : listenNative(roots, admit)
         ).pipe(Scope.provide(watchers), Effect.andThen(Deferred.succeed(pipeline.sourcesOpened, undefined)))
   );
