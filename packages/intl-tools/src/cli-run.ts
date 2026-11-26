@@ -27,12 +27,13 @@ import process from "node:process";
 
 import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
 import { CONFIG_FILE } from "./project-config";
-import { readConfig } from "./project-config-read";
+import { readConfigSnapshot } from "./project-config-read";
 import { projectServices } from "./project-services";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
-import { CatalogSync, MAX_POLL_MS, MIN_POLL_MS, pollEvery, watchCatalogs } from "./watch";
+import { CatalogSync, MAX_POLL_MS, MIN_POLL_MS, pollEvery } from "./watch";
+import { followConfig } from "./watch-follow";
 import { FileEvents } from "./watch-trees";
 
 /** The directory the default config path resolves in. */
@@ -292,29 +293,31 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
   mode: WatchMode
 ) {
   const reporter = yield* Reporter;
-  const loaded = yield* readConfig(configPath);
+  const first = yield* readConfigSnapshot(configPath);
 
-  if (loaded._tag === "ConfigInvalid") {
-    yield* printProblems([loaded.problem]);
+  if (first.loaded._tag === "ConfigInvalid") {
+    yield* printProblems([first.loaded.problem]);
 
     return yield* new ProblemsFound({ count: 1 });
   }
 
-  const { config } = loaded;
+  const { root } = first.loaded.config;
   const stop = yield* Deferred.make<void>();
   yield* signalListeners(stop);
-  // The watch writes every result, and the ready line after the first, in order from one fiber, so the Reporter may be
-  // asynchronous. Until a signal, or a write that fails for good: then it closes its watchers, drains and ends as the
-  // writing did; a watcher that failed to close is a crash, after every report. Its extract is the program's
-  // `CatalogSync`, which the host provides around the whole program, so it outlives the watch's stop, an
-  // interruption's included.
-  yield* watchCatalogs(config, mode, stop, {
-    report: (result) => reportSync(config.root, result),
-    ready: reporter.stdout(`watching ${config.root} for message changes; Ctrl-C stops\n`),
+  // The watch writes every result, and the ready line after the first, in order, one at a time, so the Reporter may be
+  // asynchronous; it follows each edit of the config (its root, from the same path, stays). Until a signal, or a write
+  // that fails for good: then it closes its watchers, drains and ends as the writing did; a watcher that failed to close
+  // is a crash, after every report. A start a signal stopped is no failure: the program ends as the watch's end does.
+  // Its extract is the program's `CatalogSync`, which the host provides around the whole program, so it outlives the
+  // watch's stop, an interruption's included.
+  yield* followConfig(configPath, first, mode, stop, {
+    report: (result) => reportSync(configPath, root, result),
+    ready: reporter.stdout(`watching ${root} for message changes; Ctrl-C stops\n`),
   }).pipe(Effect.flatMap((watching) => watching.done));
 }, Effect.scoped);
 
 const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(function* (
+  configPath: string,
   root: string,
   result: SyncResult
 ) {
@@ -324,6 +327,8 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
     yield* reporter.stdout(`wrote ${result.files.map((file) => relative(root, file)).join(", ")}\n`);
   } else if (result._tag === "Failed") {
     yield* printProblems(result.problems);
+  } else if (result._tag === "ConfigChanged") {
+    yield* reporter.stdout(`${relative(root, configPath)} changed, restarting the watch\n`);
   }
 });
 

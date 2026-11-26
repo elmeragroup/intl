@@ -33,13 +33,17 @@ import type { ProjectServices } from "./project-services";
 import type { Change, FileEvents, Intake } from "./watch-trees";
 import { includePrefixes, listenNative, movesTree, startPolling, watchRoots } from "./watch-trees";
 
-/** What one sync did. */
+/** What one sync did, or, in a watch that follows its config (`followConfig`), that it restarts on an edit. */
 export type SyncResult =
   | { readonly _tag: "Written"; readonly files: ReadonlyArray<string> }
   | { readonly _tag: "Unchanged" }
   /** A catalog was saved during the sync before it wrote anything, so it wrote nothing; another sync follows. */
   | { readonly _tag: "Superseded" }
-  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> };
+  | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> }
+  /** The config's text changed (see `followConfig`): written as it is accepted, before the watch on it restarts. */
+  | { readonly _tag: "ConfigChanged" }
+  /** The watch a restart started has written its first sync's result. */
+  | { readonly _tag: "Restarted" };
 
 /**
  * A sync that threw, I/O the extractor does not classify or a report that could not be written, as the result the
@@ -202,11 +206,19 @@ export type Watching = {
   readonly reported: Effect.Effect<void>;
 };
 
-// What the reporting fiber writes, in order: a result (a sync's, or a problem that leaves part of the project
-// unwatched), or the ready line.
-type Output = { readonly _tag: "Result"; readonly result: SyncResult } | { readonly _tag: "Ready" };
+/**
+ * What a watch's writer writes, in order: a result (a sync's, or a problem that leaves part of the project unwatched),
+ * or the ready line.
+ */
+export type Output = { readonly _tag: "Result"; readonly result: SyncResult } | { readonly _tag: "Ready" };
 
-const failed = (problem: Problem): Output => ({
+/**
+ * A problem that leaves part of the project unwatched, as the output its writer writes.
+ *
+ * @param problem - The problem.
+ * @returns A failed result naming it.
+ */
+export const failed = (problem: Problem): Output => ({
   _tag: "Result",
   result: { _tag: "Failed", problems: [problem] },
 });
@@ -271,19 +283,29 @@ const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (
   } satisfies Pipeline;
 });
 
+/**
+ * Writes one result, written again as `SyncFailed` when its write fails; it dies when that write fails too. Each call
+ * of `report` is deferred into the write, so a host's `report` that throws as it is called, before it returns an
+ * effect, fails the write as one that fails inside its effect does.
+ *
+ * @template R - What the output's writes need.
+ * @param output - Where the result is written.
+ * @param result - The result.
+ * @returns The write.
+ */
+export const writeResult = <R>(output: WatchOutput<R>, result: SyncResult) =>
+  Effect.suspend(() => output.report(result)).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.suspend(() =>
+        output.report(syncFailed(defect instanceof Error ? defect.message : String(defect)))
+      )
+    )
+  );
+
 // The one writer: every output in order, each failed result written again as SyncFailed. A write that fails for good
 // halts the watch and ends the writer with its failure.
 function writer<R>(pipeline: Pipeline, output: WatchOutput<R>) {
-  const write = (next: Output) =>
-    next._tag === "Ready"
-      ? output.ready
-      : output
-          .report(next.result)
-          .pipe(
-            Effect.catchDefect((defect) =>
-              output.report(syncFailed(defect instanceof Error ? defect.message : String(defect)))
-            )
-          );
+  const write = (next: Output) => (next._tag === "Ready" ? output.ready : writeResult(output, next.result));
 
   return Effect.gen(function* () {
     for (;;) {
@@ -396,6 +418,89 @@ type Scopes = {
   readonly workers: Scope.Closeable;
 };
 
+/**
+ * A watch's outcome, `ended`, handed to whoever takes `done`, who then owns reporting it; `unclaimed` is what a scope's
+ * close ends as: the outcome, unless a caller took it, so an interrupted caller never hides a defect. The outcome has
+ * one recipient: a `done` taken after the scope's close reported it ends clean. Each caller
+ * claims the outcome in the step it begins to wait, and the scope's close honours every claim until its caller has
+ * taken the outcome, declined it or been interrupted, so who reports it never rests on which fiber runs first.
+ * `claiming` is that wait for a caller that may decline the outcome once the watch has ended (a start the host
+ * stopped, whose end is `done`'s to report), which then ends clean, taking nothing, and that waits for it inside
+ * `waiting` (a race with its other outcomes).
+ *
+ * @param ended - Waits for the watch's end, and ends as it did.
+ * @returns `done` and `claiming`, for the callers, and `unclaimed`, for the scope's close.
+ */
+export function handOff(ended: Effect.Effect<void>) {
+  // Whether a caller took the outcome, so the scope's close reports nothing; and whether the close reported it, so a
+  // caller who takes it after the close takes nothing. Each is decided in one synchronous step.
+  let delivered = false;
+  let reported = false;
+  // The callers waiting, each released once it has taken the outcome, declined it or been interrupted.
+  const claims = new Set<Deferred.Deferred<void>>();
+  const claiming = <A, E, R>(
+    declines: () => boolean,
+    waiting: (end: Effect.Effect<void>) => Effect.Effect<A, E, R>
+  ) => {
+    const end = Effect.exit(ended).pipe(
+      Effect.flatMap((exit) =>
+        Effect.suspend(() => {
+          if (declines() || reported) {
+            return Effect.void;
+          }
+
+          delivered = true;
+
+          return exit;
+        }).pipe(Effect.uninterruptible)
+      )
+    );
+
+    // The claim and its release in one uninterruptible step, so no interruption lands between them and leaves a claim
+    // the scope's close would wait on for ever; only the wait itself is interruptible.
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        const claim = Deferred.makeUnsafe<void>();
+        claims.add(claim);
+
+        return restore(waiting(end)).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              claims.delete(claim);
+              Deferred.doneUnsafe(claim, Effect.void);
+            })
+          )
+        );
+      })
+    );
+  };
+
+  return {
+    done: claiming(
+      () => false,
+      (end) => end
+    ),
+    claiming,
+    unclaimed: Effect.exit(ended).pipe(
+      Effect.flatMap((exit) =>
+        Effect.forEach([...claims], Deferred.await, { discard: true }).pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              if (delivered) {
+                return Effect.void;
+              }
+
+              reported = true;
+
+              return exit;
+            })
+          )
+        )
+      )
+    ),
+  };
+}
+
 // The watch's one stop, and the outcome everyone who waits for it shares. One fiber runs it, uninterruptibly, once the
 // stop signal comes (the gate, shut by the caller or a halt): it closes `sources`, so the watchers close at once; closes
 // `workers`, which drops a pending sync and waits for a running one; ends the results; and joins the writer, so every
@@ -414,9 +519,9 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
 ) {
   // A worker's defect: it halts the watch, and the stop ends with it.
   let defect: Cause.Cause<never> | undefined;
-  // Whether the stop's outcome reached someone (`done`'s caller, or a start that failed with it).
-  let delivered = false;
   const finished = yield* Deferred.make<void>();
+  // The stop's outcome, for `done`'s caller or a start that failed with it.
+  const outcome = handOff(Deferred.await(finished));
   const shutdown = Effect.fnUntraced(
     function* (writing: Fiber.Fiber<void>) {
       const closed = yield* Effect.exit(Scope.close(scopes.sources, Exit.void));
@@ -444,26 +549,14 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
       return { writing, stopping };
     }),
     ({ stopping }) =>
-      haltOnOwn(pipeline).pipe(
-        Effect.andThen(Fiber.await(stopping)),
-        Effect.andThen(Effect.exit(Deferred.await(finished))),
-        Effect.flatMap((exit) => (delivered ? Effect.void : exit))
-      )
+      haltOnOwn(pipeline).pipe(Effect.andThen(Fiber.await(stopping)), Effect.andThen(outcome.unclaimed))
   ).pipe(Scope.provide(scopes.own));
 
   return {
     // The writer, for a host that waits for its first writes.
     writing: fibers.writing,
-    // Waits for the stop, then hands its outcome to the caller, who then owns reporting it.
-    done: Effect.exit(Deferred.await(finished)).pipe(
-      Effect.flatMap((exit) =>
-        Effect.suspend(() => {
-          delivered = true;
-
-          return exit;
-        }).pipe(Effect.uninterruptible)
-      )
-    ),
+    // Waits for the stop, then hands its outcome to the caller.
+    done: outcome.done,
     // A worker whose defect halts the watch, the stop then ending with it.
     supervised: <A>(worker: Effect.Effect<void, never, A>) =>
       worker.pipe(
@@ -500,7 +593,8 @@ const ownedStop = /* @__PURE__ */ Effect.fnUntraced(function* <R>(
  * watchers close at once (a tree still opening first, so a watcher it is acquiring is closed too); `workers` closes,
  * dropping a pending sync and waiting for a running one; then every result already made is written. It ends as the
  * writing ended, then as the workers ended, then as the watchers closed. `done` delivers that outcome; when nothing
- * does (an interrupted `done`, or no `done`), the scope's close fails with it, so no defect is lost.
+ * does (an interrupted `done`, or no `done`), the scope's close fails with it, so no defect is lost, and a `done` taken
+ * after that ends clean, so none is reported twice.
  *
  * @param config - The project config.
  * @param mode - Where change events come from.

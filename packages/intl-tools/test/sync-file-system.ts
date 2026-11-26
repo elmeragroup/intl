@@ -5,7 +5,7 @@ import type * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import type { Stats } from "node:fs";
-import { readFileSync, statSync } from "node:fs";
+import { accessSync, readFileSync, statSync } from "node:fs";
 
 import { nodeExists } from "../src/project-services";
 
@@ -63,13 +63,28 @@ const info = (stats: Stats): FileSystem.File.Info => ({
   blocks: Option.some(BigInt(stats.blocks)),
 });
 
+const readSync = (path: string): Effect.Effect<Uint8Array, PlatformError.PlatformError> =>
+  Effect.try({ try: () => new Uint8Array(readFileSync(path)), catch: failed("readFile", path) });
+
 /**
- * A `FileSystem` whose `exists` (the hosts' own), `readFile` and `stat` are Node's synchronous calls; every other
- * operation a no-op.
+ * `SYNC_FILE_SYSTEM` with its `readFile` wrapped: a test's hook around a read, to hold it or stand a defect in.
+ *
+ * @param wrap - The read, given the synchronous one.
+ * @returns The file system.
  */
-export const SYNC_FILE_SYSTEM: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
-  exists: nodeExists,
-  readFile: (path) =>
-    Effect.try({ try: () => new Uint8Array(readFileSync(path)), catch: failed("readFile", path) }),
-  stat: (path) => Effect.try({ try: () => info(statSync(path)), catch: failed("stat", path) }),
-});
+export function syncFileSystem(
+  wrap: (read: typeof readSync) => typeof readSync = (read) => read
+): Layer.Layer<FileSystem.FileSystem> {
+  return FileSystem.layerNoop({
+    access: (path) => Effect.try({ try: () => accessSync(path), catch: failed("access", path) }),
+    exists: nodeExists,
+    readFile: wrap(readSync),
+    stat: (path) => Effect.try({ try: () => info(statSync(path)), catch: failed("stat", path) }),
+  });
+}
+
+/**
+ * A `FileSystem` whose `access`, `exists` (the hosts' own), `readFile` and `stat` are Node's synchronous calls; every
+ * other operation a no-op.
+ */
+export const SYNC_FILE_SYSTEM: Layer.Layer<FileSystem.FileSystem> = /* @__PURE__ */ syncFileSystem();
