@@ -339,7 +339,7 @@ function catalogInputs(config: string): Array<string> {
  * the English one (any locale's PO holds the same msgids). Only the configured locales' catalogs compile, with the
  * config's `formats`; a PO that does not compile fails the import with every problem. In dev, a PO save invalidates
  * its modules in every environment and sends open tabs `CATALOG_UPDATE_EVENT` (see `createCatalogReload` in
- * `@elmeragroup/intl/start`).
+ * `@elmeragroup/intl/start`). Under Vitest, catalogs stay out of its file-system module cache.
  *
  * @param options - Where the project config lives.
  * @returns The plugin.
@@ -406,8 +406,36 @@ function catalogPlugin(options: IntlPluginOptions, holds: (server: ViteDevServer
       // No client module imports a PO (the server loads the catalog), so nothing to hot-swap in the browser.
       return [];
     },
-  };
+    // Vitest's file-system module cache keys a transform by the module's own bytes, and a compiled catalog also depends
+    // on the config and the formats module, so a run after an edit of either would reuse the old catalog. Generators
+    // cannot key on them either: a session keeps the first key it computed for a module until that module's own file
+    // changes. So each catalog opts out (`false`), and compiles again whenever Vite's transform misses, as without a
+    // cache; every other module keeps the cache (`undefined`). Typed here, so the declarations need no vitest.
+    configureVitest(context: VitestCacheKeys) {
+      if (context.defineCacheKeyGenerator === undefined) {
+        context.experimental_defineCacheKeyGenerator?.(catalogCacheKey);
+      } else {
+        context.defineCacheKeyGenerator(catalogCacheKey);
+      }
+    },
+  } satisfies Plugin & { readonly configureVitest: (context: VitestCacheKeys) => void };
 }
+
+// Every catalog, `?source` included, kept out of Vitest's cache; every other module left as Vitest keys it.
+const catalogCacheKey: CacheKeyGenerator = ({ id }) =>
+  isCatalog(id.split("?", 1)[0] ?? "") ? false : undefined;
+
+// What Vitest's cache asks a generator of a module: a string mixed into its key, `false` to cache it not at all, or
+// `undefined` to leave the key as it is (Vitest's `CacheKeyIdGenerator`, narrowed to what this plugin returns).
+type CacheKeyGenerator = (context: { readonly id: string }) => false | undefined;
+
+// The part of Vitest's `configureVitest` context that registers one (`VitestPluginContext`). Vitest 5 names it
+// `defineCacheKeyGenerator` and keeps Vitest 4's `experimental_defineCacheKeyGenerator` as a deprecated alias of it;
+// Vitest 3 has neither, and no such cache.
+type VitestCacheKeys = {
+  readonly defineCacheKeyGenerator?: (generator: CacheKeyGenerator) => void;
+  readonly experimental_defineCacheKeyGenerator?: (generator: CacheKeyGenerator) => void;
+};
 
 function isCatalog(file: string): boolean {
   return file.endsWith(".po");
