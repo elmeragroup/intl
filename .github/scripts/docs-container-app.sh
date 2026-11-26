@@ -90,16 +90,20 @@ live_gate() {
 # `change_app --gate <mode> <pr> ...` runs the live gate for PR #<pr> before every attempt, so a wait of
 # minutes never applies a decision the PR has since overturned (a `no-preview` label added, a PR reopened). Returns 0
 # when the change applied, 3 only when the gate says the PR moved on, and 1 for every failure, the gate's or Azure's:
-# az exits 3 too (ResourceNotFoundError), which must never read as a skip.
+# az exits 3 too (ResourceNotFoundError), which must never read as a skip. `change_app --guard <function> <arg> ...` runs
+# that check in the gate's place and returns its status when it is not 0.
 change_app() {
   local gate=() attempt error status
   if [[ "$1" == --gate ]]; then
+    gate=(live_gate "$2" "$3")
+    shift 3
+  elif [[ "$1" == --guard ]]; then
     gate=("$2" "$3")
     shift 3
   fi
   for attempt in {1..24}; do
     if [[ "${#gate[@]}" -gt 0 ]]; then
-      live_gate "${gate[@]}" || return
+      "${gate[@]}" || return
     fi
     if error=$(az "$@" 2>&1); then
       return 0
@@ -251,10 +255,26 @@ describe_revision() {
     jq -c '{name} + (.properties | del(.template))'
 }
 
-# Deactivates a revision. Returns non-zero on failure; the caller decides whether that is fatal.
+# Whether <name> is a line of <lines>, matched in bash itself: an external matcher's own failure (grep exits 2 on a read
+# error) would read as "not there".
+listed() {
+  [[ $'\n'"$2"$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+
+# The guard before every attempt to deactivate <revision>: 0 while no label points at it, 3 once one does (a label write
+# from earlier in the run can apply after the CLI reported it failed), and 2 when the labels cannot be read.
+unlabelled() {
+  local labelled
+  labelled=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
+    --query "properties.configuration.ingress.traffic[?label].revisionName" --output tsv) || return 2
+  ! listed "$1" "$labelled" || return 3
+}
+
+# Deactivates a revision while no label points at it, checked before each attempt, including each retry after a 409.
+# Returns change_app's status: 0 deactivated, 3 a label points at it now, 2 the labels could not be read, 1 failed.
 deactivate() {
   echo "Deactivating $1."
-  change_app containerapp revision deactivate --name "$APP" --resource-group "$RESOURCE_GROUP" \
+  change_app --guard unlabelled "$1" containerapp revision deactivate --name "$APP" --resource-group "$RESOURCE_GROUP" \
     --revision "$1" --output none
 }
 
@@ -278,8 +298,9 @@ remove_label() {
 #      a PR that closed without its teardown, which GitHub skips for a PR with merge conflicts, the triggering PR
 #      included if it closed while its deploy wrote the label; an open PR, such as the one just deployed, is a skip;
 #   2. an active revision stays only if it is `bootstrap` or a label points at it (an older revision of a PR, or a
-#      candidate a failed or stopped deploy left behind, is deactivated). Labels are read after step 1, from Azure, so a
-#      label write that applied although the CLI reported a failure keeps its revision.
+#      candidate a failed or stopped deploy left behind, is deactivated). Labels are read after step 1, from Azure, and
+#      again before each attempt to deactivate, so a label write that applied although the CLI reported a failure, even
+#      one that lands during the sweep, keeps its revision.
 #
 # It runs as its own step after the deploy or teardown, under the same lock, so its failure shows on its own and never
 # hides an outcome already reported.
@@ -307,13 +328,19 @@ reconcile() {
   revisions=$(az containerapp revision list --name "$APP" --resource-group "$RESOURCE_GROUP" \
     --query "[?properties.active].name" --output tsv) || return 1
   for revision in $revisions; do
-    if [[ "$revision" == "$bootstrap" ]] || grep -qxF "$revision" <<< "$labelled"; then
+    if [[ "$revision" == "$bootstrap" ]] || listed "$revision" "$labelled"; then
       continue
     fi
-    if ! deactivate "$revision"; then
-      echo "Reconcile: could not deactivate $revision." >&2
-      [[ "$revision" == "${APP}--pr-${PR}-"* ]] && failed=true
-    fi
+    status=0
+    deactivate "$revision" || status=$?
+    case "$status" in
+      0) ;;
+      3) echo "Kept $revision: a label points at it now." ;;
+      2) echo "Reconcile: could not read the app's labels before deactivating $revision." >&2; return 1 ;;
+      *)
+        echo "Reconcile: could not deactivate $revision." >&2
+        [[ "$revision" == "${APP}--pr-${PR}-"* ]] && failed=true ;;
+    esac
   done
   show_routes "After the run"
   [[ "$failed" == false ]]
