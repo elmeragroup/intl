@@ -68,12 +68,11 @@ fi
 
 # The live gate (docs-preview-gate.sh) for PR #<pr>, from inside this serialized section: the PR can change while the
 # run waits in the queue or deploys. Returns 0 when the run may act, 3 when the PR has moved on, and 1 when the gate
-# itself failed. A third argument replaces the step summary the gate explains a skip in.
+# itself failed.
 live_gate() {
   local out
   out=$(mktemp)
-  if PR="$2" GITHUB_OUTPUT="$out" GITHUB_STEP_SUMMARY="${3:-$GITHUB_STEP_SUMMARY}" \
-    bash "$script_dir/docs-preview-gate.sh" "$1" >&2; then
+  if PR="$2" GITHUB_OUTPUT="$out" bash "$script_dir/docs-preview-gate.sh" "$1" >&2; then
     case "$(sed -n 's/^act=//p' "$out")" in
       true) return 0 ;;
       false) return 3 ;;
@@ -88,23 +87,19 @@ live_gate() {
 # out that rejection, bounded to about four minutes. A rejected change applied nothing, and each `az` change re-reads
 # the app before writing it, so repeating it is safe. Any other error fails at once.
 #
-# `change_app --gate <mode> <pr> [summary] -- ...` runs the live gate for PR #<pr> before every attempt, so a wait of
+# `change_app --gate <mode> <pr> ...` runs the live gate for PR #<pr> before every attempt, so a wait of
 # minutes never applies a decision the PR has since overturned (a `no-preview` label added, a PR reopened). Returns 0
 # when the change applied, 3 only when the gate says the PR moved on, and 1 for every failure, the gate's or Azure's:
 # az exits 3 too (ResourceNotFoundError), which must never read as a skip.
 change_app() {
-  local gate_args=() attempt error status
+  local gate=() attempt error status
   if [[ "$1" == --gate ]]; then
-    shift
-    while [[ "$1" != -- ]]; do
-      gate_args+=("$1")
-      shift
-    done
-    shift
+    gate=("$2" "$3")
+    shift 3
   fi
   for attempt in {1..24}; do
-    if [[ "${#gate_args[@]}" -gt 0 ]]; then
-      live_gate "${gate_args[@]}" || return
+    if [[ "${#gate[@]}" -gt 0 ]]; then
+      live_gate "${gate[@]}" || return
     fi
     if error=$(az "$@" 2>&1); then
       return 0
@@ -265,11 +260,16 @@ deactivate() {
 
 # Removes the label `pr-<n>` while GitHub reports PR #<n> closed: the teardown gate runs for that PR before every
 # attempt, including each retry after a 409, so a PR that reopens meanwhile keeps its label. Returns change_app's
-# status: 0 removed, 3 the PR is open again, 1 failed. A second argument replaces the gate's step summary.
+# status: 0 removed, 3 the PR is open again, 1 failed.
 remove_label() {
-  echo "Removing the label pr-$1."
-  change_app --gate teardown "$1" ${2:+"$2"} -- containerapp revision label remove \
-    --name "$APP" --resource-group "$RESOURCE_GROUP" --label "pr-$1" --output none
+  local status=0
+  change_app --gate teardown "$1" containerapp revision label remove \
+    --name "$APP" --resource-group "$RESOURCE_GROUP" --label "pr-$1" --output none || status=$?
+  case "$status" in
+    0) echo "Removed the label pr-$1: PR #$1 is closed." ;;
+    3) echo "Kept the label pr-$1: PR #$1 is not closed." ;;
+  esac
+  return "$status"
 }
 
 # After the triggering PR's own change, under the lock, one rule brings the app back to its rest state:
@@ -286,29 +286,26 @@ remove_label() {
 #
 # Changes for the triggering PR must succeed; changes for any other PR are best effort, logged per PR, and never fail
 # the run, so one PR's stale state cannot block another's preview. A failure for the triggering PR still lets the rest
-# of the sweep run, then fails the step.
+# of the sweep run, then fails the step. A failed read of the app's labels or revisions ends the sweep at once, failing
+# the step: read as empty, it would deactivate every live preview.
 reconcile() {
   local labels label number status labelled revisions revision failed=false
   labels=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic[?label].label" --output tsv)
+    --query "properties.configuration.ingress.traffic[?label].label" --output tsv) || return 1
   for label in $labels; do
     [[ "$label" =~ ^pr-([0-9]+)$ ]] || continue
     number="${BASH_REMATCH[1]}"
     status=0
-    # An open PR is the usual case, not news for the run's summary.
-    remove_label "$number" /dev/null || status=$?
-    case "$status" in
-      0) echo "Reconcile PR #$number: closed; its label is removed." ;;
-      3) echo "Reconcile PR #$number: not closed; its label stays." ;;
-      *)
-        echo "Reconcile PR #$number: could not remove its label." >&2
-        [[ "$number" == "$PR" ]] && failed=true ;;
-    esac
+    remove_label "$number" || status=$?
+    if [[ "$status" != 0 && "$status" != 3 ]]; then
+      echo "Reconcile PR #$number: could not remove its label." >&2
+      [[ "$number" == "$PR" ]] && failed=true
+    fi
   done
   labelled=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.traffic[?label].revisionName" --output tsv)
+    --query "properties.configuration.ingress.traffic[?label].revisionName" --output tsv) || return 1
   revisions=$(az containerapp revision list --name "$APP" --resource-group "$RESOURCE_GROUP" \
-    --query "[?properties.active].name" --output tsv)
+    --query "[?properties.active].name" --output tsv) || return 1
   for revision in $revisions; do
     if [[ "$revision" == "$bootstrap" ]] || grep -qxF "$revision" <<< "$labelled"; then
       continue
@@ -318,6 +315,7 @@ reconcile() {
       [[ "$revision" == "${APP}--pr-${PR}-"* ]] && failed=true
     fi
   done
+  show_routes "After the run"
   [[ "$failed" == false ]]
 }
 
@@ -355,10 +353,9 @@ if [[ "$mode" == reconcile ]]; then
     echo "No preview app exists; nothing to reconcile."
     exit 0
   fi
-  status=0
-  reconcile || status=$?
-  show_routes "After the run"
-  exit "$status"
+  # An open PR is the usual case, not news for the run's summary, so the gate's skips stay out of it.
+  GITHUB_STEP_SUMMARY=/dev/null reconcile
+  exit 0
 fi
 
 if [[ "$mode" == teardown ]]; then
@@ -412,9 +409,8 @@ ensure_bootstrap
 ensure_identity_lifecycle
 show_routes "Before the deploy"
 
-# A candidate that fails at any point below carries no label, so the reconcile step that follows deactivates it from the
-# labels Azure reports: this step never deactivates on its own, since a label write the CLI reports failed may still
-# have applied.
+# The reconcile step that follows owns the cleanup of a candidate that fails at any point below, because a label write
+# can apply before Azure CLI reports an error, so only the labels Azure reports decide.
 candidate="${APP}--${SUFFIX}"
 echo "Deploying $IMAGE as $candidate."
 if ! change_app containerapp update --name "$APP" --resource-group "$RESOURCE_GROUP" \
@@ -434,7 +430,7 @@ fi
 # the reconcile step that follows cannot take it back.
 echo "Labelling $candidate pr-${PR}."
 status=0
-change_app --gate deploy "$PR" -- containerapp revision label add --name "$APP" --resource-group "$RESOURCE_GROUP" \
+change_app --gate deploy "$PR" containerapp revision label add --name "$APP" --resource-group "$RESOURCE_GROUP" \
   --revision "$candidate" --label "pr-${PR}" --yes --output none || status=$?
 case "$status" in
   0) ;;
