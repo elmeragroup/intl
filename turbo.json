@@ -26,10 +26,13 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**"]
     },
+    // Strict env mode strips undeclared variables, so a dev server on a host without native file events (a container's
+    // bind mount, WSL) polls only when chokidar's variables reach it: Vite's watcher and `intl()`'s watch read them.
     "dev": {
       "cache": false,
       "persistent": true,
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["CHOKIDAR_USEPOLLING", "CHOKIDAR_INTERVAL"]
     },
     // Has no script: it ties a package's hash to its dependencies' files, so a task that reads their source carries
     // their changes in its cache key without waiting for their tasks.

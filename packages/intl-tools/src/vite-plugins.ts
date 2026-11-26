@@ -79,14 +79,26 @@ export function intlPlugins(
           }
         };
 
-        // The dev server's own watch setting: an app that polls (`server.watch.usePolling`) polls here too.
+        // The watch polls when Vite's watcher was told to: by CHOKIDAR_USEPOLLING when it is set (chokidar's parse of
+        // it is in the watcher's options), else by `server.watch.usePolling`. Not by the watcher's own choice alone:
+        // chokidar also polls where fsevents is missing or past 128 watchers, which the watch's `fs.watch` needs
+        // neither of. It polls at the watcher's interval, CHOKIDAR_INTERVAL's over `server.watch.interval`. The
+        // watcher of `server.watch: null` carries no `usePolling`.
         const { watch: serverWatch } = server.config.server;
-        const polled =
-          serverWatch?.usePolling === true ? pollEvery(serverWatch.interval ?? DEFAULT_POLL_MS) : undefined;
+        const { options: watcher } = server.watcher;
+        const polls =
+          process.env.CHOKIDAR_USEPOLLING === undefined
+            ? serverWatch?.usePolling === true
+            : watcher.usePolling === true;
+        const polled = polls ? pollEvery(watcher.interval ?? DEFAULT_POLL_MS) : undefined;
 
         if (polled?._tag === "PollIntervalOutOfRange") {
+          // chokidar applies CHOKIDAR_INTERVAL when it is nonempty, over `server.watch.interval`.
+          const envInterval = process.env.CHOKIDAR_INTERVAL;
+          const source =
+            envInterval !== undefined && envInterval !== "" ? "CHOKIDAR_INTERVAL" : "server.watch.interval";
           logger.error(
-            `${NAME}: server.watch.interval ${polled.intervalMs} is outside ${MIN_POLL_MS} to ${MAX_POLL_MS} ms; polling every ${DEFAULT_POLL_MS} ms`
+            `${NAME}: ${source} ${polled.intervalMs} is outside ${MIN_POLL_MS} to ${MAX_POLL_MS} ms; polling every ${DEFAULT_POLL_MS} ms`
           );
         }
 

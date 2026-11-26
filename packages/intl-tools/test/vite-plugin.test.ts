@@ -1,22 +1,31 @@
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { Rolldown, ViteDevServer } from "vite";
+import type { InlineConfig, Rolldown, ViteDevServer } from "vite";
 import { build, createBuilder, createLogger, createServer } from "vite";
 import { describe, expect } from "vitest";
 
 import type { Catalog } from "@elmeragroup/intl/core";
 import { createIntl } from "@elmeragroup/intl/core";
 
+import type { ProjectServices } from "../src/project-services";
 import { intl, intlCatalogs } from "../src/vite";
 import { intlPlugins } from "../src/vite-plugins";
+import type { WatchServices } from "../src/watch";
+import { CatalogSync } from "../src/watch";
 import type { Project } from "./project-fixture";
 import type { DevEdit } from "./vite-project";
 import {
   applyEdit,
   BUILD_WATCH,
+  CHOKIDAR_VARIABLES,
   component,
   CONFIG,
   countedServices,
@@ -33,6 +42,8 @@ import {
   useMoneyFormats,
   viteConfig,
 } from "./vite-project";
+import type { DeliveredEvents } from "./watch-project";
+import { deliveredEvents, syncCatalogServices } from "./watch-project";
 
 // The built executable, as an app runs it.
 const BIN = fileURLToPath(new URL("../bin/elmera-intl.js", import.meta.url));
@@ -70,6 +81,32 @@ function hooksOf(name: "elmera-intl:watch" | "elmera-intl:check") {
     buildStart: handlerOf(plugin?.buildStart),
     closeBundle: handlerOf(plugin?.closeBundle),
   };
+}
+
+// The chokidar variables a dev server is made under, each unset when absent (the project's `it` unsets them all).
+type ChokidarEnv = { readonly [Name in (typeof CHOKIDAR_VARIABLES)[number]]?: string };
+
+// A dev server of `intl()` made under `env`, its sessions on `services` (the real ones, with `events` for the platform's
+// file events), whose watch hears no platform file event: each tree's listener is recorded and never called, so only a
+// watch that polls syncs a save.
+async function unheardServer(
+  project: Project,
+  env: ChokidarEnv,
+  config: InlineConfig,
+  events: DeliveredEvents = deliveredEvents(),
+  services: Layer.Layer<WatchServices | ProjectServices> = countedServices(CatalogSync.layer(), events.layer)
+    .layer
+): Promise<DeliveredEvents> {
+  CHOKIDAR_VARIABLES.forEach((name) => {
+    const value = env[name];
+
+    if (value !== undefined) {
+      process.env[name] = value;
+    }
+  });
+  await devServer(project, { ...config, plugins: intlPlugins({}, services) });
+
+  return events;
 }
 
 // Unit under test: the intl() Vite plugin. Oracle: the check's problem code, the PO text, and the nb render, by hand.
@@ -415,27 +452,121 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
     ]);
   });
 
-  // Oracle: the poll interval contract (10 ms to Node's timer maximum): the dev server's interval feeds the same
-  // poller as `--poll`, so one out of range is reported, and the watch polls at the default instead.
-  it("reports a dev server poll interval out of range and polls at the default", async ({ project }) => {
-    const errors: Array<string> = [];
-    await devServer(project, {
-      customLogger: {
-        ...createLogger("silent"),
-        error: (message) => {
-          errors.push(message);
-        },
-      },
-      server: { watch: { usePolling: true, interval: 1 } },
-      plugins: [intl()],
-    });
-    project.write("src/new.tsx", component("New"));
-    await expect
-      .poll(() => project.read("messages/nb.po"), project.guard())
-      .toContain(`msgid "New"\nmsgstr ""`);
+  // Unit under test: the dev plugin's choice of how its watch hears a save. Oracle: chokidar's CHOKIDAR_USEPOLLING, by
+  // hand: set, it decides the `usePolling` option of Vite's watcher ("false" and "" turn it off over a config that turns
+  // it on), and the watch follows that option; `server.watch: null` leaves Vite a watcher with no such option. A watch
+  // that listens has opened its listeners by the time the server has started. Unset, the config decides. The cases that
+  // poll, the variable's "true" over a config that does not among them, are the cadence table below.
+  it.for([
+    {
+      case: "CHOKIDAR_USEPOLLING=false over server.watch.usePolling",
+      env: { CHOKIDAR_USEPOLLING: "false" },
+      server: SERVER_WATCH,
+    },
+    {
+      case: "an empty CHOKIDAR_USEPOLLING over server.watch.usePolling",
+      env: { CHOKIDAR_USEPOLLING: "" },
+      server: SERVER_WATCH,
+    },
+    { case: "neither CHOKIDAR_USEPOLLING nor server.watch.usePolling", env: {}, server: {} },
+    {
+      case: "CHOKIDAR_USEPOLLING=true and server.watch null",
+      env: { CHOKIDAR_USEPOLLING: "true" },
+      server: { watch: null },
+    },
+  ])("listens to the platform's file events with $case", async ({ env, server }, { project }) => {
+    const events = await unheardServer(project, env, { server });
 
-    expect(errors).toEqual([expect.stringContaining("server.watch.interval 1 is outside 10 to 2147483647")]);
+    expect(events.open().length).toBeGreaterThan(0);
   });
+
+  // Unit under test: the cadence of the dev watch's poll. Oracle: the poll interval contract (10 ms to Node's timer
+  // maximum), chokidar's CHOKIDAR_INTERVAL, which sets its watcher's interval over `server.watch.interval`, and the
+  // watch's 100 ms debounce after the walk that sees a change, by hand. The watch polls at the dev server's watcher's
+  // interval; one out of range is reported under the setting it came from and the watch polls at the 100 ms default
+  // instead, so a save made once the server has started reaches the PO at 200 ms on the clock, not at 199 ms; one in
+  // range (50 ms) over a config out of range is used, with nothing reported, and the save arrives at 150 ms. A watch
+  // polling every 10 ms would sync it at 110 ms, one keeping the config's 50 ms at 150 ms. The watch hears no platform
+  // event and opens no listener, so the save was polled. CHOKIDAR_USEPOLLING=true over a config that does not poll
+  // polls at the watcher's interval as well: CHOKIDAR_INTERVAL's 50 ms, at 150 ms. The sessions run on the test clock and its scheduler, and the project's reads and
+  // writes are synchronous, so each move of the clock returns once the syncs it sets off wrote.
+  it.for([
+    {
+      case: "server.watch.interval",
+      watch: { usePolling: true, interval: 1 },
+      env: {},
+      errors: ["elmera-intl: server.watch.interval 1 is outside 10 to 2147483647 ms; polling every 100 ms"],
+      syncedAtMs: 200,
+    },
+    {
+      case: "CHOKIDAR_INTERVAL over server.watch.interval",
+      watch: { usePolling: true, interval: 50 },
+      env: { CHOKIDAR_INTERVAL: "1" },
+      errors: ["elmera-intl: CHOKIDAR_INTERVAL 1 is outside 10 to 2147483647 ms; polling every 100 ms"],
+      syncedAtMs: 200,
+    },
+    {
+      case: "CHOKIDAR_INTERVAL equal to server.watch.interval",
+      watch: { usePolling: true, interval: 1 },
+      env: { CHOKIDAR_INTERVAL: "1" },
+      errors: ["elmera-intl: CHOKIDAR_INTERVAL 1 is outside 10 to 2147483647 ms; polling every 100 ms"],
+      syncedAtMs: 200,
+    },
+    {
+      case: "CHOKIDAR_INTERVAL in range over server.watch.interval",
+      watch: { usePolling: true, interval: 1 },
+      env: { CHOKIDAR_INTERVAL: "50" },
+      errors: [],
+      syncedAtMs: 150,
+    },
+    {
+      case: "CHOKIDAR_USEPOLLING over server.watch.usePolling false, at CHOKIDAR_INTERVAL",
+      watch: { usePolling: false, interval: 1 },
+      env: { CHOKIDAR_USEPOLLING: "true", CHOKIDAR_INTERVAL: "50" },
+      errors: [],
+      syncedAtMs: 150,
+    },
+  ])(
+    "polls at the dev server watcher's interval, on its clock, reporting one out of range: $case",
+    async ({ watch, env, errors, syncedAtMs }, { project }) => {
+      const scope = Scope.makeUnsafe();
+      project.defer(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+      // A woken fiber is waited for up to `warningDelay` before the clock moves on: far past a sync on a loaded host.
+      const clock = await Effect.runPromise(
+        Layer.buildWithScope(TestClock.layer({ warningDelay: "1 minute" }), scope)
+      );
+      const at = async (ms: number) => {
+        await Effect.runPromise(TestClock.adjust(`${ms} millis`).pipe(Effect.provideContext(clock)));
+
+        return project.read("messages/nb.po").includes(`msgid "New"`);
+      };
+      const logged: Array<string> = [];
+      const events = deliveredEvents();
+      await unheardServer(
+        project,
+        env,
+        {
+          customLogger: {
+            ...createLogger("silent"),
+            error: (message) => {
+              logged.push(message);
+            },
+          },
+          server: { watch },
+        },
+        events,
+        Layer.mergeAll(syncCatalogServices(), events.layer, Layer.succeedContext(clock))
+      );
+
+      project.write("src/new.tsx", component("New"));
+
+      expect({ logged, synced: [await at(syncedAtMs - 1), await at(1)], opened: events.calls() }).toEqual({
+        logged: errors,
+        synced: [false, true],
+        opened: 0,
+      });
+    }
+  );
 });
 
 // The project's library build of an entry that imports catalogs, through `plugins`: the bundle's exports by name.
