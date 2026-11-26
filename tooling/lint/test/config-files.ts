@@ -54,12 +54,12 @@ export function ruleSetting(text: string, id: string): RuleSetting | undefined {
   return Array.isArray(value) ? { level: value[0], options: value.slice(1) } : { level: value, options: [] };
 }
 
-/** One `name: version` entry of the pnpm catalogs. */
-export type CatalogEntry = { readonly name: string; readonly version: string };
+/** One `name: version` entry of the pnpm catalogs, in the catalog it belongs to: `default`, or the named catalog. */
+export type CatalogEntry = { readonly catalog: string; readonly name: string; readonly version: string };
 
-function entriesOf(section: unknown): ReadonlyArray<CatalogEntry> {
+function entriesOf(catalog: string, section: unknown): ReadonlyArray<CatalogEntry> {
   return typeof section === "object" && section !== null
-    ? Object.entries(section).map(([name, version]) => ({ name, version: String(version) }))
+    ? Object.entries(section).map(([name, version]) => ({ catalog, name, version: String(version) }))
     : [];
 }
 
@@ -67,7 +67,7 @@ function entriesOf(section: unknown): ReadonlyArray<CatalogEntry> {
  * Every entry of `pnpm-workspace.yaml`'s default `catalog` and its named `catalogs`.
  *
  * @param yaml - The file's text.
- * @returns The entries, the default catalog first.
+ * @returns The entries, the default catalog's (`catalog: "default"`) first.
  */
 export function catalogEntries(yaml: string): ReadonlyArray<CatalogEntry> {
   const document: unknown = parseYaml(yaml);
@@ -79,9 +79,9 @@ export function catalogEntries(yaml: string): ReadonlyArray<CatalogEntry> {
   const named = "catalogs" in document ? document.catalogs : undefined;
 
   return [
-    ...entriesOf("catalog" in document ? document.catalog : undefined),
+    ...entriesOf("default", "catalog" in document ? document.catalog : undefined),
     ...(typeof named === "object" && named !== null
-      ? Object.values(named).flatMap((section) => entriesOf(section))
+      ? Object.entries(named).flatMap(([catalog, section]) => entriesOf(catalog, section))
       : []),
   ];
 }

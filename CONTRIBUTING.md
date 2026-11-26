@@ -135,11 +135,59 @@ comment on the PR, edited in place on each push, links to it. The link opens onl
 that leaves the site unchanged can carry the `no-preview` label to deploy nothing; a fork PR gets no
 preview. Closing the PR removes it ([preview.yml](.github/workflows/preview.yml)).
 
+<a id="peer-ranges"></a>
+
+## Peer ranges
+
+Every peer range the published packages declare is one a run has tested at both ends. Three places
+hold that:
+
+- **The ranges** in each package's `peerDependencies` are `^F`, or `>=F <N.0.0` once the top has
+  moved past F's major. No other shape: no `>=` without a ceiling, no `||`.
+- **The `floors` catalog** in `pnpm-workspace.yaml` names each floor F, and each companion that must
+  move with one (`@next/mdx` with `next`, `@tanstack/react-start` with the router, `react-dom` with
+  `react`, `@effect/platform-node-shared` and `@effect/vitest` with `effect`), with a line on why. No package takes it. **The `floors` job** in `merge.yml` runs
+  `scripts/peer-floors.ts`, which puts each floors version in place of its catalog entry, installs,
+  and checks that every package resolved it. The job then runs both packages' unit tests, the effect
+  example's unit tests, and the fixture gate, G8 (`pnpm turbo run e2e --filter=@elmeragroup/intl-e2e`:
+  the linked and packed passes over the Next and Start fixture apps), on that install. The effect
+  example's suite is there because its Vitest config registers `@elmeragroup/intl-tools/vitest`, so
+  Vitest itself loads and calls the public global setup on the floor (the setup's own tests call it
+  with a hand-built `{ config: { root } }`). It does not run the example apps' specs (`pnpm test:e2e`
+  would), which hold the recommended setup on the catalog's versions, not the floors. Locally, run the script in a scratch worktree: it refuses a checkout with changes, since
+  it rewrites `pnpm-workspace.yaml` and the lockfile.
+
+  The job has two limits. It installs without the lockfile, so it can go red because a transitive
+  dependency moved, with nothing changed in the repository: find the package that moved in the
+  job's install log (the script prints each floor it put in place; the job keeps no lockfile, so
+  rerun the script locally in a scratch worktree to compare), then pin the companion in the
+  `floors` catalog or fix the code, in its own PR, and never rerun the job to a pass. The Start fixture's `ping` takes no argument, so server-function
+  argument serialization is covered only by the Start example's settings and locale saves
+  (`.validator(...)` in `apps/start-example/src`), on the catalog's versions, not the floors.
+
+- **The manifest test** (`tooling/lint/test/workspace.test.ts`) fails when a range has another
+  shape, when its floor is not the `floors` entry, or when the version the package tests the peer
+  on, the catalog its own dev dependency on the peer takes (`catalog:` or `catalog:react19`), falls
+  outside the range's top major, or when the top major is neither the floor's nor the one after it,
+  since a major between them is one no job installs. A published package declares no peer it has no such dev
+  dependency on, and no manifest takes `catalog:floors`. The test states each published package's
+  peers and which are optional, with the subpath that needs each, and fails when a manifest's
+  differ: a peer added, dropped or made optional or required changes that list in the same change.
+
+To move a peer's catalog version to a new major, widen the range in the same change. `^F`
+becomes `>=F <N+1.0.0`; the floor stays where it is, and the `floors` job keeps testing it. A
+range spans only the floor's major and the one after it, so from `>=F <N.0.0` the floor moves too:
+raise it into the old top major, measured as below, since no job would install a major left in
+between. To raise or lower a floor, first measure it: install the candidate in a scratch worktree,
+as the script does, and run the unit tests and the fixture gate as the job does. Then change the range and
+the `floors` entry together. A lowered floor needs a version that passes. A raised one is a breaking
+change for anyone on the old floor, so the changeset says so.
+
 <a id="releases"></a>
 
 ## Releases
 
-A push to `main` runs **Merge**. When its `checks` and `e2e` jobs pass, it calls two workflows for
+A push to `main` runs **Merge**. When its `checks`, `e2e` and `floors` jobs pass, it calls two workflows for
 the checked commit. Pull requests never publish.
 
 - **Publish Release** (`publish-release.yml`, in the `npm` environment) runs `scripts/release.ts`,
@@ -256,8 +304,8 @@ Done once by an owner. No npm token is stored anywhere.
 1. Create the GitHub environment `npm`, with a deployment branch rule that allows only `main`.
 2. Allow GitHub Actions to create pull requests (Settings, Actions, General) for the Version Packages
    PR.
-3. In `main`'s branch protection (or ruleset), require status checks to pass (`checks`, `e2e` and
-   the PR title check) and check **Require branches to be up to date before merging**. Then "the
+3. In `main`'s branch protection (or ruleset), require status checks to pass (`checks`, `e2e`, `floors`
+   and the PR title check) and check **Require branches to be up to date before merging**. Then "the
    branch must be up to date with the base branch before merging", and without required status
    checks "collaborators can merge the branch at any time, regardless of whether it is up to date"
    ([about protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)).

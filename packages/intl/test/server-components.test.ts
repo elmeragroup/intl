@@ -15,34 +15,64 @@ const FLIGHT = "next/dist/compiled/react-server-dom-webpack";
 const CATALOG = compiled("nb", { "a <x0>b</x0> c": "A<x0> B </x0>C", b: "innermelding" });
 
 // What a host's build does for a server component, as module hooks: withIntl's alias of the request module to the
-// app's `intl/request.ts` (here serving CATALOG), and the "use client" boundary, which hands the server a client
-// reference for the provider's module instead of running it.
+// app's `intl/request.ts` (here serving CATALOG), the "use client" boundary, which hands the server a client
+// reference for the provider's module instead of running it, and, in both processes, Next's alias of `react` and
+// `react-dom` to its own copies beside FLIGHT, so the elements, the built `/react` and the renderer share one React
+// whichever version the app installed.
 const REQUEST_MODULE = `export default () => Promise.resolve(${JSON.stringify({ locale: "nb", catalog: CATALOG, timeZone: "UTC" })});`;
 const CLIENT_REFERENCE = `export const IntlProvider = () => { throw new Error("a client reference rendered on the server"); };`;
 
-// The server half: `<T>a <T>b</T> c</T>` from `/react`, as the package's export map resolves it under `react-server`,
-// rendered to the server components payload.
-const SERVER = `import { registerHooks } from "node:module";
-const modules = {
-  "${manifest.name}/internal/request-module": ${JSON.stringify(REQUEST_MODULE)},
-  "${manifest.name}/internal/react-client": ${JSON.stringify(CLIENT_REFERENCE)},
+// Next's copies of React, by each specifier the scripts, the built `/react`, FLIGHT and those copies import: the files
+// `createVendoredReactAliases` (`next/dist/build/create-compiler-aliases.js`) gives the edge layers, whose FLIGHT
+// builds the scripts render with, `react-server`'s for the server process and the client's for the client (Next's Node
+// layers alias to its prebuilt server runtime instead, which a plain process cannot load alone). `react-dom/server` is
+// the Node build of Next's copy, since Next's own alias withholds the `renderToStaticMarkup` the client renders with.
+// Next's copies require each other by their directories, which Node resolves to the default files, so the server
+// aliases those too.
+const REACT = "next/dist/compiled/react";
+const REACT_DOM = "next/dist/compiled/react-dom";
+const SERVER_REACT = {
+  react: `${REACT}/react.react-server.js`,
+  "react/jsx-runtime": `${REACT}/jsx-runtime.react-server.js`,
+  "react-dom": `${REACT_DOM}/react-dom.react-server.js`,
+  [REACT]: `${REACT}/react.react-server.js`,
+  [REACT_DOM]: `${REACT_DOM}/react-dom.react-server.js`,
 };
+const CLIENT_REACT = {
+  react: `${REACT}/index.js`,
+  "react/jsx-runtime": `${REACT}/jsx-runtime.js`,
+  "react-dom": `${REACT_DOM}/index.js`,
+  "react-dom/server": `${REACT_DOM}/server.node.js`,
+};
+
+// Module hooks resolving each of `aliases` to its target, and each of `modules` to the source that replaces it.
+const hooks = (aliases: Readonly<Record<string, string>>, modules: Readonly<Record<string, string>>) =>
+  `import { registerHooks } from "node:module";
+const aliases = ${JSON.stringify(aliases)};
+const modules = ${JSON.stringify(modules)};
 registerHooks({
   resolve(specifier, context, next) {
     const source = modules[specifier];
     return source === undefined
-      ? next(specifier, context)
+      ? next(aliases[specifier] ?? specifier, context)
       : { url: "data:text/javascript," + encodeURIComponent(source), shortCircuit: true };
   },
 });
-const { createElement } = await import("react");
+`;
+
+// The server half: `<T>a <T>b</T> c</T>` from `/react`, as the package's export map resolves it under `react-server`,
+// rendered to the server components payload.
+const SERVER = `${hooks(SERVER_REACT, {
+  [`${manifest.name}/internal/request-module`]: REQUEST_MODULE,
+  [`${manifest.name}/internal/react-client`]: CLIENT_REFERENCE,
+})}const { createElement } = await import("react");
 const { renderToReadableStream } = await import("${FLIGHT}/server.edge.js");
 const { T } = await import("${manifest.name}/react");
 const message = createElement(T, null, "a ", createElement(T, null, "b"), " c");
 process.stdout.write(await new Response(renderToReadableStream(message)).text());`;
 
 // The client half: the payload read back and rendered to HTML, as a browser's first paint gets it.
-const CLIENT = `const { createFromReadableStream } = await import("${FLIGHT}/client.edge.js");
+const CLIENT = `${hooks(CLIENT_REACT, {})}const { createFromReadableStream } = await import("${FLIGHT}/client.edge.js");
 const { renderToStaticMarkup } = await import("react-dom/server");
 const payload = new Response(await new Response(process.stdin).text()).body;
 const manifest = { serverConsumerManifest: { moduleMap: {}, serverModuleMap: null, moduleLoading: null } };

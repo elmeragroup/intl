@@ -105,11 +105,73 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The bottom of every declared peer range: the packages' unit tests and the fixture gate (@elmeragroup/intl-e2e: its
+  # linked and packed passes over the Next and Start fixtures) on the `floors` catalog of pnpm-workspace.yaml (the
+  # lowest Next, Vite, Vitest, router, React and Effect the manifests accept), after scripts/peer-floors.ts put each in
+  # place of its catalog entry and checked every package resolved it. The effect example's unit tests run too, because
+  # its Vitest config registers @elmeragroup/intl-tools/vitest, so Vitest itself loads and calls the public global
+  # setup on the floor (the setup's own tests call it by hand). The other jobs test the top of each range on the
+  # catalog's versions; the manifest test holds the ranges to both. What it does not prove: the example apps' specs are
+  # not run (they show the recommended setup on the catalog's versions); the Next fixture renders Next's vendored
+  # React, so React 19.0.0 is carried by the Start fixture and the runtime's unit tests; and the install is unlocked,
+  # so a transitive dependency can drift from one run to the next. #112 tracks that and the other gaps: no type-check
+  # against the floors' declarations (@types/react stays at the catalog's), and no peer check beyond direct copies.
+  floors:
+    runs-on: ubuntu-latest
+    # The fixture builds and servers of the e2e job, on older versions.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      # Rewrites the catalog and the lockfile in this disposable checkout, then installs unlocked.
+      - name: Install the peer floors
+        run: node scripts/peer-floors.ts --no-runtime
+
+      - name: Set up Playwright
+        uses: ./.github/actions/setup-playwright
+        with:
+          browsers: chromium webkit
+
+      - name: Unit tests on the floors
+        run: >-
+          pnpm turbo run test:run --filter=@elmeragroup/intl --filter=@elmeragroup/intl-tools
+          --filter=@elmeragroup/effect-example
+        env:
+          TURBO_RUN_SUMMARY: "true"
+
+      - name: Fixture e2e on the floors
+        run: pnpm turbo run e2e --filter=@elmeragroup/intl-e2e
+        env:
+          TURBO_RUN_SUMMARY: "true"
+
+      - name: Upload Playwright output
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-floors-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/*/test-results/
+            packages/*/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Canary or stable publication of the checked commit (CONTRIBUTING.md#releases). npm's trusted
   # publishing validates the calling workflow's filename for a workflow_call, so the npm entries name
   # merge.yml. The called workflow cannot hold more than this grant.
   release:
-    needs: [checks, e2e]
+    needs: [checks, e2e, floors]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: write
@@ -117,7 +179,7 @@ jobs:
     uses: ./.github/workflows/publish-release.yml
 
   version:
-    needs: [checks, e2e]
+    needs: [checks, e2e, floors]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: write

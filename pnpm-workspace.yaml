@@ -95,6 +95,31 @@ catalogs:
     "@types/react-dom": 19.3.0
     react: 19.3.1
     react-dom: 19.3.1
+  # The lowest version of each peer the published packages declare, and of each companion that must move with one:
+  # every range is `^floor` (or `>=floor <next major>`), with its floor here (the manifest test holds both). No package
+  # takes these; `scripts/peer-floors.ts` puts each in place of the same name above, and merge.yml's floors job runs the
+  # packages' unit tests and the fixture e2e (@elmeragroup/intl-e2e) on them. Change one only with a run on it
+  # (CONTRIBUTING.md, Peer ranges).
+  floors:
+    # The router's floor. @tanstack/react-start pins its router exactly, and 1.168.0 is the release that ships 1.170.0.
+    "@tanstack/react-router": 1.170.0
+    "@tanstack/react-start": 1.168.0
+    # effect's floor, and the platform and test packages released with it. Equal to the catalog today; listed so the
+    # job keeps installing the floor after a catalog bump.
+    "@effect/platform-node-shared": 4.1.3
+    "@effect/vitest": 4.1.3
+    effect: 4.1.3
+    # In lockstep with next, as in the catalog.
+    "@next/mdx": 16.4.0
+    next: 16.4.0
+    # React's floor, react-dom with it; @types/react stays at the catalog's.
+    react: 19.0.0
+    react-dom: 19.0.0
+    # The first Vite on which the tools' build-watch tests pass (#96): on 8.0 a watch misses rebuilds, on 8.1 it reports
+    # extra changes to the project directory after a missing config is created.
+    vite: 8.2.0
+    # The optional peer's floor: the first Vitest 5, with the cache-key hook the catalog plugin registers.
+    vitest: 5.0.0
 
 autoInstallPeers: true
 

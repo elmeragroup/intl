@@ -359,8 +359,8 @@ describe("intl() vite build watch", { timeout: 15_000 }, () => {
   });
 
   // Unit under test: the build plugin's exclusion of every output directory from its watch, on the resolved config as
-  // Vite 6 and 7 shape it: `build.rollupOptions`, and no `build.rolldownOptions` (the peer range admits both). Oracle,
-  // by hand: the custom `dir`'s bundle matches an exclusion. The hook is called as Vite calls it, with the resolved
+  // Vite 6 and 7 shape it: `build.rollupOptions`, and no `build.rolldownOptions` (outside the peer range, `^8.2.0`;
+  // kept for widening it back, #96). Oracle, by hand: the custom `dir`'s bundle matches an exclusion. The hook is called as Vite calls it, with the resolved
   // config, and a failure is captured so the assertion names it.
   it("excludes a custom output directory from a Vite 6 build's watch", ({ project }) => {
     const hook = intl().find(({ name }) => name === "elmera-intl:check")?.configResolved;

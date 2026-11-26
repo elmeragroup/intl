@@ -130,9 +130,9 @@
     "intl-messageformat": "catalog:"
   },
   "peerDependencies": {
-    "@tanstack/react-router": ">=1.170.0",
+    "@tanstack/react-router": "^1.170.0",
     "effect": "^4.1.3",
-    "next": ">=16.4.0",
+    "next": "^16.4.0",
     "react": "^19.0.0"
   },
   "peerDependenciesMeta": {

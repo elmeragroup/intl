@@ -31,9 +31,10 @@ behavior.
 - `tooling/typescript` contains the shared TypeScript configuration.
 - `tooling/lint` holds this workspace's own contracts as lint: the `elmera-workspace` oxlint plugin
   and the manifest test for what lives in JSON and YAML. Private.
-- `scripts` contains workspace scripts: the PR title check and the release script
+- `scripts` contains workspace scripts: the PR title check, the release script
   (`scripts/release.ts`, run by `.github/workflows/publish-release.yml` and
-  `version-packages.yml`, and by maintainers for `promote`).
+  `version-packages.yml`, and by maintainers for `promote`), and the peer floors install
+  (`scripts/peer-floors.ts`, run by `merge.yml`'s `floors` job).
 
 Keep the dependency direction `intl-e2e` → `intl-tools` → `intl`
 (`elmera-workspace/import-boundaries`). The example apps consume `intl` and `intl-tools` from the

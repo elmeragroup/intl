@@ -27,7 +27,7 @@ function Home() {
         id="ping"
         type="button"
         onClick={() => {
-          void ping({ data: "kari" }).then(setPong);
+          void ping().then(setPong);
         }}>
         ping
       </button>

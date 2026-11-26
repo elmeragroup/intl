@@ -32,6 +32,7 @@ type Manifest = {
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly devDependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>;
   readonly optionalDependencies?: Readonly<Record<string, string>>;
   readonly publishConfig?: { readonly access?: string };
   readonly devEngines?: { readonly runtime?: { readonly version?: string } };
@@ -287,12 +288,295 @@ describe.each(PUBLISHED)("published $manifest.name", ({ path, manifest }) => {
   });
 });
 
-describe("catalog", () => {
-  const entries = catalogEntries(read("pnpm-workspace.yaml"));
+const CATALOG_ENTRIES = catalogEntries(read("pnpm-workspace.yaml"));
 
+describe("catalog", () => {
   it("pins every version exactly", () => {
-    expect(entries.length).toBeGreaterThan(20);
-    expect(entries.filter(({ version }) => !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/u.test(version))).toEqual([]);
+    expect(CATALOG_ENTRIES.length).toBeGreaterThan(20);
+    expect(
+      CATALOG_ENTRIES.filter(({ version }) => !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/u.test(version))
+    ).toEqual([]);
+  });
+});
+
+// The same entries as catalog → name → version: the default `catalog` under "default", each of `catalogs` by name.
+const CATALOGS: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map(
+  Map.groupBy(CATALOG_ENTRIES, ({ catalog }) => catalog)
+    .entries()
+    .map(([catalog, entries]) => [catalog, new Map(entries.map(({ name, version }) => [name, version]))])
+);
+
+type Version = readonly [major: number, minor: number, patch: number];
+
+function parseVersion(text: string): Version | undefined {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(text);
+
+  return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function atLeast(version: Version, floor: Version): boolean {
+  const index = version.findIndex((part, at) => part !== floor[at]);
+
+  return index === -1 || (version[index] ?? 0) > (floor[index] ?? 0);
+}
+
+// A peer range in one of the two shapes the packages declare: `^F` (F's major at least 1), or `>=F <N.0.0` once a
+// ceiling has moved past F's major. Its floor as written and parsed, and the first major it excludes.
+type PeerRange = { readonly floor: string; readonly floorVersion: Version; readonly ceiling: number };
+
+function parsePeerRange(range: string): PeerRange | undefined {
+  const bounded = /^>=(\d+\.\d+\.\d+) <(\d+)\.0\.0$/u.exec(range);
+  const floor = /^\^(\d+\.\d+\.\d+)$/u.exec(range)?.[1] ?? bounded?.[1];
+  const floorVersion = floor === undefined ? undefined : parseVersion(floor);
+
+  if (floor === undefined || floorVersion === undefined || floorVersion[0] < 1) {
+    return undefined;
+  }
+
+  const ceiling = bounded === null ? floorVersion[0] + 1 : Number(bounded[2]);
+
+  return ceiling > floorVersion[0] ? { floor, floorVersion, ceiling } : undefined;
+}
+
+// The catalog a `catalog:` or `catalog:<name>` specifier takes (`default` for the bare form), else undefined.
+function catalogOf(spec: string | undefined): string | undefined {
+  const name = /^catalog:([\w-]*)$/u.exec(spec ?? "")?.[1];
+
+  return name === undefined ? undefined : name || "default";
+}
+
+// What breaks the peer-range contract for one peer: its shape, its floor against the floors catalog's, the version its
+// package's own dev dependency on it (`devSpec`) takes from the catalogs, against its floor and its top major, and any
+// major between the two: the floors job tests the floor's major and every other job the top's, so the top is the
+// floor's major or the one after it (a catalog bump to a new major widens `^F` to `>=F <N+1.0.0`; a second needs the
+// floor raised).
+function peerRangeFindings(
+  name: string,
+  range: string,
+  devSpec: string | undefined,
+  catalogs: ReadonlyMap<string, ReadonlyMap<string, string>>
+): ReadonlyArray<string> {
+  const parsed = parsePeerRange(range);
+
+  if (parsed === undefined) {
+    return [`${name} ${range}: not ^F or >=F <N.0.0`];
+  }
+
+  const floor = catalogs.get("floors")?.get(name);
+  const catalog = catalogOf(devSpec);
+  const tested = catalog === undefined || catalog === "floors" ? undefined : catalogs.get(catalog)?.get(name);
+  const version = tested === undefined ? undefined : parseVersion(tested);
+  const top = parsed.ceiling - 1;
+  const between = Array.from(
+    { length: Math.max(0, top - parsed.floorVersion[0] - 1) },
+    (_, at) => parsed.floorVersion[0] + 1 + at
+  );
+
+  return [
+    ...(between.length === 0
+      ? []
+      : [`${name} ${range}: spans major ${between.join(", ")}, between the floor's and the top's`]),
+    ...(floor === parsed.floor ? [] : [`${name} ${range}: the floors catalog has ${floor ?? "no entry"}`]),
+    ...(catalog === undefined || catalog === "floors"
+      ? [`${name} ${range}: the package's dev dependency ${devSpec ?? "(none)"} takes no tested catalog`]
+      : []),
+    ...(catalog !== undefined && catalog !== "floors" && version === undefined
+      ? [`${name} ${range}: the ${catalog} catalog tests no exact version (${tested ?? "none"})`]
+      : []),
+    ...(version !== undefined && !atLeast(version, parsed.floorVersion)
+      ? [`${name} ${range}: the catalogs test ${tested ?? ""}, below the floor`]
+      : []),
+    ...(version !== undefined && version[0] !== top
+      ? [`${name} ${range}: the catalogs test ${tested ?? ""}, not the top major ${top}`]
+      : []),
+  ];
+}
+
+// Every dependency entry of the given manifests that takes the floors catalog, which only merge.yml's floors job reads.
+function floorsTakers(
+  manifests: ReadonlyArray<{ readonly dir: string; readonly manifest: Manifest }>
+): ReadonlyArray<string> {
+  return manifests.flatMap(({ dir, manifest }) =>
+    DEPENDENCY_SECTIONS.flatMap((section) =>
+      Object.entries(manifest[section] ?? {})
+        .filter(([, spec]) => catalogOf(spec) === "floors")
+        .map(([name, spec]) => `${dir || "."}/package.json ${section} → ${name}: ${spec}`)
+    )
+  );
+}
+
+// The peers each published package declares, and which an installer may leave out, stated here and not read from the
+// manifests they check: a peer dropped from a manifest, or one whose `optional` flips, changes what every installer
+// gets, and a list built from the manifest would only follow it.
+type StatedPeer = { readonly optional: boolean; readonly why: string };
+const PEERS = new Map<string, Readonly<Record<string, StatedPeer>>>([
+  [
+    "@elmeragroup/intl",
+    {
+      react: {
+        optional: false,
+        why: "/react, /server, /next and /start render with it; only /core and /effect do not",
+      },
+      next: { optional: true, why: "/next and /next/server only" },
+      "@tanstack/react-router": { optional: true, why: "/start only" },
+      effect: { optional: true, why: "/effect only, which no other subpath reaches" },
+    },
+  ],
+  [
+    "@elmeragroup/intl-tools",
+    {
+      next: { optional: true, why: "the /next build plugin only" },
+      vite: { optional: true, why: "the /vite plugins only" },
+      vitest: {
+        optional: true,
+        why: "/vitest's global setup and intlCatalogs()'s cache hook, which Vitest calls",
+      },
+    },
+  ],
+]);
+
+// Where a manifest's declared peers and their optionality (`peerDependenciesMeta[name].optional === true`) differ from
+// the stated ones.
+function peerSetFindings(
+  manifest: Manifest,
+  expected: Readonly<Record<string, { readonly optional: boolean }>>
+): ReadonlyArray<string> {
+  const declared = Object.keys(manifest.peerDependencies ?? {});
+  const optional = (name: string) => manifest.peerDependenciesMeta?.[name]?.optional === true;
+
+  return [
+    ...Object.keys(expected)
+      .filter((name) => !declared.includes(name))
+      .map((name) => `${name}: not declared`),
+    ...declared.filter((name) => !(name in expected)).map((name) => `${name}: declared, not in the list`),
+    ...declared
+      .filter((name) => name in expected && optional(name) !== expected[name]?.optional)
+      .map((name) => `${name}: ${optional(name) ? "optional" : "required"}, the list says the other`),
+  ];
+}
+
+// Unit under test: each published manifest's peerDependencies and peerDependenciesMeta. Oracles: PEERS above for which
+// peers it declares and which are optional; for each range, the peer-range rule CONTRIBUTING.md states: every range is
+// one a run has tested at both ends, its floor by merge.yml's floors job (the `floors` catalog's entry) and its top
+// major by every other job (the catalog the package's dev dependency on the peer takes, which its own tests run on).
+describe("peer ranges", () => {
+  // Both published packages declare peers, so an entry stating none would leave the rows below with nothing to check.
+  it("states the peers of each published package, and of no other", () => {
+    expect([...PEERS.keys()].toSorted()).toEqual(PUBLISHED.map(({ manifest }) => manifest.name).toSorted());
+    expect([...PEERS].filter(([, peers]) => Object.keys(peers).length === 0).map(([pkg]) => pkg)).toEqual([]);
+  });
+
+  it.each(PUBLISHED.map(({ manifest }) => ({ pkg: manifest.name, manifest })))(
+    "$pkg declares the stated peers, optional as stated",
+    ({ pkg, manifest }) => {
+      expect(peerSetFindings(manifest, PEERS.get(pkg) ?? {})).toEqual([]);
+    }
+  );
+
+  it.each(
+    PUBLISHED.flatMap(({ manifest }) =>
+      Object.keys(PEERS.get(manifest.name) ?? {}).map((name) => ({
+        pkg: manifest.name,
+        name,
+        range: manifest.peerDependencies?.[name],
+        devSpec: manifest.devDependencies?.[name],
+      }))
+    )
+  )(
+    "$pkg peers $name $range, floored by the floors catalog and capped at its tested catalog's major",
+    ({ name, range, devSpec }) => {
+      expect(
+        range === undefined ? [`${name}: not declared`] : peerRangeFindings(name, range, devSpec, CATALOGS)
+      ).toEqual([]);
+    }
+  );
+
+  // A package taking the floors catalog would run its normal jobs on the floor, crediting the top with a run it never
+  // had; the floors job swaps the floors into the catalogs the packages take instead.
+  it("lets no manifest take the floors catalog", () => {
+    expect(
+      floorsTakers([
+        { dir: "", manifest: parseManifest("package.json") },
+        ...PACKAGES.map(({ path, manifest }) => ({ dir: path, manifest })),
+      ])
+    ).toEqual([]);
+  });
+
+  // The checks themselves, on manifests and ranges a package could carry: each shape refused, each mismatch named.
+  it("names each range a test has not run at both ends", () => {
+    const catalogs = new Map([
+      ["default", new Map([["next", "16.4.6"]])],
+      ["next17", new Map([["next", "17.1.0"]])],
+      ["next18", new Map([["next", "18.0.0"]])],
+      ["old", new Map([["next", "16.3.0"]])],
+      ["floors", new Map([["next", "16.4.0"]])],
+    ]);
+
+    expect(
+      [
+        ["^16.4.0", "catalog:"],
+        [">=16.4.0 <18.0.0", "catalog:next17"],
+        [">=16.4.0", "catalog:"],
+        ["^16.4.0 || ^17.0.0", "catalog:"],
+        ["^16.4.1", "catalog:"],
+        ["^16.4.0", "catalog:next17"],
+        [">=16.4.0 <18.0.0", "catalog:"],
+        [">=16.4.0 <19.0.0", "catalog:next18"],
+        ["^16.4.0", "catalog:old"],
+        ["^16.4.0", "catalog:floors"],
+        ["^16.4.0", undefined],
+        ["^16.4.0", "16.4.6"],
+      ].flatMap(([range = "", devSpec]) => peerRangeFindings("next", range, devSpec, catalogs))
+    ).toEqual([
+      "next >=16.4.0: not ^F or >=F <N.0.0",
+      "next ^16.4.0 || ^17.0.0: not ^F or >=F <N.0.0",
+      "next ^16.4.1: the floors catalog has 16.4.0",
+      "next ^16.4.0: the catalogs test 17.1.0, not the top major 16",
+      "next >=16.4.0 <18.0.0: the catalogs test 16.4.6, not the top major 17",
+      "next >=16.4.0 <19.0.0: spans major 17, between the floor's and the top's",
+      "next ^16.4.0: the catalogs test 16.3.0, below the floor",
+      "next ^16.4.0: the package's dev dependency catalog:floors takes no tested catalog",
+      "next ^16.4.0: the package's dev dependency (none) takes no tested catalog",
+      "next ^16.4.0: the package's dev dependency 16.4.6 takes no tested catalog",
+    ]);
+    expect(
+      floorsTakers([
+        {
+          dir: "packages/fixture",
+          manifest: {
+            name: "@elmeragroup/fixture",
+            devDependencies: { next: "catalog:floors", vite: "catalog:" },
+            peerDependencies: { react: "catalog:floors" },
+          },
+        },
+      ])
+    ).toEqual([
+      "packages/fixture/package.json devDependencies → next: catalog:floors",
+      "packages/fixture/package.json peerDependencies → react: catalog:floors",
+    ]);
+  });
+
+  it("names each peer missing from a manifest, missing from the list, or optional otherwise than listed", () => {
+    expect(
+      peerSetFindings(
+        {
+          name: "@elmeragroup/fixture",
+          peerDependencies: { next: "^16.4.0", react: "^19.0.0", vite: "^8.2.0", vitest: "^5.0.0" },
+          peerDependenciesMeta: { react: { optional: true }, vite: { optional: false } },
+        },
+        {
+          effect: { optional: true },
+          next: { optional: false },
+          react: { optional: false },
+          vite: { optional: true },
+        }
+      )
+    ).toEqual([
+      "effect: not declared",
+      "vitest: declared, not in the list",
+      "react: optional, the list says the other",
+      "vite: required, the list says the other",
+    ]);
   });
 });
 
@@ -443,7 +727,7 @@ describe("Effect diagnostics", () => {
   // effect-tsgo falls back silently to its newest packaged tsrs when the installed one is not supported, so the gate
   // names its tsrs, and that is the catalog's.
   it("lints with the catalog's tsrs", () => {
-    const tsrs = catalogEntries(read("pnpm-workspace.yaml")).find(({ name }) => name === "tsrs")?.version;
+    const tsrs = CATALOG_ENTRIES.find(({ name }) => name === "tsrs")?.version;
     const script = parseManifest("package.json").scripts?.["lint:effect"];
 
     expect(script).toContain(`--tsrs-lint=${String(tsrs)} `);

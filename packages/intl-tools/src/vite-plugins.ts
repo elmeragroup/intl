@@ -262,9 +262,9 @@ async function check(
     : { ok: false, output: `${NAME} check failed:\n${output}`, sources };
 }
 
-// An environment's resolved build options, as far as its output directories go, on every Vite the peer range admits:
-// Vite 8 resolves `rolldownOptions` (its `rollupOptions` a deprecated accessor of the same object), Vite 6 and 7 only
-// `rollupOptions`. Only Rolldown takes a `cwd`.
+// An environment's resolved build options, as far as its output directories go: Vite 8 resolves `rolldownOptions` (its
+// `rollupOptions` a deprecated accessor of the same object), Vite 6 and 7 only `rollupOptions`. Vite 6 and 7 are outside
+// the peer range (`^8.2.0`); their shape is kept for widening it back (#96). Only Rolldown takes a `cwd`.
 type OutputBuild = {
   readonly outDir: string;
   readonly rolldownOptions?: OutputBundler & { readonly cwd?: string | undefined };
@@ -388,11 +388,7 @@ export function intlCatalogs(options: IntlPluginOptions = {}): Plugin {
     // changes. So each catalog opts out (`false`), and compiles again whenever Vite's transform misses, as without a
     // cache; every other module keeps the cache (`undefined`). Typed here, so the declarations need no vitest.
     configureVitest(context: VitestCacheKeys) {
-      if (context.defineCacheKeyGenerator === undefined) {
-        context.experimental_defineCacheKeyGenerator?.(catalogCacheKey);
-      } else {
-        context.defineCacheKeyGenerator(catalogCacheKey);
-      }
+      context.defineCacheKeyGenerator?.(catalogCacheKey);
     },
   } satisfies Plugin & { readonly configureVitest: (context: VitestCacheKeys) => void };
 }
@@ -405,12 +401,11 @@ const catalogCacheKey: CacheKeyGenerator = ({ id }) =>
 // `undefined` to leave the key as it is (Vitest's `CacheKeyIdGenerator`, narrowed to what this plugin returns).
 type CacheKeyGenerator = (context: { readonly id: string }) => false | undefined;
 
-// The part of Vitest's `configureVitest` context that registers one (`VitestPluginContext`). Vitest 5 names it
-// `defineCacheKeyGenerator` and keeps Vitest 4's `experimental_defineCacheKeyGenerator` as a deprecated alias of it;
-// Vitest 3 has neither, and no such cache.
+// The part of Vitest's `configureVitest` context that registers one (`VitestPluginContext`), as Vitest 5, the optional
+// peer's range, names it. Vitest 3 and 4 call the hook without it; there the plugin registers nothing rather than
+// failing the run.
 type VitestCacheKeys = {
   readonly defineCacheKeyGenerator?: (generator: CacheKeyGenerator) => void;
-  readonly experimental_defineCacheKeyGenerator?: (generator: CacheKeyGenerator) => void;
 };
 
 function isCatalog(file: string): boolean {

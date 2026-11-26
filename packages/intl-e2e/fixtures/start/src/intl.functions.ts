@@ -23,7 +23,6 @@ export const getIntlConfig = createServerFn({ method: "GET" }).handler(() =>
   )
 );
 
-// A plain server function called from the browser.
-export const ping = createServerFn({ method: "POST" })
-  .validator((name: string) => name)
-  .handler(({ data }) => `pong ${data}`);
+// A plain server function called from the browser. It takes no input: its validator method is `.validator` on the
+// catalog's @tanstack/react-start and `.inputValidator` on the floors catalog's, so one source runs on both.
+export const ping = createServerFn({ method: "POST" }).handler(() => "pong kari");

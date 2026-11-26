@@ -4,6 +4,10 @@ Source-keyed i18n for React. Code is written in English, as hooks or JSX; a mess
 
 Extraction, PO catalogs, the catalog compiler and its loaders, the `elmera-intl` CLI, lint and the Vitest catalog check live in [`@elmeragroup/intl-tools`](../intl-tools/README.md): its deny-by-default extractor writes the POs, the host compiles a `*.po` import into a catalog, and `check` proves them in sync and compilable. Apps depend on this package and take the tools as a devDependency.
 
+## Peer dependencies
+
+`react` `^19.0.0`, and for each host adapter its framework, an optional peer: `next` `^16.4.0` for `/next` and `/next/server`, `@tanstack/react-router` `^1.170.0` for `/start`, and `effect` `^4.1.3` for `/effect`. With `/start`, keep `@tanstack/react-start` and the router it pins aligned, since each react-start release depends on one exact router version; the tested floor pair is react-start 1.168.0 with router 1.170.0. CI tests each range at its floor and at the version of its top major the workspace pins ([CONTRIBUTING.md, Peer ranges](../../CONTRIBUTING.md#peer-ranges)). An installed optional peer outside its range is a peer conflict, which npm can refuse (`ERESOLVE`, for example when the app pins that version itself), and pnpm reports as a warning, or as an error with `strictPeerDependencies`.
+
 ## Setup
 
 Three touches per app:
