@@ -69,7 +69,9 @@ export function watchProject(
   let closing = false;
   // The follow writes its ready line once, after the first watch's first result. A host has no ready line, but when the
   // start had already settled on the config's problem (an invalid or missing config, fixed since), that first result
-  // is a restart's to the host: the catalogs it compiles from now exist, so it is reported as `Restarted`.
+  // is a restart's to the host, so it is reported as `Restarted`: it follows the restarted watch's first sync's result,
+  // which can be a failure or a superseded sync. A later sync that reports what it wrote reports `Written`; one that
+  // writes some POs and then fails reports `Failed`.
   const output: WatchOutput<never> = {
     report: (result) =>
       Effect.sync(() => {
