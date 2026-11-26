@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { Catalog, Descriptor } from "@elmeragroup/intl/core";
-import { createIntl, keyOf, msg } from "@elmeragroup/intl/core";
+import { createIntl, keyOf, msg, serialize } from "@elmeragroup/intl/core";
 import { hashKey } from "@elmeragroup/intl/internal/message";
 import { IntlProvider, Plural, Select, T, Val, useT } from "@elmeragroup/intl/react";
 
@@ -451,6 +451,46 @@ describe("plain arguments take text", () => {
     // @ts-expect-error the selected branch's name is missing on purpose
     expect(() => enIntl.t("{gender, select, female {She} other {{name}}}", { gender: "other" })).toThrow(
       '"name"'
+    );
+  });
+});
+
+// Unit under test: `serialize` (`/core`), the key every plural message is looked up by. Oracle: the key written out
+// here: exact forms first in numeric order (=2 before =12), then the CLDR categories alphabetically, whatever the
+// props' order, as compiled catalogs were keyed before this ran on an ES2022 engine (#41).
+describe("the serializer on an ES2022 engine", () => {
+  it("keys a plural without Array.prototype.toSorted (ES2023)", () => {
+    const nodes = [
+      { kind: "text", text: "You have " },
+      {
+        kind: "plural",
+        name: "count",
+        forms: {
+          other: "# orders",
+          _12: "a dozen orders",
+          one: "# order",
+          zero: "none",
+          _2: "a pair",
+          few: "# few",
+        },
+      },
+    ] as const;
+    const toSorted = Object.getOwnPropertyDescriptor(Array.prototype, "toSorted");
+    let key: string;
+    try {
+      // An ES2022 engine's Array.prototype, only around the call under test: the runner may use `toSorted`.
+      Reflect.deleteProperty(Array.prototype, "toSorted");
+      expect("toSorted" in Array.prototype, "Array.prototype.toSorted is gone").toBe(false);
+      key = serialize(nodes);
+    } finally {
+      if (toSorted !== undefined) {
+        // oxlint-disable-next-line no-extend-native -- puts back the engine's own `toSorted`, by its saved descriptor
+        Object.defineProperty(Array.prototype, "toSorted", toSorted);
+      }
+    }
+
+    expect(key).toBe(
+      "You have {count, plural, =2 {a pair} =12 {a dozen orders} few {# few} one {# order} other {# orders} zero {none}}"
     );
   });
 });
