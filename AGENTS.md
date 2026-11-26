@@ -2,7 +2,7 @@
 
 This pnpm workspace holds `@elmeragroup/intl`, a source-keyed i18n runtime for React, and
 `@elmeragroup/intl-tools`, its build-time tools, with example apps in `apps/`: one per host, and one for
-`/effect` on its own. Read the root [README](README.md),
+`/effect` on its own, beside the docs site. Read the root [README](README.md),
 [CONTEXT.md](CONTEXT.md) for the domain language, and the affected package's README before changing
 behavior.
 
@@ -24,6 +24,10 @@ behavior.
 - `apps/effect-example` is the example app for `/effect` on its own: an Effect 4 HTTP API on Node, with
   no React and no bundler, in the same four languages, with HTTP tests against its process and Vitest
   unit tests. The example apps are private and never published; nothing depends on or imports an app.
+- `apps/docs` is the documentation site: Next.js App Router on Fuse, docs pages as MDX routes listed in
+  `src/lib/pages.ts`, Open Graph images on `DOCS_ORIGIN`, served as a standalone container (its `Dockerfile`)
+  and deployed per PR to Azure Container Apps by `.github/workflows/preview.yml`. English only; it uses
+  neither package yet. Private, with Playwright specs against its standalone build and Vitest unit tests.
 - `tooling/typescript` contains the shared TypeScript configuration.
 - `tooling/lint` holds this workspace's own contracts as lint: the `elmera-workspace` oxlint plugin
   and the manifest test for what lives in JSON and YAML. Private.
@@ -33,7 +37,7 @@ behavior.
 
 Keep the dependency direction `intl-e2e` → `intl-tools` → `intl`
 (`elmera-workspace/import-boundaries`). The example apps consume `intl` and `intl-tools` from the
-workspace as any app does, and are leaves: no package declares one (the manifest test), and no file
+workspace as any app does, and they and the docs site are leaves: no package declares one (the manifest test), and no file
 outside an app imports one (`elmera-workspace/import-boundaries`). The tools reach the runtime's serializer, catalog codec and
 formatter through its `/internal/*` subpaths, and the Next build plugin aliases `/internal/request-module`, which
 `/server` reaches only through `/internal/request-config`'s `react-server` condition, to the app's request module. Both published packages are self-contained: they import
@@ -63,13 +67,13 @@ Run commands from the repository root unless stated otherwise.
 ```sh
 pnpm install --frozen-lockfile
 pnpm ci:checks     # format, lint, type-check and every package's tests (CI's checks job)
-pnpm test:e2e      # fixture apps on linked, then packed, packages, and the example apps (CI's e2e job)
+pnpm test:e2e      # fixture apps on linked, then packed, packages, the example apps and the docs (CI's e2e job)
 ```
 
 While iterating:
 
 ```sh
-pnpm dev                                    # rebuild packages on change (turbo watch); serve the example apps
+pnpm dev                                    # rebuild packages on change (turbo watch); serve the apps
 pnpm tcw                                    # type-check in watch mode
 pnpm --filter @elmeragroup/intl test        # one package's tests in watch mode
 pnpm turbo run test:run --filter=@elmeragroup/intl -- conformance   # one package, one file filter
@@ -168,7 +172,7 @@ the browser-facing runtime ships no ICU parser, and G7 proves it.
 The workspace grows by package, not by folders inside one. A new workspace package:
 
 1. Lives in `packages/<name>` (a library or test harness), `tooling/<name>` (workspace tooling) or
-   `apps/<name>` (a private example app, which nothing depends on), with a kebab-case directory and
+   `apps/<name>` (a private app, an example or the docs site, which nothing depends on), with a kebab-case directory and
    an `@elmeragroup/<name>` name.
 2. Extends a preset from `tooling/typescript` (`base.json`, `react-library.json`, `nextjs.json`,
    `internal-package.json`) and declares `tsrs` and `typescript` as `catalog:` dev dependencies.

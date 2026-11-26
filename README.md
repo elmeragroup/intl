@@ -14,6 +14,7 @@ parser formats the compiled catalogs per locale.
 | [`apps/next-example`](apps/next-example)         | Private. Example: both packages in a Next.js App Router app on Fuse, in four languages, with Playwright specs and Vitest tests.   |
 | [`apps/start-example`](apps/start-example)       | Private. Example: both packages in a TanStack Start app on Fuse, in four languages, with Playwright specs and Vitest tests.       |
 | [`apps/effect-example`](apps/effect-example)     | Private. Example: `@elmeragroup/intl/effect` in an Effect 4 HTTP API on Node, in four languages, with HTTP and Vitest tests.      |
+| [`apps/docs`](apps/docs)                         | Private. The documentation site: a Next.js App Router app on Fuse, its pages in MDX, previewed per PR on Azure Container Apps.    |
 | `tooling/typescript`                             | Private. Shared TypeScript configuration.                                                                                         |
 | `tooling/lint`                                   | Private. The workspace's own contracts as lint: the `elmera-workspace` oxlint plugin and manifest checks.                         |
 
@@ -46,9 +47,9 @@ Requires macOS or glibc-based Linux (the Effect lint pass does not run on musl).
 
 ```sh
 pnpm install
-pnpm dev           # rebuild packages on change; serve the example apps (ports 3030, 3031, 3032)
+pnpm dev           # rebuild packages on change; serve the example apps (ports 3030, 3031, 3032) and the docs (3033)
 pnpm ci:checks     # format, lint, type-check and tests
-pnpm test:e2e      # fixture apps on linked, then packed, packages, and the example apps
+pnpm test:e2e      # fixture apps on linked, then packed, packages, the example apps and the docs site
 ```
 
 See [AGENTS.md](AGENTS.md#setup-and-checks) for the full list of commands, and read

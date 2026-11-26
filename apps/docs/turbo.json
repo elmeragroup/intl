@@ -1,0 +1,12 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Strict env mode hides undeclared variables from the build. The origin, or the PORT its localhost fallback names,
+    // is baked into every prerendered og:image URL (src/lib/site-origin.ts), so both reach the build and key its cache.
+    // The container image builds through this task (Dockerfile).
+    "build": {
+      "env": ["DOCS_ORIGIN", "PORT"]
+    }
+  }
+}

@@ -70,7 +70,7 @@ const DEPENDENCY_SECTIONS = [
   "optionalDependencies",
 ] as const;
 
-// Every entry in the given manifests that links an example app: by its key, by the package its specifier aliases
+// Every entry in the given manifests that links an app: by its key, by the package its specifier aliases
 // (`workspace:<name>@<range>`, `npm:<name>@<range>`), or by the directory its specifier points at (`link:` or `file:`
 // and a path, or `workspace:` and a relative one). Each section is read on its own: a key may appear in several, and
 // one section's entry must not hide another's.
@@ -157,11 +157,12 @@ describe("workspace packages", () => {
   });
 });
 
-// The example apps (AGENTS.md, Package responsibilities): leaves of the dependency graph that consume the packages as an
-// app does, and never publish.
-describe("example apps", () => {
-  it("finds the example apps", () => {
+// The apps (AGENTS.md, Package responsibilities), the examples and the docs site: leaves of the dependency graph that
+// consume the packages as an app does, and never publish.
+describe("apps", () => {
+  it("finds the apps", () => {
     expect(APPS.map(({ path }) => path).toSorted()).toEqual([
+      "apps/docs",
       "apps/effect-example",
       "apps/next-example",
       "apps/start-example",
@@ -169,7 +170,7 @@ describe("example apps", () => {
   });
 
   // Every manifest that can declare a dependency: each workspace package's and the root's.
-  it("depends on no example app", () => {
+  it("depends on no app", () => {
     const manifests = [
       { dir: "", manifest: parseManifest("package.json") },
       ...PACKAGES.map(({ path, manifest }) => ({ dir: path, manifest })),
@@ -191,8 +192,8 @@ describe("example apps", () => {
     ]);
   });
 
-  // "Ours" is a package this workspace holds; another @elmeragroup package (Fuse, the design system the Next example
-  // is built on) comes from npm through the catalog, as any other dependency does.
+  // "Ours" is a package this workspace holds; another @elmeragroup package (Fuse, the design system the apps are built
+  // on) comes from npm through the catalog, as any other dependency does.
   const WORKSPACE_NAMES = new Set(PACKAGES.map(({ manifest }) => manifest.name));
 
   it.each(APPS)(
@@ -299,6 +300,16 @@ describe("toolchain pins", () => {
   it("pins one Node version in .node-version and devEngines", () => {
     expect(parseManifest("package.json").devEngines?.runtime?.version).toBe(read(".node-version").trim());
   });
+
+  // The docs images run on the base image their NODE_VERSION names, which nothing else reads.
+  it.each(["apps/docs/Dockerfile", "apps/docs/placeholder/Dockerfile"])(
+    "builds %s on the same Node",
+    (path) => {
+      const versions = [...read(path).matchAll(/^ARG NODE_VERSION=(\S+)$/gmu)].map((match) => match[1]);
+
+      expect(versions).toEqual([read(".node-version").trim()]);
+    }
+  );
 });
 
 describe(".oxlintrc.json", () => {

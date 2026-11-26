@@ -1,0 +1,9 @@
+import { DocsPageTitle } from "../../../components/docs-page-title";
+import { docsPageMetadata } from "../../../lib/og-metadata";
+import { requireDocsPage } from "../../../lib/pages";
+
+export const page = requireDocsPage("/docs");
+
+export const metadata = docsPageMetadata(page);
+
+<DocsPageTitle>{page.title}</DocsPageTitle>

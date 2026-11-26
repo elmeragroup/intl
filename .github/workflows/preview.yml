@@ -1,0 +1,288 @@
+name: Preview
+
+# Each pull request gets one live revision of the docs site (apps/docs) on the preview Container App, labelled
+# `pr-<n>`, so its URL (`<app>---pr-<n>.<environment domain>`) stays the same across pushes. A push replaces the
+# revision; closing the PR, merged or not, deactivates it. Preview URLs resolve only on the VPN. The app's base hostname
+# serves a placeholder that answers 404 (apps/docs/placeholder), never a PR's code. Production is not set up.
+#
+# A PR that leaves the docs site unchanged can carry the `no-preview` label; its pushes then deploy nothing. A revision
+# deployed before the label stays live until the PR closes.
+#
+# This must stay `pull_request`, never `pull_request_target`: the repo is public, and `pull_request_target` would hand
+# the preview identity to code from any fork. Fork PRs get no OIDC token under `pull_request`, so they are skipped
+# with a note instead, and every job that reaches Azure runs only for a PR from this repository. The preview
+# identity's federated credential trusts only `pull_request` runs, so no scheduled job could clean up either.
+#
+# A preview is the PR's head commit (`pull_request.head.sha`), not the test merge commit `github.sha` names: GitHub
+# computes that merge lazily and moves it when the base branch moves, so it cannot say whether a run is still current.
+# Every job checks out the head commit, the image is built and tagged from it, and the live gate
+# (.github/scripts/docs-preview-gate.sh) compares it with the PR's head as GitHub reports it now.
+#
+# Every PR shares the one app, and each label or traffic change rewrites its whole traffic list, so the jobs that change
+# it (deploy and teardown) run one at a time across all PRs: one concurrency group with `queue: max`, which keeps every
+# waiting run in order (up to 100) instead of cancelling all but the newest, so no teardown is dropped. Image builds run
+# in parallel outside it, one group per PR and commit, so a rerun of an old commit never cancels a newer build. A queued
+# run can wait while the PR moves on, and a rerun replays its original event, so the live gate runs before the build and
+# again inside the serialized section, right before the PR's label moves or its preview is removed.
+#
+# GitHub runs no pull_request workflow for a PR with merge conflicts, so a PR that closes conflicted gets no teardown.
+# Every deploy and teardown therefore ends with one reconcile (docs-container-app.sh): labels of PRs GitHub reports
+# closed are removed, and every active revision no label points at is deactivated.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions: {}
+
+env:
+  APP: ${{ vars.PREVIEW_CONTAINER_APP }}
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_PREVIEW }}
+  PR: ${{ github.event.pull_request.number }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  # Marks the one preview comment this workflow creates and then edits in place, with the author it is posted as.
+  COMMENT_MARKER: "<!-- intl-docs-preview -->"
+  COMMENT_AUTHOR: github-actions[bot]
+
+jobs:
+  fork:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain the skipped preview
+        run: |
+          {
+            echo "### No preview for fork pull requests"
+            echo "Forks receive no Azure OIDC token under \`pull_request\`, so this PR cannot deploy a preview."
+            echo "A maintainer can push the branch to $GITHUB_REPOSITORY to get one."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Builds and pushes the PR's image, and the placeholder when the app has no bootstrap revision. Nothing here changes
+  # the app.
+  build:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.AZURE_CLIENT_ID_PREVIEW != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: intl-docs-preview-build-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    outputs:
+      act: ${{ steps.gate.outputs.act }}
+      image: ${{ steps.image.outputs.image }}
+      bootstrap-image: ${{ steps.bootstrap.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Read the PR as it is now
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/docs-preview-gate.sh deploy
+
+      - name: Azure login
+        if: steps.gate.outputs.act == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_PREVIEW }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID_PREVIEW }}
+
+      # The build bakes the preview's label URL into its og:image URLs, so read it first. A bare assignment keeps a
+      # failed lookup fatal; inside `echo` its status would be lost.
+      - name: Preview origin
+        id: origin
+        if: steps.gate.outputs.act == 'true'
+        env:
+          ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APPS_ENVIRONMENT_PREVIEW }}
+        run: |
+          origin="$(bash .github/scripts/docs-container-app.sh origin-preview)"
+          echo "origin=$origin" >> "$GITHUB_OUTPUT"
+
+      - name: Probe the bootstrap revision
+        id: probe
+        if: steps.gate.outputs.act == 'true'
+        run: |
+          probe="$(bash .github/scripts/docs-container-app.sh probe)"
+          echo "$probe" >> "$GITHUB_OUTPUT"
+
+      # The tag names the run as well as the commit, so a rerun's image is told apart from the first's; the deploy
+      # names the digest.
+      - name: Push image
+        id: image
+        if: steps.gate.outputs.act == 'true'
+        uses: ./.github/actions/push-docs-image
+        with:
+          registry: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
+          tag: ${{ format('{0}-{1}-{2}', github.event.pull_request.head.sha, github.run_id, github.run_attempt) }}
+          context: .
+          file: apps/docs/Dockerfile
+          build-args: |
+            DOCS_ORIGIN=${{ steps.origin.outputs.origin }}
+          cache-scope: intl-docs
+
+      # The deploy creates the bootstrap revision from the placeholder. The environment pulls only from the preview
+      # registry, so the placeholder lives there too.
+      - name: Push placeholder
+        id: bootstrap
+        if: steps.gate.outputs.act == 'true' && steps.probe.outputs.bootstrap == 'missing'
+        uses: ./.github/actions/push-docs-image
+        with:
+          registry: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
+          tag: ${{ format('bootstrap-{0}-{1}-{2}', github.event.pull_request.head.sha, github.run_id, github.run_attempt) }}
+          context: apps/docs/placeholder
+          file: apps/docs/placeholder/Dockerfile
+          cache-scope: intl-docs-placeholder
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.act == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: intl-docs-preview-azure
+      queue: max
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # Its turn may come long after the build: a run the PR has moved past stops here, before logging in.
+      - name: Read the PR as it is now
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/docs-preview-gate.sh deploy
+
+      - name: Azure login
+        if: steps.gate.outputs.act == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_PREVIEW }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID_PREVIEW }}
+
+      # The runner is not on the VPN, so it cannot request the preview: the script waits until Azure reports the new
+      # revision ready, reads the PR again, and only then moves the PR's label to it. It reports `url` only when it did.
+      - name: Deploy revision
+        id: deploy
+        if: steps.gate.outputs.act == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          BOOTSTRAP_IMAGE: ${{ needs.build.outputs.bootstrap-image }}
+          ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APPS_ENVIRONMENT_PREVIEW }}
+          REGISTRY: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
+          MANAGED_IDENTITY_ID: ${{ vars.AZURE_MANAGED_IDENTITY_ID_PREVIEW }}
+          # Run ID also changes on reopen, even if the head is unchanged.
+          SUFFIX: ${{ format('pr-{0}-{1}-{2}', github.event.pull_request.number, github.run_id, github.run_attempt) }}
+        run: bash .github/scripts/docs-container-app.sh deploy
+
+      - name: Comment preview URL
+        if: steps.deploy.outputs.url != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          REVISION: ${{ steps.deploy.outputs.revision }}
+        with:
+          script: |
+            const { URL, REVISION, HEAD_SHA, COMMENT_MARKER, COMMENT_AUTHOR } = process.env;
+            const body = [
+              COMMENT_MARKER,
+              `**Docs preview:** ${URL} (VPN only)`,
+              "",
+              `Built from ${HEAD_SHA.slice(0, 7)} as revision \`${REVISION}\`. The revision is removed when this PR closes.`,
+            ].join("\n");
+            const issue = { ...context.repo, issue_number: context.issue.number };
+            const comments = await github.paginate(github.rest.issues.listComments, issue);
+            const existing = comments.find(
+              (comment) => comment.user?.login === COMMENT_AUTHOR && comment.body?.startsWith(COMMENT_MARKER)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...issue, body });
+            }
+
+  teardown:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.AZURE_CLIENT_ID_PREVIEW != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: intl-docs-preview-azure
+      queue: max
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Read the PR as it is now
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/docs-preview-gate.sh teardown
+
+      - name: Azure login
+        if: steps.gate.outputs.act == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_PREVIEW }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID_PREVIEW }}
+
+      # Reports `outcome`: removed, nothing (no preview was live), or skipped (the PR reopened before the removal).
+      - name: Remove the preview
+        id: teardown
+        if: steps.gate.outputs.act == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/docs-container-app.sh teardown
+
+      - name: Update the preview comment
+        if: steps.teardown.outputs.outcome == 'removed' || steps.teardown.outputs.outcome == 'nothing'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          OUTCOME: ${{ steps.teardown.outputs.outcome }}
+        with:
+          script: |
+            const { COMMENT_MARKER, COMMENT_AUTHOR, OUTCOME } = process.env;
+            const issue = { ...context.repo, issue_number: context.issue.number };
+            const comments = await github.paginate(github.rest.issues.listComments, issue);
+            const existing = comments.find(
+              (comment) => comment.user?.login === COMMENT_AUTHOR && comment.body?.startsWith(COMMENT_MARKER)
+            );
+            if (existing) {
+              const status =
+                OUTCOME === "removed" ? "removed when this PR closed." : "none is running for this closed PR.";
+              await github.rest.issues.updateComment({
+                ...context.repo,
+                comment_id: existing.id,
+                body: `${COMMENT_MARKER}\n**Docs preview:** ${status}`,
+              });
+            }

@@ -1,7 +1,8 @@
 packages:
   - packages/*
   - tooling/*
-  # Example apps: private, never published, and nothing depends on one (tooling/lint holds both).
+  # Apps (the examples and the docs site): private, never published, and nothing depends on one (tooling/lint holds
+  # both).
   - apps/*
 
 # Every version is exact: a range could resolve a release younger than minimumReleaseAge, and the
@@ -54,7 +55,8 @@ catalog:
   # watch tests drive its debounce and poll on the test clock.
   "@effect/vitest": 4.1.3
 
-  # Host frameworks: the adapters' peers, and the e2e fixture apps that run on them.
+  # Host frameworks: the adapters' peers, and the e2e fixture apps that run on them. @next/mdx and @mdx-js/loader also
+  # compile the docs site's MDX pages.
   "@mdx-js/loader": 3.1.1
   # Keep in lockstep with next.
   "@next/mdx": 16.4.6
@@ -67,7 +69,7 @@ catalog:
   rolldown: 1.2.13
   vite: 8.3.4
 
-  # The example apps' UI: Elmera's Fuse design system and its app-shell block, at the versions Fuse's own docs app
+  # The example apps' and the docs site's UI: Elmera's Fuse design system and its app-shell block, at the versions Fuse's own docs app
   # (commit 9be80460) builds the block with. Fuse's data tables take @tanstack/react-table as a peer; tailwindcss and
   # @tailwindcss/postcss build its stylesheet through Next's PostCSS, @tailwindcss/vite through the Start example's Vite.
   # Bump the three Tailwind entries together.
@@ -79,6 +81,10 @@ catalog:
   # The host examples' boundary parser: each parses the settings a client posts with one schema. The version the
   # lockfile already held (TanStack Start's), so one copy installs.
   zod: 4.6.7
+  # The docs site's face, Latin files self-hosted: next/font/local loads its WOFF2s into the pages and the Open Graph
+  # images read its WOFFs, so neither a build nor a request fetches a font. SIL OFL 1.1, its license shipped beside the
+  # files.
+  "@fontsource/inter": 5.3.0
   # The Effect example's Node listener: Node's request as a Fetch Request (its abort signal included) for effect's
   # HttpEffect.toWebHandler. The version the lockfile already held (h3's and nitro's), so one copy installs.
   srvx: 1.0.8

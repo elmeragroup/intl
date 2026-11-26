@@ -1,0 +1,8 @@
+{
+  "extends": "@elmeragroup/typescript-config/nextjs.json",
+  "compilerOptions": {
+    "verbatimModuleSyntax": true
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", ".next"]
+}
