@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { realPath } from "./project-catalogs";
+import { catalogPath, realPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { TurbopackRoot, TurbopackRoots } from "./turbopack-roots";
@@ -396,37 +396,61 @@ function additionalRoots(
 // Catalogs written inside the root through a link out of it keep the pattern as written, unrefused: Turbopack refuses
 // that import itself (`the symlink target leaves the configured filesystem roots`), and a webpack loader cannot run in
 // an additional root, so a refusal here would add nothing.
+// The pattern is resolved before a locale is substituted into it, so a link at or below `{locale}` (`locales/nb ->
+// translations/nb-NO`) is not in it: each configured locale whose catalog's real path the pattern misses gets its own
+// exact path beside it (replayed on Next 16.4.6 for #74, alternatives in one regex included). Per locale only the real
+// path counts, as Turbopack matches none through a link. With the pattern in the root by the two steps above, a locale
+// whose catalog lies outside it gets no path and is left to Turbopack, however the config's path is spelled (a
+// directory alias also puts a linked-out locale's written path outside the root); so is a catalog file in the root that
+// links to one outside it, which Turbopack refuses (`Can't resolve`, replayed for #74). With the pattern outside the
+// root, the catalogs are accepted when every locale's real path lies in it, as when each locale's directory links in:
+// Turbopack loads them where an import names them inside the root. A file several locales' catalogs link to is matched
+// too: unless one locale names it as written, the loader refuses it by name as the catalog of none
+// (project-catalogs.ts), where Turbopack's `Unknown module type` names no cause.
 function catalogRule(config: ProjectConfig, { root, setting }: TurbopackRoot): RegExp {
-  const catalogs = resolve(config.root, config.catalogs);
-  const real = realPath(catalogs);
   const realRoot = canonical(root) ?? root;
+  const catalogs = resolve(config.root, config.catalogs);
+  const template =
+    realBelow(catalogs, realRoot) ??
+    (isBelow(root, catalogs) ? slashed(relative(root, catalogs)) : undefined);
+  const pattern = template === undefined ? undefined : catalogPathPattern(template);
+  const matcher = pattern === undefined ? undefined : new RegExp(`^${pattern}$`, "u");
+  const exact = config.locales.flatMap((locale) => {
+    const below = realBelow(resolve(catalogPath(config, locale)), realRoot);
 
-  if (isBelow(realRoot, real)) {
-    return catalogPathPattern(relative(realRoot, real));
-  }
+    if (below === undefined && matcher === undefined) {
+      throw new Error(
+        `withIntl: the catalogs ${config.catalogs} are outside the Turbopack root ${root}, which resolves no file outside it; set ${setting} to a directory that holds both the app and the catalogs`
+      );
+    }
 
-  if (!isBelow(root, catalogs)) {
-    throw new Error(
-      `withIntl: the catalogs ${config.catalogs} are outside the Turbopack root ${root}, which resolves no file outside it; set ${setting} to a directory that holds both the app and the catalogs`
-    );
-  }
+    return below === undefined || matcher?.test(below) === true ? [] : [escape(below)];
+  });
+  const alternatives = [...(pattern === undefined ? [] : [pattern]), ...new Set(exact)];
 
-  return catalogPathPattern(relative(root, catalogs));
+  // oxlint-disable-next-line require-unicode-regexp -- Turbopack evaluates this pattern's source in its own engine, not as a JS RegExp, so a JS flag is not part of what it reads
+  return new RegExp(alternatives.length === 1 ? `^${alternatives[0]}$` : `^(?:${alternatives.join("|")})$`);
 }
 
-// The catalogs pattern as a RegExp over the path Turbopack matches: the catalog's path relative to its root, with
-// `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not RegExp.escape's hex
-// escapes): Turbopack evaluates the pattern in its own engine.
-function catalogPathPattern(below: string): RegExp {
-  const pattern = below
-    .split(sep)
-    .join("/")
+// A path's real path below the real root, as Turbopack matches it, or none when it lies outside the root.
+function realBelow(path: string, realRoot: string): string | undefined {
+  const real = realPath(path);
+
+  return isBelow(realRoot, real) ? slashed(relative(realRoot, real)) : undefined;
+}
+
+function slashed(path: string): string {
+  return path.split(sep).join("/");
+}
+
+// The catalogs pattern as a regex source over the path Turbopack matches: the catalog's path relative to its root,
+// with `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not RegExp.escape's
+// hex escapes): Turbopack evaluates the pattern in its own engine.
+function catalogPathPattern(below: string): string {
+  return below
     .split("{locale}")
     .map((part) => escape(part))
     .join("[^/]+");
-
-  // oxlint-disable-next-line require-unicode-regexp -- Turbopack evaluates this pattern's source in its own engine, not as a JS RegExp, so a JS flag is not part of what it reads
-  return new RegExp(`^${pattern}$`);
 }
 
 function escape(text: string): string {

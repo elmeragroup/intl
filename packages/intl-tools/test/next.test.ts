@@ -188,6 +188,145 @@ it("accepts catalogs written inside the root through a link out of it", () => {
   expect(poRulePaths(withIntl({}, { dir: join(workspace, "apps/web") })(BUILD))).toHaveLength(2);
 });
 
+// Writes the intl config for several locales, makes each directory (relative to the sandbox) and each link to one.
+function linkLocales(
+  catalogs: string,
+  locales: ReadonlyArray<string>,
+  directories: ReadonlyArray<string>,
+  links: ReadonlyArray<{ readonly from: string; readonly to: string }>
+): void {
+  installNext(".");
+  writeFileSync(
+    join(workspace, "apps/web/elmera-intl.json"),
+    JSON.stringify({ include: ["app/**/*.tsx"], catalogs, locales })
+  );
+  for (const directory of [...directories, ...links.map((link) => link.to)]) {
+    mkdirSync(join(sandbox, directory), { recursive: true });
+  }
+  for (const link of links) {
+    mkdirSync(dirname(join(sandbox, link.from)), { recursive: true });
+    symlinkSync(join(sandbox, link.to), join(sandbox, link.from), "dir");
+  }
+}
+
+// Unit under test: the Turbopack rule's path condition, for catalogs reached through a link per locale (#74). Oracle:
+// Next 16.4.6's Turbopack, replayed for #74: it matches a catalog at its real path below the root, so a linked locale's
+// catalog is matched at its target (shape 1 failed with `Unknown module type`), and it loads catalogs written outside
+// the root whose directories link into it, imported at a path inside it (shape 2 was refused). A locale's catalog that
+// is where the pattern says keeps the pattern, so a locale added later without a link (fi) still matches.
+it.each([
+  {
+    name: "two locales' directories linked inside the root",
+    catalogs: "locales/{locale}/messages.po",
+    locales: ["da", "nb", "sv"],
+    directories: ["workspace/apps/web/locales/da"],
+    matched: [
+      "apps/web/locales/da/messages.po",
+      "apps/web/locales/fi/messages.po",
+      "apps/web/translations/nb-NO/messages.po",
+      "apps/web/translations/sv-SE/messages.po",
+    ],
+    missed: [
+      "apps/web/translations/fi-FI/messages.po",
+      "apps/web/translations/nb-NO/catalog.po",
+      "translations/nb-NO/messages.po",
+    ],
+    links: [
+      { from: "workspace/apps/web/locales/nb", to: "workspace/apps/web/translations/nb-NO" },
+      { from: "workspace/apps/web/locales/sv", to: "workspace/apps/web/translations/sv-SE" },
+    ],
+  },
+  {
+    name: "catalogs outside the root whose locales' directories link into it",
+    catalogs: "../../../translations/{locale}/catalog.po",
+    locales: ["nb", "sv"],
+    directories: [],
+    matched: ["shared/nb-NO/catalog.po", "shared/sv-SE/catalog.po"],
+    missed: ["shared/fi-FI/catalog.po", "shared/nb-NO/messages.po", "translations/nb/catalog.po"],
+    links: [
+      { from: "translations/nb", to: "workspace/shared/nb-NO" },
+      { from: "translations/sv", to: "workspace/shared/sv-SE" },
+    ],
+  },
+])(
+  "matches $name at the paths Turbopack matches",
+  ({ catalogs, locales, directories, links, matched, missed }) => {
+    linkLocales(catalogs, locales, directories, links);
+    const paths = poRulePaths(withIntl({}, { dir: join(workspace, "apps/web") })(BUILD));
+
+    expect(paths).toHaveLength(2);
+    expect(paths.map((path) => [...matched, ...missed].filter((file) => path.test(file)))).toEqual([
+      matched,
+      matched,
+    ]);
+  }
+);
+
+// Unit under test: withIntl's catalogs check, for a locale linked out of the root beside catalogs that lie in it (#74).
+// Oracle: withIntl before #74 accepted this project however its config is spelled, as it accepts catalogs written in
+// the root through a link out of it (above), and Turbopack refuses that locale's import itself, so the rule keeps the
+// pattern alone. The config is spelled through a directory alias of the app, so the locale's written path is outside
+// the root too.
+it("accepts a locale linked out of the root beside catalogs in it, through a directory alias", () => {
+  linkLocales(
+    "locales/{locale}/messages.po",
+    ["da", "nb"],
+    ["workspace/apps/web/locales/da"],
+    [
+      { from: "alias", to: "workspace/apps/web" },
+      { from: "workspace/apps/web/locales/nb", to: "elsewhere/nb" },
+    ]
+  );
+  const paths = poRulePaths(
+    withIntl({}, { dir: join(workspace, "apps/web"), config: "../../../alias/elmera-intl.json" })(BUILD)
+  );
+  const files = [
+    "apps/web/locales/da/messages.po",
+    "apps/web/locales/fi/messages.po",
+    "elsewhere/nb/messages.po",
+  ];
+
+  expect(paths).toHaveLength(2);
+  expect(paths.map((path) => files.filter((file) => path.test(file)))).toEqual([
+    ["apps/web/locales/da/messages.po", "apps/web/locales/fi/messages.po"],
+    ["apps/web/locales/da/messages.po", "apps/web/locales/fi/messages.po"],
+  ]);
+});
+
+// Unit under test: withIntl's catalogs check, made per locale (#74). Oracle: Turbopack resolves no file outside its
+// root, so a locale whose catalog lies outside it, written and real, could never load though the others link in.
+it("rejects catalogs outside the root when one locale's directory does not link into it", () => {
+  linkLocales(
+    "../../../translations/{locale}/catalog.po",
+    ["nb", "fi"],
+    ["translations/fi"],
+    [{ from: "translations/nb", to: "workspace/shared/nb-NO" }]
+  );
+
+  expect(() => withIntl({}, { dir: join(workspace, "apps/web") })(BUILD)).toThrow(
+    `withIntl: the catalogs ../../../translations/{locale}/catalog.po are outside the Turbopack root ${workspace}, which resolves no file outside it; set turbopack.root to a directory that holds both the app and the catalogs`
+  );
+});
+
+// Unit under test: withIntl's catalogs check, made per locale (#74). Oracle: withIntl before #74 refused catalogs
+// outside the root with this message, though one locale's catalog is written inside it (the root is named after the
+// locale), and Turbopack refuses that catalog's import, a link out of the root, itself.
+it("rejects catalogs outside the root when one locale's catalog is written inside it through a link out of it", () => {
+  installNext(".");
+  const app = join(workspace, "apps/nb");
+  mkdirSync(app);
+  writeFileSync(
+    join(app, "elmera-intl.json"),
+    JSON.stringify({ include: ["app/**/*.tsx"], catalogs: "../{locale}/messages.po", locales: ["nb"] })
+  );
+  writeFileSync(join(sandbox, "elsewhere/messages.po"), "");
+  symlinkSync(join(sandbox, "elsewhere/messages.po"), join(app, "messages.po"), "file");
+
+  expect(() => withIntl({ turbopack: { root: app } }, { dir: app })(BUILD)).toThrow(
+    `withIntl: the catalogs ../{locale}/messages.po are outside the Turbopack root ${app}, which resolves no file outside it; set turbopack.root to a directory that holds both the app and the catalogs`
+  );
+});
+
 // Unit under test: withIntl's catalogs check. Oracle: Turbopack resolves no file outside its root, so such a catalog
 // could never load; Next 16.4.6 makes `outputFileTracingRoot` Turbopack's root when set, over `turbopack.root`
 // (server/config.js), so the fix names the setting that decides it.
