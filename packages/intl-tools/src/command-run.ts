@@ -1,6 +1,6 @@
-// One `extract` or `check` run and its report, with no argument parsing: the CLI (cli-run.ts) runs it for a parsed
-// command line, and the hosts (the Vite build check, the Vitest setup) call it directly, so they print, and exit,
-// alike without loading effect/cli.
+// One `extract` or `check` run and its report, with no argument parsing. The CLI (cli-run.ts) runs it for a parsed
+// command line; the hosts (the Vite build check, the Vitest setup) call it directly, without loading the CLI's parser,
+// its watch or Node's Stdio, and each host decides how it reports and fails.
 
 import * as Effect from "effect/Effect";
 import * as Runtime from "effect/Runtime";
