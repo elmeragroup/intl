@@ -9,7 +9,7 @@ Extraction, PO catalogs, the catalog compiler and its loaders, the `elmera-intl`
 Three touches per app:
 
 1. `elmera-intl.json` beside the app's package.json (see the tools README's CLI section).
-2. The host integration from `@elmeragroup/intl-tools`: Vite `intl()`, or Next `withIntl(config, { dir: import.meta.dirname })` with `elmera-intl check && next build` and `elmera-intl extract --watch` beside `next dev` (tools README, "Hosts"), and the server adapter's `loadCatalog` importing the locale's PO (`./intl/nb.po`, `./intl/nb.po?source` for `en`).
+2. The host integration from `@elmeragroup/intl-tools`: Vite `intl()`, or Next `export default withIntl(config, { dir: import.meta.dirname })` in `next.config.ts` with `elmera-intl check && next build` and `elmera-intl extract --watch` beside `next dev` (tools README, "Hosts"), and the server adapter's `loadCatalog` importing the locale's PO (`./intl/nb.po`, `./intl/nb.po?source` for `en`).
 3. `<IntlProvider>` in the root layout (Next) or root route (Start), and `useLocaleSwitch(persist)` where the language is chosen (see "Adapter interface" below).
 
 ## API

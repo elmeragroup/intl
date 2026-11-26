@@ -81,27 +81,48 @@ const DEFAULT_REQUEST = "./intl/request.ts";
  *   react-server request config imports that specifier, so a Client Component that imports `/server` by mistake gets
  *   the runtime's stub, never the app's adapter, in its chunks.
  *
+ * withIntl returns Next's phase function, so it goes outermost: Next calls it with the phase it loads the config in.
+ * Where Next compiles (`next build`, `next typegen`, `next dev`, a dev custom server, `next analyze`), it reads the
+ * project and adds the rule and the alias. Every other phase (`next start`, a production custom server) compiles
+ * nothing: there withIntl reads nothing and returns the config as passed, so a pruned deployment needs no
+ * `elmera-intl.json` and no source.
+ *
  * @template C - The app's config type.
  * @param config - The Next config.
  * @param options - The project directory, where `elmera-intl.json` lives, and the request module.
- * @returns The config with the rule and the alias, typed as the config passed: the Turbopack rule and alias entries
- *   withIntl writes are Next's to read, not part of this API.
- * @throws When `elmera-intl.json` is missing or invalid, its catalogs lie outside Turbopack's root (Next cannot load
- *   them), `request` names the project directory or one above it, or a `turbopack.resolveAlias` key (exact, or a
- *   wildcard whose pattern matches) already maps the request module: anything but an exact key to withIntl's own
- *   target, or any key when withIntl aliases nothing. Also when the config or its `turbopack` is not a plain object
- *   (a phase function, a thenable, an array, a class instance or an object inheriting its settings), whose settings a
- *   spread would drop or Next would replace.
+ * @returns Next's phase function, returning the config with the rule and the alias in a phase that compiles and the
+ *   config itself in any other, typed as the config passed: the Turbopack rule and alias entries withIntl writes are
+ *   Next's to read, not part of this API.
+ * @throws When the config or its `turbopack` is not a plain object (a phase function, a thenable, an array, a class
+ *   instance or an object inheriting its settings), whose settings a spread would drop or Next would replace. In a
+ *   phase that compiles, the phase function throws when `elmera-intl.json` is missing or invalid, its catalogs lie
+ *   outside Turbopack's root (Next cannot load them), `request` names the project directory or one above it, or a
+ *   `turbopack.resolveAlias` key (exact, or a wildcard whose pattern matches) maps the request module.
  */
 export function withIntl<C extends object & IntlNextConfig>(
   config: C & PlainObject,
   options: WithIntlOptions
-): C {
+): (phase: string) => C {
   requireSpreadable(config, "the config");
   if (config.turbopack !== undefined) {
     requireSpreadable(config.turbopack, "turbopack");
   }
 
+  return (phase) => (COMPILING_PHASES.has(phase) ? extend(config, options) : config);
+}
+
+// The phases in which Next 16.4.6 compiles through Turbopack, and so loads the catalogs: `next build` and `next typegen`
+// load the config with phase-production-build, `next dev` and a dev custom server with phase-development-server, and
+// `next analyze` with phase-analyze. next.test.ts holds them against Next's own constants.
+const COMPILING_PHASES: ReadonlySet<string> = new Set([
+  "phase-production-build",
+  "phase-development-server",
+  "phase-analyze",
+]);
+
+// The config with the rule and the alias, in a phase that compiles: every read of the project happens here, and each
+// problem with it throws.
+function extend<C extends object & IntlNextConfig>(config: C, options: WithIntlOptions): C {
   const configPath = resolve(options.dir, options.config ?? CONFIG_FILE);
   const loaded = loadConfig(configPath);
 
@@ -140,7 +161,7 @@ type SpreadSettings = IntlNextConfig | NonNullable<IntlNextConfig["turbopack"]>;
 // passing a decorated function, a class instance.
 function requireSpreadable(value: SpreadSettings, name: string): void {
   const fix =
-    "; pass the config object itself, and for a phase function call withIntl inside it: `export default async (phase, context) => withIntl(await config(phase, context), options)`";
+    "; pass the config object itself, and for a phase function call withIntl's result inside it: `export default async (phase, context) => withIntl(await config(phase, context), options)(phase)`";
 
   if (Object(value) !== value) {
     // What an untyped config passed: a string quoted, any other primitive as String prints it (JSON writes no BigInt
@@ -217,8 +238,8 @@ function unspreadable(value: SpreadSettings): string {
 // the default path (an app that uses withIntl for its catalogs alone; the runtime's stub explains on first use). The
 // reserved specifier is checked first, whether or not withIntl writes it: an entry an app or another wrapper wrote,
 // exact or a wildcard key whose pattern matches it (Turbopack's `*` matches any run of characters), would otherwise
-// replace the app's module, or stand in for one withIntl does not know. Only an exact entry equal to withIntl's own
-// target passes (a config wrapped twice). The target is relative to the Next project directory, where Turbopack resolves
+// replace the app's module, or stand in for one withIntl does not know; withIntl's own result is a function, which it
+// refuses, so no entry is its own. The target is relative to the Next project directory, where Turbopack resolves
 // relative alias targets (a bare path would read as a package name), with forward slashes on every platform. Whether it
 // lies in Turbopack's root is not checked here: next.config loads again under `next start` (a pruned deployment carries
 // the build without its source), behind symlinks and beside `experimental.turbopackAdditionalRoots`, where no check from
@@ -226,9 +247,7 @@ function unspreadable(value: SpreadSettings): string {
 function requestAliases(config: IntlNextConfig, options: WithIntlOptions) {
   const aliases = new Map<string, unknown>(Object.entries(config.turbopack?.resolveAlias ?? {}));
   const target = requestTarget(options);
-  const mapped = [...aliases].find(
-    ([key, value]) => mapsRequestModule(key) && (key !== REQUEST_MODULE || value !== target)
-  );
+  const mapped = [...aliases].find(([key]) => mapsRequestModule(key));
 
   if (mapped !== undefined) {
     const [key, value] = mapped;

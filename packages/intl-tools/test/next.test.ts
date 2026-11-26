@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import type { PHASE_TYPE } from "next/constants";
+import * as nextConstants from "next/constants";
 import type loadNextConfigType from "next/dist/server/config";
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -23,6 +25,9 @@ const { default: loadNextConfig } = require("next/dist/server/config.js") as {
 const { configSchema } = require("next/dist/server/config-schema.js") as {
   readonly configSchema: { readonly safeParse: (config: IntlNextConfig) => { readonly success: boolean } };
 };
+
+// The phase `next build` loads the config in, where Turbopack compiles.
+const BUILD = "phase-production-build";
 
 let sandbox = "";
 let workspace = "";
@@ -87,7 +92,7 @@ function rulePaths(catalogs: string, root?: string): ReadonlyArray<RegExp> {
   writeIntlConfig(catalogs);
   const config: IntlNextConfig = root === undefined ? {} : { turbopack: { root: join(workspace, root) } };
 
-  return poRulePaths(withIntl(config, { dir: join(workspace, "apps/web") }));
+  return poRulePaths(withIntl(config, { dir: join(workspace, "apps/web") })(BUILD));
 }
 
 // Unit under test: the Turbopack rule's path condition. Oracle: Next 16.4's root (its config.js and lib/find-root.js):
@@ -143,7 +148,7 @@ it.each([
   writeIntlConfig("../messages/{locale}.po");
   const app = join(workspace, "apps/web");
 
-  expect(() => withIntl(next(app), { dir: app })).toThrow(
+  expect(() => withIntl(next(app), { dir: app })(BUILD)).toThrow(
     `withIntl: the catalogs ../messages/{locale}.po are outside the Turbopack root ${app}, which resolves no file outside it; set ${setting} to a directory that holds both the app and the catalogs`
   );
 });
@@ -196,7 +201,7 @@ it.each([
   writeIntlConfig("intl/{locale}.po");
   const app = join(workspace, "apps/web");
 
-  expect(() => withIntl({ turbopack: { root: app }, experimental }, { dir: app })).not.toThrow();
+  expect(() => withIntl({ turbopack: { root: app }, experimental }, { dir: app })(BUILD)).not.toThrow();
 });
 
 // Unit under test: withIntl inside a next.config.mjs, loaded by Next's own loadConfig as `next build apps/web` does,
@@ -237,6 +242,150 @@ it.each([
     ).toEqual([["apps/web/intl/nb.po"], ["apps/web/intl/nb.po"]]);
   }
 );
+
+// Every phase Next defines: the PHASE_* exports of its constants module (shared/lib/constants.js), whose d.ts types
+// them as PHASE_TYPE. Read by name, so a phase a later Next adds joins the table below.
+const PHASES = Object.entries(nextConstants).flatMap(([name, value]) =>
+  // SAFETY: Next's d.ts types each PHASE_* export as one member of PHASE_TYPE, which is what `loadConfig` takes.
+  name.startsWith("PHASE_") ? [value as PHASE_TYPE] : []
+);
+// The phases in which Next 16.4.6 compiles through Turbopack, from its source: `next build` (build/index.js, and its
+// Turbopack worker, build/turbopack-build/impl.js) loads the config with PHASE_PRODUCTION_BUILD, `next dev` and a dev
+// custom server (server/lib/start-server.js, server/next.js with `dev`) with PHASE_DEVELOPMENT_SERVER, and `next
+// analyze` (build/analyze/index.js, which runs turbopackAnalyze) with PHASE_ANALYZE. Every other phase compiles
+// nothing: PHASE_PRODUCTION_SERVER (`next start`, a production custom server), PHASE_INFO (`next info`, and `next
+// upgrade`'s assessment, lib/upgrade/prepare-upgrade.js), PHASE_TEST (next/jest, build/jest/jest.js, which transforms
+// with SWC) and PHASE_EXPORT (export/index.js, handed the build's config by `next build`, so loaded by no command of
+// its own). Some commands that compile nothing still load the config with PHASE_PRODUCTION_BUILD, and so are refused as
+// a build is: `next typegen`, and `next upgrade --agent` (cli/next-upgrade.js).
+const COMPILING = new Set<string>([
+  nextConstants.PHASE_PRODUCTION_BUILD,
+  nextConstants.PHASE_DEVELOPMENT_SERVER,
+  nextConstants.PHASE_ANALYZE,
+]);
+
+// What a project can hold that withIntl cannot extend a config from: each is refused where Next compiles, since
+// Turbopack then loads no catalog, and is no concern of a process that compiles nothing (a pruned `next start`
+// deployment, which need not ship `elmera-intl.json` at all).
+const UNREADABLE = [
+  {
+    state: "catalogs outside the Turbopack root",
+    write: () => {
+      writeIntlConfig("../../../outside/{locale}.po");
+    },
+    error: `withIntl: the catalogs ../../../outside/{locale}.po are outside the Turbopack root`,
+  },
+  { state: "no elmera-intl.json", write: () => undefined, error: "elmera-intl.json not found" },
+  {
+    state: "an elmera-intl.json that does not parse",
+    write: () => {
+      writeFileSync(join(workspace, "apps/web/elmera-intl.json"), "{");
+    },
+    error: "withIntl: not JSON",
+  },
+];
+
+// Unit under test: withIntl in a next.config.mjs, loaded by Next's own loadConfig in each phase Next defines, with each
+// project state withIntl cannot extend a config from. Oracle: the phases that compile, from Next 16.4.6's source (above):
+// there withIntl refuses as before, since Turbopack would load no catalog (`Module not found` for a catalog outside the
+// root, which exists); in every other phase the config loads with the app's own settings and no `*.po` rule.
+it.each(
+  PHASES.flatMap((phase) =>
+    UNREADABLE.map((unreadable) => ({ phase, ...unreadable, refused: COMPILING.has(phase) }))
+  )
+)("in $phase, given $state, refuses: $refused", async ({ phase, write, error, refused }) => {
+  installNext("apps/web");
+  write();
+  writeFileSync(join(workspace, "apps/web/package.json"), JSON.stringify({ type: "module" }));
+  Object.assign(globalThis, { withIntlUnderTest: withIntl });
+  writeFileSync(
+    join(workspace, "apps/web/next.config.mjs"),
+    "export default globalThis.withIntlUnderTest({ reactStrictMode: true }, { dir: import.meta.dirname });\n"
+  );
+  const loading = loadNextConfig(phase, join(workspace, "apps/web"), { silent: true });
+
+  if (refused) {
+    await expect(loading).rejects.toThrow(error);
+  } else {
+    const loaded = await loading;
+
+    expect(loaded.reactStrictMode).toBe(true);
+    expect(poRulePaths(loaded)).toEqual([]);
+  }
+});
+
+// Projects whose state refuses in a phase that compiles, and one that does not: what a process that compiles nothing
+// may meet (a deployment pruned of its source, started as another user than the one who built it).
+const UNREAD: ReadonlyArray<{
+  readonly name: string;
+  readonly lay: () => { readonly config: NextConfig; readonly options: WithIntlOptions };
+  readonly built: "refused" | "extended";
+}> = [
+  {
+    name: "a project directory that does not exist",
+    lay: () => ({ config: { reactStrictMode: true }, options: { dir: join(sandbox, "missing") } }),
+    built: "refused",
+  },
+  {
+    name: "a request alias withIntl reserves",
+    lay: () => {
+      installNext(".");
+      writeIntlConfig("intl/{locale}.po");
+
+      return {
+        config: { turbopack: { resolveAlias: { [REQUEST_MODULE]: "./src/request.ts" } } },
+        options: { dir: join(workspace, "apps/web") },
+      };
+    },
+    built: "refused",
+  },
+  {
+    name: "a project withIntl reads",
+    lay: () => {
+      installNext(".");
+      writeIntlConfig("intl/{locale}.po");
+
+      return { config: { reactStrictMode: true }, options: { dir: join(workspace, "apps/web") } };
+    },
+    built: "extended",
+  },
+];
+
+// Unit under test: withIntl's phase function in each phase Next defines that compiles nothing. Oracle: Next 16.4.6
+// compiles nothing in those phases (from its source, above), so there the phase function reads no file and returns the
+// very config passed, whatever the project holds; `next build`'s phase, for the same project, refuses or extends it,
+// so each row is a project whose state withIntl reads where it compiles.
+it.each(
+  PHASES.filter((phase) => !COMPILING.has(phase)).flatMap((phase) => UNREAD.map((row) => ({ phase, ...row })))
+)("in $phase, returns the config as passed for $name", ({ phase, lay, built }) => {
+  const { config, options } = lay();
+
+  expect(withIntl(config, options)(phase)).toBe(config);
+  if (built === "refused") {
+    expect(() => withIntl(config, options)(BUILD)).toThrow(/^withIntl: /u);
+  } else {
+    expect(poRulePaths(withIntl(config, options)(BUILD))).toHaveLength(2);
+  }
+});
+
+// Unit under test: withIntl's phase function on a project a file system read fails in, as a deployment's process may
+// meet one (built as one user, started as another who cannot traverse `intl/`). Oracle: POSIX `stat` of a link to
+// itself fails with ELOOP for every user, root included (unlike a mode, which root's CAP_DAC_OVERRIDE ignores): in
+// `next build`'s phase withIntl stats the default request module and fails with that error, while in `next start`'s
+// phase, which compiles nothing, it reads nothing and returns the very config passed.
+it("reads nothing in next start's phase, where next build's fails on the file system", () => {
+  installNext(".");
+  writeIntlConfig("intl/{locale}.po");
+  mkdirSync(join(workspace, "apps/web/intl"));
+  symlinkSync("request.ts", join(workspace, "apps/web/intl/request.ts"));
+  const config: NextConfig = { reactStrictMode: true };
+  const options: WithIntlOptions = { dir: join(workspace, "apps/web") };
+
+  expect(withIntl(config, options)(nextConstants.PHASE_PRODUCTION_SERVER)).toBe(config);
+  expect(() => withIntl(config, options)(BUILD)).toThrow(
+    /^ELOOP: too many symbolic links encountered, stat /u
+  );
+});
 
 // Unit under test: withIntl given a value that is no object, as only an untyped next.config.mjs can pass it, loaded
 // by Next's own loadConfig. Oracle: a spread of a primitive copies nothing of it, so withIntl refuses it, naming the
@@ -294,7 +443,7 @@ function withIntlFor(
     writeFileSync(join(sandbox, file), "export default null;\n");
   }
 
-  return withIntl(config, { ...options, dir: join(workspace, "apps/web") });
+  return withIntl(config, { ...options, dir: join(workspace, "apps/web") })(BUILD);
 }
 
 // Unit under test: the Turbopack alias withIntl adds from the runtime's request module to the app's. Oracle: Turbopack's
@@ -338,13 +487,6 @@ it.each([
   {
     name: "the request module beside the app's own aliases",
     config: { turbopack: { resolveAlias: { underscore: "lodash" } } },
-    options: { request: "intl/request.ts" },
-    modules: [],
-    aliases: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" },
-  },
-  {
-    name: "idempotently, over the alias it wrote before",
-    config: { turbopack: { resolveAlias: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" } } },
     options: { request: "intl/request.ts" },
     modules: [],
     aliases: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" },
@@ -410,6 +552,15 @@ it.each([
     modules: [],
     error:
       /maps @elmeragroup\/intl\/internal\/request-module to "\.\/src\/request\.ts", which withIntl reserves/u,
+  },
+  // withIntl's own result is a function it refuses, so an entry equal to its target is the app's, not withIntl's.
+  {
+    name: "an alias for the request module to withIntl's own target",
+    config: { turbopack: { resolveAlias: { underscore: "lodash", [REQUEST_MODULE]: "./intl/request.ts" } } },
+    options: { request: "intl/request.ts" },
+    modules: [],
+    error:
+      /maps @elmeragroup\/intl\/internal\/request-module to "\.\/intl\/request\.ts", which withIntl reserves/u,
   },
   // Turbopack reads a conditional alias differently from the plain target withIntl writes.
   {
@@ -586,9 +737,10 @@ it.each([
     what: "an object inheriting another object's settings",
   },
 ])("rejects $name as the config or as turbopack", ({ config, turbopack, what }) => {
-  const withApp = <T extends NextConfig>(app: T): T => withIntl(app, { dir: join(workspace, "apps/web") });
+  const withApp = <T extends NextConfig>(app: T) => withIntl(app, { dir: join(workspace, "apps/web") });
   // The fix names the phase-function remedy; the remedy test below runs it.
-  const fix = /; pass the config object itself, and for a phase function call withIntl inside it: `[^`]+`$/u;
+  const fix =
+    /; pass the config object itself, and for a phase function call withIntl's result inside it: `[^`]+`$/u;
 
   expect(() => withApp(config)).toThrow(`withIntl: the config is ${what}, `);
   expect(() => withApp(config)).toThrow(fix);
@@ -603,7 +755,7 @@ it("suggests a phase-function remedy that passes the phase and context through",
   installNext("apps/web");
   writeIntlConfig("intl/{locale}.po");
   const options: WithIntlOptions = { dir: join(workspace, "apps/web") };
-  const withApp = <T extends NextConfig>(app: T): T => withIntl(app, options);
+  const withApp = <T extends NextConfig>(app: T) => withIntl(app, options);
   let message = "";
   try {
     withApp(Object.assign((_phase: string) => ({}), { reactStrictMode: true }));
