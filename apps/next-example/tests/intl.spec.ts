@@ -30,6 +30,16 @@ const PAGES = [
   { path: "/settings", label: "settings" },
 ] as const;
 
+// The hydration cases whose work under a load spike (CPU throttled 4× to 128× from the moment the search button
+// enabled) measured past the configured 30 s test timeout, or within a fifth of it, and what was measured. Each gets
+// three times that timeout (`test.slow()`); the others keep it, so a hang costs them 30 s, not 90.
+const SLOW_TO_HYDRATE: ReadonlyMap<(typeof PAGES)[number]["path"], string> = new Map([
+  // Four of five timed out at 30 s before this; with it, 27 to 33 s.
+  ["/", "27 to 33 s under a load spike"],
+  ["/invoices", "22 to 29 s under a load spike"],
+  // The metering points: 21 to 23 s.
+]);
+
 // What each page's own client code does once the page has hydrated, and what the page shows: every case below runs it
 // after hydration and reads the browser's errors only after its update, so a mismatch React reports late, or an error
 // the update itself raises, fails the case.
@@ -196,6 +206,7 @@ for (const locale of LOCALES) {
 
     for (const { path, label } of PAGES) {
       test(`hydrates ${path} and updates it in the browser without an error`, async ({ page }) => {
+        test.slow(SLOW_TO_HYDRATE.has(path), SLOW_TO_HYDRATE.get(path));
         const errors = collectErrors(page);
         await page.goto(path);
         // Enabled only once React has hydrated the shell.

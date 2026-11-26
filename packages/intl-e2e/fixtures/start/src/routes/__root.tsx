@@ -41,7 +41,11 @@ function RootDocument({ children }: { readonly children: ReactNode }) {
   );
 }
 
-// The specs wait for it before clicking: a click before hydration does nothing (a dev server hydrates late).
+// The specs wait for it before clicking (a dev server hydrates late). It marks the root's hydration only: the route
+// below it is its own boundary inside the root's Suspense and may hydrate later. On a click into it React attempts to
+// hydrate it synchronously, which a boundary that suspends can block, or a mismatch can defeat by rendering it anew on
+// the client. The router loads the route's code before hydrating, so it does not suspend on a chunk; a control there
+// that can still suspend needs a readiness check of its own.
 function Hydrated(): null {
   useEffect(() => {
     document.documentElement.dataset.hydrated = "true";

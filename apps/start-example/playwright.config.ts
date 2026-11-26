@@ -10,6 +10,14 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   forbidOnly: true,
+  // A timeout is only a hang guard (AGENTS.md, Tests). `timeout: 0` removes an expectation's own timeout, for `expect`
+  // and `expect.poll` alike, so the test's timeout bounds it: an outcome that is correct but late under load passes,
+  // and one that never comes still fails, by the test's timeout, naming the expectation and what it last received.
+  // Under a load spike these came past Playwright's default 5 s: a page's own hydration (the metering points' search
+  // was still disabled at 5 s in 2 of 2 runs) and its deferred count (1 of 3), while the overview's case spent some
+  // 23 s on its expectations before its click. The router pushes the URL as a click lands and renders the destination
+  // once its loader answers: with that answer held past 5 s, the heading's check failed at 5 s and passes now.
+  expect: { timeout: 0 },
   reporter: [["list"]],
   use: {
     baseURL: "http://localhost:3041",

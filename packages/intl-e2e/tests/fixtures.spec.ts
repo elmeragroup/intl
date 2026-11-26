@@ -79,7 +79,17 @@ function serverItems(html: string): Array<string> {
   );
 }
 
-// The page, once React hydrated it (both fixtures mark <html> from an effect): only then does a click reach a handler.
+// The page, once React hydrated the component that marks <html> from an effect. The marker speaks for that component
+// only, not for content in a Suspense boundary nested below it, which may hydrate later. On a click into such a
+// boundary React attempts to hydrate it synchronously; that can still be blocked (a boundary that suspends) or the
+// clicked node replaced (a mismatch makes React render the boundary on the client). Where the controls sit:
+// - Next: every control the specs click hydrates in the marker's pass; on `/server-from-client` the button sits beside
+//   the marker's effect, outside the boundary that holds the render's outcome.
+// - Start: the marker is the root's, and the controls are in the index route, its own boundary inside the root's
+//   Suspense. The router loads the route's code before hydrating, so the route does not suspend on a chunk; in the
+//   Start example, a chart toggle in the same position flipped on 20 of 20 clicks sent at the shell's hydration.
+// The corpus and `/server-from-client` cases fail on any hydration mismatch the browser reports. A control in a
+// boundary that can still suspend when the marker is set needs a readiness check of its own.
 async function gotoHydrated(page: Page, url: string): Promise<void> {
   await page.goto(url);
   await expect(page.locator("html")).toHaveAttribute("data-hydrated", "true");
