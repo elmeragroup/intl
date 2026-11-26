@@ -5,22 +5,20 @@ import { useTransition } from "react";
 // Next.js client adapter: switch locale in place (persist, then refresh the server tree).
 import { useRouter } from "next/navigation";
 
-import type { SwitchOutcome } from "./adapter";
-import type { PrepareSwitch } from "./router-switch";
+import type { PrepareSwitch, RouterSwitch } from "./router-switch";
 import { useRouterSwitch } from "./router-switch";
 
-export type { SwitchOutcome } from "./adapter";
+export type { SwitchOutcome } from "./locale-switch";
 
-/** What `useLocaleSwitch` returns. */
-export type LocaleSwitch = {
-  /** Persist `locale`, then refresh; resolves to how the switch ended (latest switch wins). */
-  readonly switchLocale: (locale: string) => Promise<SwitchOutcome>;
-  /**
-   * True while any switch under the router is in flight, from whichever mount it started, or while this mount's own
-   * refresh or Server Action render is on its way.
-   */
-  readonly isPending: boolean;
-};
+// Maps RouterSwitch rather than aliasing it: an alias resolves to RouterSwitch, which a consumer reaches only through a
+// private chunk, so their inferred types could not name it (TS2883); a mapped type is declared here, on the public
+// subpath.
+/**
+ * What `useLocaleSwitch` returns. `switchLocale` persists `locale`, then refreshes (or lets the Server Action's
+ * response render). `isPending` is true while any switch under the router is in flight, from whichever mount it
+ * started, or while this mount's own refresh or Server Action render is on its way.
+ */
+export type LocaleSwitch = { readonly [Key in keyof RouterSwitch]: RouterSwitch[Key] };
 
 /** Options of `useLocaleSwitch`. */
 export type LocaleSwitchOptions = {

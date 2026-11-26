@@ -5,14 +5,24 @@ import { useEffect, useState } from "react";
 // when a PO is saved in dev.
 import { useRouter } from "@tanstack/react-router";
 
-import type { RequestLike, ServerAdapter, SwitchOutcome } from "./adapter";
+import type { RequestLike, ServerAdapter } from "./adapter";
 import { resolveIntlConfig } from "./adapter";
 import { CATALOG_UPDATE_EVENT } from "./catalog";
 import type { IntlConfig } from "./intl";
-import type { PrepareSwitch } from "./router-switch";
+import type { PrepareSwitch, RouterSwitch } from "./router-switch";
 import { useRouterSwitch } from "./router-switch";
 
-export type { RequestLike, ServerAdapter, SwitchOutcome } from "./adapter";
+export type { RequestLike, ServerAdapter } from "./adapter";
+export type { SwitchOutcome } from "./locale-switch";
+
+// Maps RouterSwitch rather than aliasing it: an alias resolves to RouterSwitch, which a consumer reaches only through a
+// private chunk, so their inferred types could not name it (TS2883); a mapped type is declared here, on the public
+// subpath.
+/**
+ * What `useLocaleSwitch` returns. `switchLocale` persists `locale`, then invalidates the router. `isPending` is true
+ * from a switch's call, from any mount under the router, until the newest switch has settled.
+ */
+export type LocaleSwitch = { readonly [Key in keyof RouterSwitch]: RouterSwitch[Key] };
 
 /**
  * Resolve a request's provider config through the app's adapter, for the root loader's server function.
@@ -24,14 +34,6 @@ export type { RequestLike, ServerAdapter, SwitchOutcome } from "./adapter";
 export function loadIntlConfig(adapter: ServerAdapter, request: RequestLike): Promise<IntlConfig> {
   return resolveIntlConfig(adapter, request);
 }
-
-/** What `useLocaleSwitch` returns. */
-export type LocaleSwitch = {
-  /** Persist `locale`, then invalidate; resolves to how the switch ended (latest switch wins). */
-  readonly switchLocale: (locale: string) => Promise<SwitchOutcome>;
-  /** True from a switch's call, from any mount under the router, until the newest switch has settled. */
-  readonly isPending: boolean;
-};
 
 type Router = ReturnType<typeof useRouter>;
 
