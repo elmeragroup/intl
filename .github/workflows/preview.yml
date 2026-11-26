@@ -13,21 +13,28 @@ name: Preview
 # with a note instead, and every job that reaches Azure runs only for a PR from this repository. The preview
 # identity's federated credential trusts only `pull_request` runs, so no scheduled job could clean up either.
 #
-# A preview is the PR's head commit (`pull_request.head.sha`), not the test merge commit `github.sha` names: GitHub
-# computes that merge lazily and moves it when the base branch moves, so it cannot say whether a run is still current.
-# Every job checks out the head commit, the image is built and tagged from it, and the live gate
-# (.github/scripts/docs-preview-gate.sh) compares it with the PR's head as GitHub reports it now.
+# Three commits, each for one purpose:
 #
-# Every PR shares the one app, and each label or traffic change rewrites its whole traffic list, so the jobs that change
-# it (deploy and teardown) run one at a time across all PRs: one concurrency group with `queue: max`, which keeps every
+# - The automation (.github: the scripts and the push action) comes from `github.workflow_sha`, the commit this
+#   workflow file was read from, so the scripts always match the workflow that calls them, even on a PR branched before
+#   they existed.
+# - The preview is the PR's head commit (`pull_request.head.sha`), not the test merge commit `github.sha` names: GitHub
+#   computes that merge lazily and moves it when the base branch moves, so it cannot say whether a run is still current.
+#   The docs image is built and tagged from the head, and the live gate (.github/scripts/docs-preview-gate.sh) compares
+#   it with the PR's head as GitHub reports it now. A head without the docs app deploys nothing.
+# - The placeholder image, the app's default route, is built from the PR's base commit (`pull_request.base.sha`, the
+#   protected branch), so a PR's code never becomes it.
+#
+# Every PR shares the one app, and each label or traffic change rewrites its whole traffic list, so every change to it
+# runs in one job, `azure`, one run at a time across all PRs: one concurrency group with `queue: max`, which keeps every
 # waiting run in order (up to 100) instead of cancelling all but the newest, so no teardown is dropped. Image builds run
 # in parallel outside it, one group per PR and commit, so a rerun of an old commit never cancels a newer build. A queued
-# run can wait while the PR moves on, and a rerun replays its original event, so the live gate runs before the build and
-# again inside the serialized section, right before the PR's label moves or its preview is removed.
+# run can wait while the PR moves on, and a rerun replays its original event, so the live gate runs before the build,
+# at the start of the `azure` job, and before every attempt to write the PR's label.
 #
 # GitHub runs no pull_request workflow for a PR with merge conflicts, so a PR that closes conflicted gets no teardown.
-# Every deploy and teardown therefore ends with one reconcile (docs-container-app.sh): labels of PRs GitHub reports
-# closed are removed, and every active revision no label points at is deactivated.
+# Every `azure` run therefore ends with a reconcile (docs-container-app.sh): labels of PRs GitHub reports closed are
+# removed, and every active revision no label points at is deactivated.
 
 on:
   pull_request:
@@ -59,7 +66,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Builds and pushes the PR's image, and the placeholder when the app has no bootstrap revision. Nothing here changes
-  # the app.
+  # the app. `deploy` is true only when an image was pushed for the `azure` job to deploy.
   build:
     if: >-
       github.event.action != 'closed' &&
@@ -75,14 +82,15 @@ jobs:
       id-token: write
       pull-requests: read
     outputs:
-      act: ${{ steps.gate.outputs.act }}
+      deploy: ${{ steps.image.outputs.image != '' }}
       image: ${{ steps.image.outputs.image }}
       bootstrap-image: ${{ steps.bootstrap.outputs.image }}
     steps:
-      - name: Checkout
+      - name: Checkout the automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github
           persist-credentials: false
 
       - name: Read the PR as it is now
@@ -91,8 +99,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/docs-preview-gate.sh deploy
 
-      - name: Azure login
+      - name: Checkout the PR head
         if: steps.gate.outputs.act == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          persist-credentials: false
+
+      - name: Find the docs app
+        id: app
+        if: steps.gate.outputs.act == 'true'
+        run: |
+          if [[ -f head/apps/docs/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### No docs preview"
+              echo "This PR's head has no \`apps/docs/Dockerfile\`: it branched before the docs site, so there is nothing to preview."
+              echo "Rebase it on the base branch to get one."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Azure login
+        if: steps.app.outputs.present == 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID_PREVIEW }}
@@ -103,7 +134,7 @@ jobs:
       # failed lookup fatal; inside `echo` its status would be lost.
       - name: Preview origin
         id: origin
-        if: steps.gate.outputs.act == 'true'
+        if: steps.app.outputs.present == 'true'
         env:
           ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APPS_ENVIRONMENT_PREVIEW }}
         run: |
@@ -112,7 +143,7 @@ jobs:
 
       - name: Probe the bootstrap revision
         id: probe
-        if: steps.gate.outputs.act == 'true'
+        if: steps.app.outputs.present == 'true'
         run: |
           probe="$(bash .github/scripts/docs-container-app.sh probe)"
           echo "$probe" >> "$GITHUB_OUTPUT"
@@ -121,33 +152,58 @@ jobs:
       # names the digest.
       - name: Push image
         id: image
-        if: steps.gate.outputs.act == 'true'
+        if: steps.app.outputs.present == 'true'
         uses: ./.github/actions/push-docs-image
         with:
           registry: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
           tag: ${{ format('{0}-{1}-{2}', github.event.pull_request.head.sha, github.run_id, github.run_attempt) }}
-          context: .
-          file: apps/docs/Dockerfile
+          context: head
+          file: head/apps/docs/Dockerfile
           build-args: |
             DOCS_ORIGIN=${{ steps.origin.outputs.origin }}
           cache-scope: intl-docs
 
-      # The deploy creates the bootstrap revision from the placeholder. The environment pulls only from the preview
-      # registry, so the placeholder lives there too.
+      # Only when the app has lost its bootstrap revision: the `azure` job recreates it from this image.
+      - name: Checkout the PR base
+        if: steps.probe.outputs.bootstrap == 'missing'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          sparse-checkout: apps/docs/placeholder
+          persist-credentials: false
+
+      - name: Find the placeholder
+        if: steps.probe.outputs.bootstrap == 'missing'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ ! -f base/apps/docs/placeholder/Dockerfile ]]; then
+            echo "::error::The preview app has no bootstrap revision, and the PR's base ($BASE_SHA) has no apps/docs/placeholder to build it from. Merge the placeholder to the base branch first."
+            exit 1
+          fi
+
+      # The environment pulls only from the preview registry, so the placeholder lives there too.
       - name: Push placeholder
         id: bootstrap
-        if: steps.gate.outputs.act == 'true' && steps.probe.outputs.bootstrap == 'missing'
+        if: steps.probe.outputs.bootstrap == 'missing'
         uses: ./.github/actions/push-docs-image
         with:
           registry: ${{ vars.AZURE_ACR_NAME_PREVIEW }}
-          tag: ${{ format('bootstrap-{0}-{1}-{2}', github.event.pull_request.head.sha, github.run_id, github.run_attempt) }}
-          context: apps/docs/placeholder
-          file: apps/docs/placeholder/Dockerfile
+          tag: ${{ format('bootstrap-{0}-{1}-{2}', github.event.pull_request.base.sha, github.run_id, github.run_attempt) }}
+          context: base/apps/docs/placeholder
+          file: base/apps/docs/placeholder/Dockerfile
           cache-scope: intl-docs-placeholder
 
-  deploy:
+  # Every change to the preview app: the deploy of a built image or, on close, the teardown, then the reconcile, under one
+  # lock across all PRs. A closed event skips `build`, so the job runs on `!cancelled()` and names its own condition.
+  azure:
     needs: build
-    if: needs.build.outputs.act == 'true'
+    if: >-
+      !cancelled() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.AZURE_CLIENT_ID_PREVIEW != '' &&
+      (github.event.action == 'closed' || needs.build.outputs.deploy == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -157,21 +213,25 @@ jobs:
       contents: read
       id-token: write
       pull-requests: write
+    env:
+      MODE: ${{ github.event.action == 'closed' && 'teardown' || 'deploy' }}
     steps:
-      - name: Checkout
+      - name: Checkout the automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github
           persist-credentials: false
 
-      # Its turn may come long after the build: a run the PR has moved past stops here, before logging in.
+      # Its turn may come long after the event: a run the PR has moved past stops here, before logging in.
       - name: Read the PR as it is now
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/docs-preview-gate.sh deploy
+        run: bash .github/scripts/docs-preview-gate.sh "$MODE"
 
       - name: Azure login
+        id: login
         if: steps.gate.outputs.act == 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
@@ -179,11 +239,12 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID_PREVIEW }}
 
-      # The runner is not on the VPN, so it cannot request the preview: the script waits until Azure reports the new
-      # revision ready, reads the PR again, and only then moves the PR's label to it. It reports `url` only when it did.
-      - name: Deploy revision
-        id: deploy
-        if: steps.gate.outputs.act == 'true'
+      # Deploy: waits until Azure reports the new revision ready (the runner is not on the VPN, so it cannot request
+      # the preview), then moves the PR's label to it. Teardown: removes the PR's label. Reports `outcome` (deployed,
+      # removed, nothing or skipped), and on a deploy `url` and `revision` as soon as the label is written.
+      - name: Change the preview
+        id: change
+        if: steps.login.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ needs.build.outputs.image }}
@@ -193,23 +254,35 @@ jobs:
           MANAGED_IDENTITY_ID: ${{ vars.AZURE_MANAGED_IDENTITY_ID_PREVIEW }}
           # Run ID also changes on reopen, even if the head is unchanged.
           SUFFIX: ${{ format('pr-{0}-{1}-{2}', github.event.pull_request.number, github.run_id, github.run_attempt) }}
-        run: bash .github/scripts/docs-container-app.sh deploy
+        run: bash .github/scripts/docs-container-app.sh "$MODE"
 
-      - name: Comment preview URL
-        if: steps.deploy.outputs.url != ''
+      # Runs whatever the change step did, so a failed deploy's leftover revision is cleaned up too; a failure here
+      # fails the job without touching the outcome above.
+      - name: Reconcile the app
+        if: ${{ !cancelled() && steps.login.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/docs-container-app.sh reconcile
+
+      - name: Update the preview comment
+        if: >-
+          !cancelled() &&
+          (steps.change.outputs.outcome == 'deployed' || steps.change.outputs.outcome == 'removed' ||
+          steps.change.outputs.outcome == 'nothing')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          URL: ${{ steps.deploy.outputs.url }}
-          REVISION: ${{ steps.deploy.outputs.revision }}
+          OUTCOME: ${{ steps.change.outputs.outcome }}
+          URL: ${{ steps.change.outputs.url }}
+          REVISION: ${{ steps.change.outputs.revision }}
         with:
           script: |
-            const { URL, REVISION, HEAD_SHA, COMMENT_MARKER, COMMENT_AUTHOR } = process.env;
-            const body = [
-              COMMENT_MARKER,
-              `**Docs preview:** ${URL} (VPN only)`,
-              "",
-              `Built from ${HEAD_SHA.slice(0, 7)} as revision \`${REVISION}\`. The revision is removed when this PR closes.`,
-            ].join("\n");
+            const { OUTCOME, URL, REVISION, HEAD_SHA, COMMENT_MARKER, COMMENT_AUTHOR } = process.env;
+            const status = {
+              deployed: `${URL} (VPN only)\n\nBuilt from ${HEAD_SHA.slice(0, 7)} as revision \`${REVISION}\`. The revision is removed when this PR closes.`,
+              removed: "removed when this PR closed.",
+              nothing: "none is running for this closed PR.",
+            }[OUTCOME];
+            const body = `${COMMENT_MARKER}\n**Docs preview:** ${status}`;
             const issue = { ...context.repo, issue_number: context.issue.number };
             const comments = await github.paginate(github.rest.issues.listComments, issue);
             const existing = comments.find(
@@ -217,72 +290,6 @@ jobs:
             );
             if (existing) {
               await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
-            } else {
+            } else if (OUTCOME === "deployed") {
               await github.rest.issues.createComment({ ...issue, body });
-            }
-
-  teardown:
-    if: >-
-      github.event.action == 'closed' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      vars.AZURE_CLIENT_ID_PREVIEW != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: intl-docs-preview-azure
-      queue: max
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-
-      - name: Read the PR as it is now
-        id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/docs-preview-gate.sh teardown
-
-      - name: Azure login
-        if: steps.gate.outputs.act == 'true'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID_PREVIEW }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID_PREVIEW }}
-
-      # Reports `outcome`: removed, nothing (no preview was live), or skipped (the PR reopened before the removal).
-      - name: Remove the preview
-        id: teardown
-        if: steps.gate.outputs.act == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/docs-container-app.sh teardown
-
-      - name: Update the preview comment
-        if: steps.teardown.outputs.outcome == 'removed' || steps.teardown.outputs.outcome == 'nothing'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          OUTCOME: ${{ steps.teardown.outputs.outcome }}
-        with:
-          script: |
-            const { COMMENT_MARKER, COMMENT_AUTHOR, OUTCOME } = process.env;
-            const issue = { ...context.repo, issue_number: context.issue.number };
-            const comments = await github.paginate(github.rest.issues.listComments, issue);
-            const existing = comments.find(
-              (comment) => comment.user?.login === COMMENT_AUTHOR && comment.body?.startsWith(COMMENT_MARKER)
-            );
-            if (existing) {
-              const status =
-                OUTCOME === "removed" ? "removed when this PR closed." : "none is running for this closed PR.";
-              await github.rest.issues.updateComment({
-                ...context.repo,
-                comment_id: existing.id,
-                body: `${COMMENT_MARKER}\n**Docs preview:** ${status}`,
-              });
             }
