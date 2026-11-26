@@ -1,14 +1,14 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { HotPayload, InlineConfig, Plugin, ViteDevServer } from "vite";
 import { createLogger, createServer } from "vite";
 import { describe, expect } from "vitest";
 
 import { CATALOG_UPDATE_EVENT } from "@elmeragroup/intl/internal/catalog";
 
-import { syncCatalogs } from "../src/catalog-sync";
+import { NO_RECORD, syncCatalogs } from "../src/catalog-sync";
 import type { ProjectConfig } from "../src/project-config";
 import { projectServices } from "../src/project-services";
 import { intl } from "../src/vite";
@@ -366,6 +366,63 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
 
     // At least once, as the save is in place (see the test above).
     expect(sent.some(({ file }) => file === config)).toBe(true);
+  });
+
+  // Unit under test: what the dev plugin sends open tabs when the watch's first sync after a config edit adding `sv` is
+  // superseded (a PO save between its read and its write, stood in by the sync step), so its retry writes `sv.po`
+  // after the restart's notice. The config and catalogs lie outside the Vite root and `server.watch` is null, so no
+  // notice can come from Vite's watcher. Oracle: the reload contract, by hand: a tab told reloads its catalogs, and a
+  // notice follows every sync that reports what it wrote, so once the retry is let run, a notice naming the config that
+  // the restart's own notice did not already count goes out with `sv.po` existing (#85).
+  it("tells open tabs about a new locale's PO that a superseded first sync's retry writes, with no Vite watcher", async ({
+    project,
+  }) => {
+    let superseded: number | undefined;
+    const retry = Promise.withResolvers<void>();
+    let retrying = false;
+    const services = countedServices(
+      syncing((config: ProjectConfig) => {
+        if (!config.locales.includes("sv")) {
+          return syncCatalogs(config);
+        }
+
+        if (superseded === undefined) {
+          return Effect.sync(() => {
+            superseded = sent.length;
+
+            return { _tag: "Synced", written: [], superseded: true, left: NO_RECORD } as const;
+          });
+        }
+
+        return Effect.sync(() => {
+          retrying = true;
+        }).pipe(Effect.andThen(Effect.promise(() => retry.promise)), Effect.andThen(syncCatalogs(config)));
+      })
+    );
+    mkdirSync(project.path("app"));
+    const server = await devServer(project, {
+      root: project.path("app"),
+      server: { watch: null },
+      plugins: [...intlPlugins({ config: "../elmera-intl.json" }, services.layer)],
+    });
+    project.defer(() => {
+      retry.resolve();
+    });
+    const sent = notices(project, server);
+    const config = JSON.stringify({ file: resolve(server.config.root, "../elmera-intl.json") });
+    save(project, JSON.stringify(SV_CONFIG))();
+    // The restart's own notice (`Restarted`), after the superseded sync, before `sv.po` exists; the retry then runs.
+    await expect
+      .poll(() => superseded !== undefined && sent.length > superseded && retrying, project.guard())
+      .toBe(true);
+    const atRestart = sent.slice(superseded).some(({ file, sv }) => file === config && !sv);
+    const beforeRetry = sent.length;
+    retry.resolve();
+
+    expect(atRestart).toBe(true);
+    await expect
+      .poll(() => sent.slice(beforeRetry).some(({ file, sv }) => file === config && sv), project.guard())
+      .toBe(true);
   });
 
   // Unit under test: the dev server's start when its config is edited during the start's first sync (held), and the

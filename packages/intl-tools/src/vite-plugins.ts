@@ -96,10 +96,11 @@ export function intlPlugins(
               ? { _tag: "poll", intervalMs: DEFAULT_POLL_MS }
               : polled;
         // Every compiled catalog compiles again (its compile reads the config), and open tabs are told: at a change of
-        // the config, and again once the restarted watch has written its first sync's result, when a new locale's PO
-        // exists unless a PO save superseded that sync. Its retry's new PO is announced only as Vite's watcher reports
-        // the file created (the catalog plugin's `hotUpdate`): never for a PO the watcher does not cover, outside the
-        // root or ignored (#85). A notice too many costs a tab a refetch; one too few leaves it stale.
+        // the config, once the restarted watch has a first sync's result (`Restarted`), and once per `Written` result
+        // (every sync of the watch that reports what it wrote), besides what Vite's watcher sends for the files it
+        // watches. So a new locale's PO that a superseded first sync's retry writes is announced where Vite's watcher
+        // does not cover it (outside the root, ignored). A sync that writes some POs and then fails reports `Failed`:
+        // no `Written` notice, only `Restarted`'s own when it was a restart's first sync. A notice too many costs a tab a refetch; one too few leaves it stale.
         const reload = () => {
           invalidateCatalogs(server);
           server.environments.client.hot.send({
@@ -121,7 +122,12 @@ export function intlPlugins(
           } else if (result._tag === "Restarted") {
             reload();
           } else if (result._tag === "Written") {
-            logger.info(`${NAME}: wrote ${result.files.map((file) => relative(root, file)).join(", ")}`);
+            // The reload whatever the log line does, as above.
+            try {
+              logger.info(`${NAME}: wrote ${result.files.map((file) => relative(root, file)).join(", ")}`);
+            } finally {
+              reload();
+            }
           } else if (result._tag === "Failed") {
             result.problems.forEach((problem) => {
               logger.error(describeProblem(problem));
