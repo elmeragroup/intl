@@ -184,10 +184,9 @@ export function negotiateLocale<const L extends string, AliasTarget extends L = 
 
     return resolution.via === "alias" && aliasRejected.has(resolution.locale) ? undefined : resolution.locale;
   };
-  // `sort` is stable (ES2019), so equal weights keep the header's order.
+  // `sort` is stable (ES2019), so equal weights keep the header's order. It sorts the fresh array `filter` returns.
   const accepted = entries
     .filter(({ quality, range }) => quality > 0 && !rejected.has(range))
-    // oxlint-disable-next-line unicorn/no-array-sort -- the runtime targets ES2022 (tsdown's `target`) and `toSorted` is ES2023; this sorts the fresh array `filter` returns, which nothing else holds
     .sort((left, right) => right.quality - left.quality);
 
   for (const { range } of accepted) {

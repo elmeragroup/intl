@@ -17,6 +17,6 @@ export default defineConfig({
   sourcemap: true,
   treeshake: true,
   platform: "node",
-  target: "es2022",
+  // No `target`: tsdown derives it from `engines.node`, the tools' floor (`^24.14.0 || >=25.5.0`: node24.14.0).
   outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
 });

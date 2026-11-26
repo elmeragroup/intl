@@ -12,6 +12,21 @@ Three touches per app:
 2. The host integration from `@elmeragroup/intl-tools`: Vite `intl()`, or Next `export default withIntl(config, { dir: import.meta.dirname })` in `next.config.ts` with `elmera-intl check && next build` and `elmera-intl extract --watch` beside `next dev` (tools README, "Hosts"), and the server adapter's `loadCatalog` importing the locale's PO (`./intl/nb.po`, `./intl/nb.po?source` for `en`).
 3. `<IntlProvider>` in the root layout (Next) or root route (Start), and `useLocaleSwitch(persist)` where the language is chosen (see "Adapter interface" below).
 
+## Engines
+
+The runtime's floor is ES2022: its own source calls no built-in later than ES2022. The build lowers syntax to ES2022
+(tsdown's `target`) but adds no polyfill, so a later built-in would throw on an older engine. `pnpm type-check` (not
+`pnpm tcw`) type-checks `src` against the ES2022 library (`tsconfig.floor.json`), and a call such as `toSorted`,
+`Object.groupBy`, a Set method or an iterator helper fails it, naming the fix (an ES2022 equivalent, never a higher
+`lib`). The later built-ins that `@types/node` and Effect's declarations add to that program (`DisposableStack`,
+`Float16Array`, `Symbol.dispose` and the like) fail lint instead, as does a `using` or `await using` declaration, which
+those declarations let through on any native iterator. The package declares no `engines`.
+
+Neither gate sees `DataView`'s float16 methods, a built-in reached through `globalThis`, the Node globals `@types/node`
+declares, the DOM's APIs, the `Intl.NumberFormat` options later than ES2022 a number style passes through as written
+(`roundingMode`, `useGrouping: "always"`; `cachedNumberFormat` in `src/icu.ts` says what an ES2022 engine does with
+them), or the third-party code bundled into `dist/internal/formatter.js`.
+
 ## API
 
 ```tsx

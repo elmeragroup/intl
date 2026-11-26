@@ -20,6 +20,7 @@ import { intl, intlCatalogs } from "../src/vite";
 import { intlPlugins } from "../src/vite-plugins";
 import type { WatchServices } from "../src/watch";
 import { CatalogSync } from "../src/watch";
+import { BetweenWalks } from "../src/watch-trees";
 import type { Project } from "./project-fixture";
 import type { DevEdit } from "./vite-project";
 import {
@@ -621,7 +622,14 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
           server: { watch },
         },
         events,
-        Layer.mergeAll(syncCatalogServices(), events.layer, Layer.succeedContext(clock))
+        // The poll's turn between two trees' walks on Effect's scheduler, which the test clock waits for (see
+        // `launch` in `watch-project.ts`).
+        Layer.mergeAll(
+          syncCatalogServices(),
+          events.layer,
+          Layer.succeedContext(clock),
+          Layer.succeed(BetweenWalks, Effect.yieldNow)
+        )
       );
 
       project.write("src/new.tsx", component("New"));

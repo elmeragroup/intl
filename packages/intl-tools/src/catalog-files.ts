@@ -20,7 +20,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, relative } from "node:path";
+import { dirname, relative, sep } from "node:path";
 
 import type { CatalogText } from "./catalog-plan";
 import { catalogPath } from "./project-catalogs";
@@ -153,6 +153,35 @@ const readTextIfExists = /* @__PURE__ */ Effect.fnUntraced(function* (
 });
 
 /**
+ * The first prefix of a path, as written, that does not resolve, when a `..` segment follows it (#29). It asks
+ * `files.exists`, which follows links (a dangling link does not resolve), about the prefix before the last `..`: when
+ * that resolves, so did every component before it. Only when it does not, it walks back to the first that does not,
+ * so it never asks about a directory above the deepest one that exists. Nothing is normalised; no `..` asks nothing.
+ *
+ * @param files - The file system.
+ * @param path - The path, exactly as read.
+ * @returns That prefix; undefined when every component before the last `..` resolves.
+ */
+const missingBeforeClimb = /* @__PURE__ */ Effect.fnUntraced(function* (
+  files: FileSystem.FileSystem,
+  path: string
+) {
+  const segments = path.split(sep);
+  const prefix = (end: number) => segments.slice(0, end).join(sep);
+  let end = segments.lastIndexOf("..");
+
+  if (end < 2 || (yield* files.exists(prefix(end)))) {
+    return undefined;
+  }
+
+  while (end > 2 && !(yield* files.exists(prefix(end - 1)))) {
+    end -= 1;
+  }
+
+  return prefix(end);
+});
+
+/**
  * A catalog's text as a watched sync's record is captured and compared with: undefined for a catalog deleted or
  * replaced by a directory. Synchronous: it opens the path without waiting for a FIFO's writer, and reads it only when
  * it is a regular file.
@@ -228,6 +257,8 @@ export class CatalogFiles
     {
       /** A catalog's text; undefined when it does not exist. */
       readonly read: (path: string) => Effect.Effect<string | undefined, ProjectIoFailed>;
+      /** The first prefix of a catalog's path that does not resolve, when a `..` follows it (`missingBeforeClimb`). */
+      readonly climbsOutOf: (path: string) => Effect.Effect<string | undefined, ProjectIoFailed>;
       /** A catalog's text; a catalog that does not exist fails as its read did. */
       readonly readExisting: (path: string) => Effect.Effect<string, ProjectIoFailed>;
       /**
@@ -263,6 +294,9 @@ export class CatalogFiles
       FileSystem.FileSystem.useSync((files) => ({
         read: Effect.fn("CatalogFiles.read")(function* (path: string) {
           return yield* readTextIfExists(files, path).pipe(Effect.mapError(platformFailed("read")));
+        }),
+        climbsOutOf: Effect.fn("CatalogFiles.climbsOutOf")(function* (path: string) {
+          return yield* missingBeforeClimb(files, path).pipe(Effect.mapError(platformFailed("read")));
         }),
         readExisting: Effect.fn("CatalogFiles.readExisting")(function* (path: string) {
           return yield* readText(files, path).pipe(Effect.mapError(platformFailed("read")));
@@ -303,11 +337,16 @@ export const readCatalog = /* @__PURE__ */ Effect.fnUntraced(function* (
 ) {
   const files = yield* CatalogFiles;
   const path = catalogPath(config, locale);
+  const text = yield* files.read(path);
+  const climbs = text === undefined ? yield* files.climbsOutOf(path) : undefined;
 
   return {
     locale,
     path,
     shown: relative(config.root, path),
-    text: yield* files.read(path),
+    text,
+    // As written: `jump/../fresh` through a link is not `fresh`.
+    climbsOutOf:
+      climbs?.startsWith(`${config.root}${sep}`) === true ? climbs.slice(config.root.length + 1) : climbs,
   } satisfies CatalogText;
 });

@@ -1,6 +1,5 @@
 // The watch's trees: which directories it watches, and how their changes are delivered, as native file events or as
 // polled walks. Each delivery is handed to the watch's `admit` as it happens (see `watch.ts`).
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -115,60 +114,91 @@ export const listenNative = /* @__PURE__ */ Effect.fnUntraced(function* (
   );
 });
 
+// A full turn of the event loop: two `setImmediate` turns, since one check-phase turn passes neither the timers nor the
+// I/O poll phase that came before it in the same loop iteration, and two always span every phase once, whichever phase
+// the walk ended in. Its own `setImmediate`, not Effect's yield, whose scheduling Effect does not promise; cleared on
+// interruption.
+const loopTurn: Effect.Effect<void> = /* @__PURE__ */ Effect.callback<void>((resume) => {
+  let pending = setImmediate(() => {
+    pending = setImmediate(() => {
+      resume(Effect.void);
+    });
+  });
+
+  return Effect.sync(() => {
+    clearImmediate(pending);
+  });
+});
+
+/**
+ * What a poll waits on between one tree's walk and the next, so the host's timers and I/O run before the next walk: a
+ * full turn of the event loop. A reference, so a watch on the test clock, which waits for no real `setImmediate`
+ * before it moves on, can wait on a turn of Effect's own scheduler instead.
+ */
+export const BetweenWalks = /* @__PURE__ */ Context.Reference<Effect.Effect<void>>(
+  "elmera-intl-tools/BetweenWalks",
+  {
+    defaultValue: () => loopTurn,
+  }
+);
+
 /**
  * Poll every tree, in the current scope: each tree's first walk is taken here, before the caller goes on (its first
  * sync), so no edit after it is missed, and the directories those walks cannot read are one item handed to `admit`.
- * Then each tree walks every `intervalMs` from its own first walk, on the monotonic clock (a wall-clock step moves no
- * walk), in a fiber of the scope: a walk that runs late, behind a slow first sync or another tree's slow walk, does not
- * move the next one, ticks missed meanwhile are skipped rather than piled up, and a tree's walks never overlap. A
- * walk's changes and the directories it newly cannot read are one item, handed to `admit` as the walk ends. Closing
- * the scope ends every walk; a walk's defect is the `supervised` wrapper's to handle.
+ * Then one fiber of the scope walks every tree again, in order (a round), but not before `firstSynced` has completed: a
+ * walk is synchronous and holds the event loop, so walks during the first sync would take the turns its I/O needs, and
+ * once a walk took longer than the interval the start would barely advance (#82). The first later round starts
+ * `intervalMs` after the first sync, and each later one `intervalMs` after the previous round ended: a relative sleep,
+ * so a wall-clock step moves no walk, the event loop is free for at least an interval between rounds, however long
+ * the walks of the trees together take, and no walks overlap. The first sync's result and the ready line are queued
+ * before that first interval starts, so a writer that writes them within it does so before the next walk. In the later
+ * rounds, between one tree's walk and the next, the poll waits on `BetweenWalks`, a full turn of the event loop, so the
+ * host's timers and I/O run between them (the first walks run back to back). A start therefore costs one round plus
+ * the first sync, whatever the interval; a save made during the first sync is delivered by the round one interval
+ * after it.
+ *
+ * The bound on noticing a change, once the first sync has completed: a change is delivered by the next round to start,
+ * at most `intervalMs` after the round in progress at the change ends (or, between rounds, after the last one ended,
+ * the first sync's completion included), so within one interval plus two rounds of the change, as far as the event
+ * loop is free to wake the poll. Each walk's changes and the directories it newly cannot read are one item, handed to
+ * `admit` as that tree's walk ends. Closing the scope ends every walk; a walk's defect is the `supervised` wrapper's to
+ * handle.
  *
  * @param dirs - The trees.
- * @param intervalMs - Milliseconds between a tree's walks.
+ * @param intervalMs - Milliseconds from the end of a round of walks (or of the first sync) to the start of the next.
  * @param prune - Whether a directory is left unwalked.
  * @param admit - Takes the first walks' item, then each later walk's.
- * @param supervised - Wraps each tree's walking fiber, so its defect reaches the watch.
- * @returns An effect that takes the first walks and starts the later ones in its scope.
+ * @param supervised - Wraps the fiber that walks the rounds, so a walk's defect reaches the watch.
+ * @param firstSynced - Completes when the first sync has run; no round after the first starts until an interval after.
+ * @returns An effect that takes the first walks and starts the later rounds in its scope.
  */
 export const startPolling = /* @__PURE__ */ Effect.fnUntraced(function* (
   dirs: ReadonlyArray<string>,
   intervalMs: number,
   prune: (directory: string) => boolean,
   admit: (item: Intake) => void,
-  supervised: (walking: Effect.Effect<void>) => Effect.Effect<void>
+  supervised: (walking: Effect.Effect<void>) => Effect.Effect<void>,
+  firstSynced: Effect.Effect<void>
 ) {
-  const clock = yield* Clock.Clock;
-  const interval = BigInt(intervalMs) * 1_000_000n;
-  const trees = dirs.map((dir) => ({
-    dir,
-    first: snapshot(dir, prune),
-    walked: clock.monotonicTimeNanosUnsafe(),
-  }));
-  admit({ problems: trees.flatMap(({ first }) => newlyUnreadable(first, undefined)), changes: [] });
-
-  for (const { dir, first, walked } of trees) {
-    let previous = first;
-    let due = walked + interval;
-    // Waits for the tree's next tick, then times the one after it from its own cadence.
-    const tick = Effect.gen(function* () {
-      const now = clock.monotonicTimeNanosUnsafe();
-
-      if (now < due) {
-        yield* Effect.sleep(Duration.nanos(due - now));
+  const betweenWalks = yield* BetweenWalks;
+  const trees = dirs.map((dir) => ({ dir, previous: snapshot(dir, prune) }));
+  admit({ problems: trees.flatMap(({ previous }) => newlyUnreadable(previous, undefined)), changes: [] });
+  // Every tree in order, an event-loop turn between two walks; each walk's changes handed over as it ends.
+  const round = Effect.gen(function* () {
+    for (const [index, tree] of trees.entries()) {
+      if (index > 0) {
+        yield* betweenWalks;
       }
 
-      const woke = clock.monotonicTimeNanosUnsafe();
-      due += interval * ((woke > due ? (woke - due) / interval : 0n) + 1n);
-    });
-    const walk = Effect.sync(() => {
-      const current = snapshot(dir, prune);
-      const before = previous;
-      previous = current;
-      admit({ problems: newlyUnreadable(current, before), changes: changes(dir, before, current) });
-    });
-    yield* Effect.forkScoped(supervised(Effect.forever(tick.pipe(Effect.andThen(walk)))));
-  }
+      const current = snapshot(tree.dir, prune);
+      const before = tree.previous;
+      tree.previous = current;
+      admit({ problems: newlyUnreadable(current, before), changes: changes(tree.dir, before, current) });
+    }
+  });
+  // The sleep follows the round's last hand-over, so the time the walks and their changes take never comes out of it.
+  const later = Effect.forever(Effect.sleep(Duration.millis(intervalMs)).pipe(Effect.andThen(round)));
+  yield* Effect.forkScoped(supervised(firstSynced.pipe(Effect.andThen(later))));
 });
 
 // What a poll compares a path by: nanosecond change and modification times and the size, so a rewrite within one

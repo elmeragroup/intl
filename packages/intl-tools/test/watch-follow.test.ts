@@ -324,7 +324,8 @@ describe("followConfig", () => {
   );
 
   // A restart's watch says when its first sync's result is written (`Restarted`), after any warning its trees gave
-  // first (an unreadable directory, polling): a host that tells open tabs on it does so once the new catalogs exist.
+  // first (an unreadable directory, polling): it follows that sync's result, which can be a failure or a superseded sync,
+  // and a later sync that reports what it wrote reports `Written` (one that writes some POs and then fails, `Failed`).
   it.effect("reports a restart after the new watch's first sync, past its warnings", ({ project }) =>
     Effect.gen(function* () {
       project.lock("src/locked");

@@ -1,0 +1,11 @@
+{
+  // The runtime's floor: its source type-checks against the ES2022 library, so a call to a later built-in
+  // (`toSorted`, `Object.groupBy`, a Set method) fails `pnpm type-check`. tsdown lowers syntax to `target` but adds no
+  // polyfill, so such a call would throw on an ES2022 engine. @types/node (the shared `types: ["node"]`) and
+  // Effect's declarations pull in `esnext.float16` and `esnext.disposable` themselves, which no lib setting here
+  // removes: the `packages/intl/src/**` override in .oxlintrc.json restricts those built-ins, and `using`, instead.
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "lib": ["es2022", "dom", "dom.iterable"]
+  }
+}
