@@ -1,0 +1,12 @@
+---
+"@elmeragroup/intl": minor
+"@elmeragroup/intl-tools": minor
+---
+
+The peer ranges are now the versions CI tests, each with a ceiling at its tested major:
+
+- `@elmeragroup/intl-tools` takes `vite` `^8.2.0` (was `>=6.0.0`), the lowest Vite the tools' tests pass on (#96 tracks widening it). Vite 6 and 7 are outside it because CI cannot run the tools' tests on them (part of the harness is written for Rolldown). Below 8.2 the known defects are a build watch's: on 8.0 it misses rebuilds (after a source edit it does not check the catalogs again, and it does not recover once a missing PO or catalog directory is created), on 8.1 one that should stay idle after a missing config is created reports extra changes to the project directory; and the plugin's own under a symlinked project root (macOS's `/var` temp directories), 8.1 included: its catalog paths and watch filtering come out through the link (`../../…/private/var/…/messages/sv.po is not a configured catalog`), so its errors and watch go wrong (#96). Upgrade Vite to `^8.2.0`.
+- `next` is `^16.4.0` in both packages (was `>=16.4.0`), and `@tanstack/react-router` is `^1.170.0` in `@elmeragroup/intl` (was `>=1.170.0`), so a new major is outside the range until it is tested. With `@elmeragroup/intl/start`, keep `@tanstack/react-start` and the router it pins aligned, since each react-start release depends on one exact router version; the tested floor pair is react-start 1.168.0 with router 1.170.0.
+- `@elmeragroup/intl-tools` declares `vitest` `^5.0.0` as an optional peer, for its `/vitest` global setup and the module-cache hook of `intlCatalogs()`. The hook no longer falls back to Vitest 4's `experimental_defineCacheKeyGenerator`. On Vitest 3 and 4 it registers nothing, so a run does not fail there, but on Vitest 4 with its experimental module cache turned on (`experimental.fsModuleCache`), a run after an edit of `elmera-intl.json` or of its formats module can reuse the old compiled catalog. Upgrade Vitest to 5 (#97 tracks Vitest 4.1). Both Vite and Vitest are optional peers, so an app that uses only `/next` need not install either, but an installed one outside its range, also one another package brings in (Vitest 4, or a Vite below 8.2), is a peer conflict, which npm can refuse (`ERESOLVE`, for example when the app pins that version itself), and pnpm reports as a warning, or as an error with `strictPeerDependencies`.
+
+`react` (`^19.0.0`) and `effect` (`^4.1.3`) are unchanged.

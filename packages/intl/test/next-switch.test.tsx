@@ -1,5 +1,15 @@
 import type { ReactNode } from "react";
-import { act, Activity, Component, startTransition, Suspense, use, useLayoutEffect, useState } from "react";
+import {
+  act,
+  Activity,
+  Component,
+  startTransition,
+  Suspense,
+  use,
+  useLayoutEffect,
+  useState,
+  version as REACT_VERSION,
+} from "react";
 
 // @vitest-environment jsdom
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
@@ -15,6 +25,29 @@ import { fakeServer, sweepSettlement } from "./switch-settlement";
 
 // Persist resolves on its own schedule (a held fake server), outside act().
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false });
+
+// `Activity` is React 19.2's. Below it (the floor, 19.0.0) a visible mount renders its children bare, as a visible
+// Activity does, and only the rows that hide one skip. Keyed on React's version, so the catalog's React skips none.
+const [REACT_MAJOR = 0, REACT_MINOR = 0] = REACT_VERSION.split(".").map(Number);
+const HAS_ACTIVITY = REACT_MAJOR > 19 || (REACT_MAJOR === 19 && REACT_MINOR >= 2);
+
+function Placed({
+  activity,
+  children,
+}: {
+  readonly activity: "visible" | "hidden";
+  readonly children: ReactNode;
+}) {
+  if (HAS_ACTIVITY) {
+    return <Activity mode={activity}>{children}</Activity>;
+  }
+
+  if (activity === "hidden") {
+    throw new Error(`a hidden Activity needs React 19.2, not ${REACT_VERSION}`);
+  }
+
+  return children;
+}
 
 type Mounted = {
   readonly pending: () => string | null | undefined;
@@ -579,9 +612,9 @@ function mountSwitcher(initial: SwitcherProps) {
       root.render(
         <Boundary>
           <AppRouterContext.Provider value={router}>
-            <Activity mode={activity}>
+            <Placed activity={activity}>
               <Switcher persist={persist} options={options} label={label} />
-            </Activity>
+            </Placed>
           </AppRouterContext.Provider>
         </Boundary>
       );
@@ -674,9 +707,10 @@ describe("Next useLocaleSwitch when its mount changes while a switch is queued",
 
   // Inside a hidden Activity, React disconnects layout and passive effects, but the commit still lands: the switch
   // must use the props the hidden switcher committed (its label shows which), not the ones before it was hidden.
-  it.each([["visible"], ["hidden"]] as const)(
+  it.for([["visible"], ["hidden"]] as const)(
     "runs a queued switch with the persist and refresh mode committed together while it waited (%s)",
-    async (activity) => {
+    async ([activity], { skip }) => {
+      skip(activity === "hidden" && !HAS_ACTIVITY, "a hidden Activity needs React 19.2");
       const { server, rendered, router, action } = recordingServer();
       const app = mountSwitcher({
         router,

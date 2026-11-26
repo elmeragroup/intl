@@ -24,7 +24,7 @@ describe("parseJsonc", () => {
 describe("catalogEntries", () => {
   it("reads a version with a trailing comment", () => {
     expect(catalogEntries("packages:\n  - packages/*\ncatalog:\n  next: ^16.4.0 # widen\n")).toEqual([
-      { name: "next", version: "^16.4.0" },
+      { catalog: "default", name: "next", version: "^16.4.0" },
     ]);
   });
 
@@ -34,8 +34,8 @@ describe("catalogEntries", () => {
         `catalog:\n  "@types/node": 26.6.5\ncatalogs:\n  react19:\n    react: 19.3.1\nminimumReleaseAge: 4320\n`
       )
     ).toEqual([
-      { name: "@types/node", version: "26.6.5" },
-      { name: "react", version: "19.3.1" },
+      { catalog: "default", name: "@types/node", version: "26.6.5" },
+      { catalog: "react19", name: "react", version: "19.3.1" },
     ]);
   });
 });
