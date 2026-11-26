@@ -224,6 +224,27 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       .toContain(`msgid "New"\nmsgstr ""`);
   });
 
+  // Unit under test: the dev plugin's watch as the dev server closes, when a tree's watcher fails to close. Oracle: the
+  // close contract, by hand: Vite awaits every `closeBundle` under `Promise.allSettled`, so a rejection would be read by
+  // no one; the watch's end during the close is the server's logger's to report, and the close settles.
+  it("logs a watcher's failure to close as the dev server closes", async ({ project }) => {
+    const events = deliveredEvents({ closeFails: new Error("watcher close failed") });
+    const errors: Array<string> = [];
+    const server = await devServer(project, {
+      customLogger: {
+        ...createLogger("silent"),
+        error: (message) => {
+          errors.push(message);
+        },
+      },
+      plugins: intlPlugins({}, countedServices(CatalogSync.layer(), events.layer).layer),
+    });
+
+    await project.within(server.close(), "the close");
+
+    expect(errors).toEqual(["elmera-intl: the catalog watch ended: watcher close failed"]);
+  });
+
   // Unit under test: the dev plugin's watch, as a dev server starts and closes it. Oracle: layer 2's plugin, by hand:
   // closing the dev server closes the watch, so every file watcher it opened is closed. A close during the watch's start
   // is the hook-level test below.
@@ -449,6 +470,51 @@ describe("intl() vite plugin", { timeout: 15_000 }, () => {
       [1, 0],
       [2, 1],
       [2, 2],
+    ]);
+  });
+
+  // Unit under test: the built `intl()` in a dev server whose watch ends after its start, with no close coming: a
+  // source save's report throws, and so does its SyncFailed (the logger is armed once the server has started). Oracle:
+  // Node's own report of an uncaught error, by hand: nothing is left to report the watch's end, so it ends the process,
+  // as a report that threw always did, with an error naming its owner and carrying the logger's failure as its cause.
+  it("crashes the process with an error naming the catalog watch when it ends on its own", ({ project }) => {
+    const script = `
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      import { createLogger, createServer } from "vite";
+      import { intl } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL("../dist/vite.js", import.meta.url))).href)};
+      const [root, source] = process.argv.slice(1);
+      let armed = false;
+      const gone = () => {
+        if (armed) {
+          throw new Error("logger gone");
+        }
+      };
+      await createServer({
+        root,
+        configFile: false,
+        server: { watch: { usePolling: true, interval: 50 } },
+        customLogger: { ...createLogger("silent"), info: gone, error: gone },
+        plugins: [intl()],
+      });
+      armed = true;
+      writeFileSync(join(root, "src/new.tsx"), source);
+    `;
+    const child = spawnSync(
+      execPath,
+      ["--input-type=module", "--eval", script, project.root, component("New")],
+      {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        encoding: "utf8",
+        ...project.spawnGuard(),
+      }
+    );
+
+    expect([child.status, child.stderr]).toEqual([
+      1,
+      expect.stringMatching(
+        /Error: elmera-intl: the catalog watch ended[\s\S]*\[cause\]: Error: logger gone/u
+      ),
     ]);
   });
 

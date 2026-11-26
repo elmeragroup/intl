@@ -336,23 +336,33 @@ export function switchFormats(project: Project, config: string): DevEdit {
  * @returns The server.
  */
 export async function devServer(project: Project, config: InlineConfig): Promise<ViteDevServer> {
-  const server = await createServer({ root: project.root, configFile: false, logLevel: "silent", ...config });
-  project.defer(() => server.close());
+  const opening = createServer({ root: project.root, configFile: false, logLevel: "silent", ...config });
+  // Registered as the server starts, its close chained onto the start, so a server that opens past the deadline is
+  // still closed; bounded by the deadline, so a close that never settles fails the test rather than hanging its worker.
+  project.defer(() =>
+    project.within(
+      opening.then(
+        (server) => server.close(),
+        () => undefined
+      ),
+      "the start and its close at teardown"
+    )
+  );
 
-  return server;
+  return opening;
 }
 
-/** The plugins' real services, their runtimes counted. */
+/** The plugins' real services, their builds counted. */
 export type CountedServices = {
   /** The services, for `intlPlugins`. */
   readonly layer: Layer.Layer<WatchServices | ProjectServices>;
-  /** `[built, disposed]`: each session's runtime builds its services once and disposes them once. */
+  /** `[built, released]`: each session (a build's runtime, a dev server's watch) builds its services once and releases them once. */
   readonly counts: () => ReadonlyArray<number>;
 };
 
 /**
- * The plugins' real services, their runtimes counted: each session's runtime builds its services once and disposes
- * them once, so `[built, disposed]` counts the sessions begun and ended.
+ * The plugins' real services, their builds counted: each session (a build's runtime, a dev server's watch) builds its
+ * services once and releases them once, so `[built, released]` counts the sessions begun and ended.
  *
  * @param sync - The watch's sync step; `CatalogSync.layer()` unless a test holds it.
  * @param events - The platform's file events; `FileEvents.layer()` unless a test delivers its own.
