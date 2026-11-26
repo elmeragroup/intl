@@ -129,9 +129,74 @@ it.each([
   ]);
 });
 
-// Turbopack resolves no file outside its root, so such a catalog could never load.
-it("rejects catalogs outside the Turbopack root", () => {
-  expect(() => rulePaths("../messages/{locale}.po", "apps/web")).toThrow(/outside the Turbopack root/u);
+// Unit under test: withIntl's catalogs check. Oracle: Turbopack resolves no file outside its root, so such a catalog
+// could never load; Next 16.4.6 makes `outputFileTracingRoot` Turbopack's root when set, over `turbopack.root`
+// (server/config.js), so the fix names the setting that decides it.
+it.each([
+  { setting: "turbopack.root", next: (root: string): IntlNextConfig => ({ turbopack: { root } }) },
+  {
+    setting: "outputFileTracingRoot",
+    next: (root: string): IntlNextConfig => ({ outputFileTracingRoot: root, turbopack: { root: workspace } }),
+  },
+])("rejects catalogs outside the Turbopack root, naming $setting", ({ setting, next }) => {
+  installNext(".");
+  writeIntlConfig("../messages/{locale}.po");
+  const app = join(workspace, "apps/web");
+
+  expect(() => withIntl(next(app), { dir: app })).toThrow(
+    `withIntl: the catalogs ../messages/{locale}.po are outside the Turbopack root ${app}, which resolves no file outside it; set ${setting} to a directory that holds both the app and the catalogs`
+  );
+});
+
+// Unit under test: withIntl given `experimental` values only an untyped next.config.mjs can write. Oracle: Next's
+// documented shape for additional roots is `{ [name]: { path } }` (config-shared.d.ts), and next.config loads in
+// processes that compile nothing (`next start`, a custom server), so withIntl reads any other value as no additional
+// root rather than failing on it.
+it.each([
+  { name: "null experimental", experimental: null },
+  { name: "a string experimental", experimental: "on" },
+  { name: "null additional roots", experimental: { turbopackAdditionalRoots: null } },
+  { name: "a string of additional roots", experimental: { turbopackAdditionalRoots: "../shared" } },
+  {
+    name: "additional roots of no { path } shape, or that do not resolve",
+    experimental: {
+      turbopackAdditionalRoots: {
+        none: null,
+        text: "../shared",
+        pathless: {},
+        numbered: { path: 4 },
+        record: { path: { __proto__: null } },
+        missing: { path: "/elmera-intl-missing/shared" },
+      },
+    },
+  },
+  {
+    name: "an experimental whose setting throws when read",
+    experimental: {
+      get adapterPath(): string {
+        throw new Error("read");
+      },
+    },
+  },
+  {
+    name: "an additional root whose path throws when read",
+    experimental: {
+      turbopackAdditionalRoots: {
+        shared: {
+          get path(): string {
+            throw new Error("read");
+          },
+        },
+      },
+    },
+  },
+])("accepts $name", ({ experimental }) => {
+  // With Next installed, withIntl reads every setting through to Next's own default.
+  installNext("apps/web");
+  writeIntlConfig("intl/{locale}.po");
+  const app = join(workspace, "apps/web");
+
+  expect(() => withIntl({ turbopack: { root: app }, experimental }, { dir: app })).not.toThrow();
 });
 
 // Unit under test: withIntl inside a next.config.mjs, loaded by Next's own loadConfig as `next build apps/web` does,

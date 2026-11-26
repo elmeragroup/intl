@@ -4,11 +4,13 @@
 // one process.
 import { statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE, loadConfig } from "./project-config";
+import type { TurbopackRoot, TurbopackRoots } from "./turbopack-roots";
+import { canonical, isBelow } from "./turbopack-roots";
 
 /** Options for `withIntl`. */
 export type WithIntlOptions = {
@@ -53,6 +55,11 @@ export type PoLoaderOptions = {
   readonly config: string;
   /** Compile the msgids as the English catalog (`?source`). */
   readonly source: boolean;
+  /**
+   * Turbopack's roots, outside which the loader registers no dependency and fails the import with the fix; absent when
+   * Next selects an adapter, which may add roots after next.config is evaluated.
+   */
+  readonly roots?: TurbopackRoots;
 };
 
 const PO_GLOB = "*.po";
@@ -106,7 +113,8 @@ export function withIntl<C extends object & IntlNextConfig>(
   const path = catalogPathPattern(loaded.config, root);
   const aliases = requestAliases(config, options);
   const existing = new Map<string, unknown>(Object.entries(config.turbopack?.rules ?? {})).get(PO_GLOB);
-  const ours = [poRule(path, configPath, true), poRule(path, configPath, false)];
+  const roots = loaderRoots(config, root, options.dir);
+  const ours = [poRule(path, configPath, true, roots), poRule(path, configPath, false, roots)];
   const turbopack = {
     ...config.turbopack,
     rules: {
@@ -268,8 +276,8 @@ function requestTarget(options: WithIntlOptions): string | undefined {
   return below.startsWith("../") ? below : `./${below}`;
 }
 
-function poRule(path: RegExp, config: string, source: boolean) {
-  const options: PoLoaderOptions = { config, source };
+function poRule(path: RegExp, config: string, source: boolean, roots: TurbopackRoots | undefined) {
+  const options: PoLoaderOptions = roots === undefined ? { config, source } : { config, source, roots };
 
   return {
     condition: {
@@ -280,18 +288,18 @@ function poRule(path: RegExp, config: string, source: boolean) {
   };
 }
 
-// Turbopack's root as Next 16.4 sets it (server/config.js): `outputFileTracingRoot`, else `turbopack.root`, else Next's
-// own detection from the project directory (lib/find-root.js: the topmost workspace marker or lockfile, bounded by
+// Turbopack's root as Next 16.4 sets it (server/config.js), and the setting that decides it: `outputFileTracingRoot`
+// (Next uses it over `turbopack.root`, warning when they differ), else `turbopack.root`, else Next's own detection from the project directory (lib/find-root.js: the topmost workspace marker or lockfile, bounded by
 // the git repository and the home directory), called rather than ported so the root always matches the installed Next.
 // Relative settings resolve against the working directory, as Next's do (a bare `resolve()`). Next's private
 // NEXT_PRIVATE_OUTPUT_TRACE_ROOT override, which replaces the detection, is left out: no build here sets it.
-function turbopackRoot(config: IntlNextConfig, app: string): string {
-  const configured = [config.outputFileTracingRoot, config.turbopack?.root].find(
-    (root) => root !== undefined && root !== ""
-  );
+function turbopackRoot(config: IntlNextConfig, app: string): TurbopackRoot {
+  if (config.outputFileTracingRoot !== undefined && config.outputFileTracingRoot !== "") {
+    return { root: resolve(config.outputFileTracingRoot), setting: "outputFileTracingRoot" };
+  }
 
-  if (configured !== undefined) {
-    return resolve(configured);
+  if (config.turbopack?.root !== undefined && config.turbopack.root !== "") {
+    return { root: resolve(config.turbopack.root), setting: "turbopack.root" };
   }
 
   // SAFETY: Next's own module (unexported, so untyped), present in every Next >= 16.4 that runs this config; the
@@ -302,18 +310,72 @@ function turbopackRoot(config: IntlNextConfig, app: string): string {
     readonly findRootDirAndLockFiles: (dir: string) => { readonly rootDir: string };
   };
 
-  return findRootDirAndLockFiles(app).rootDir;
+  return { root: findRootDirAndLockFiles(app).rootDir, setting: "turbopack.root" };
+}
+
+// The settings loaderRoots reads, as an untyped next.config.mjs may hold them: anything, a getter that throws included.
+type LoaderRootsConfig = IntlNextConfig & {
+  readonly adapterPath?: unknown;
+  readonly experimental?: {
+    readonly adapterPath?: unknown;
+    readonly turbopackAdditionalRoots?: Readonly<Record<string, { readonly path?: unknown } | null>> | null;
+  } | null;
+};
+
+// The roots the PO loader checks its dependencies against, or none when Next selects an adapter (`adapterPath`,
+// `experimental.adapterPath`, or Next's default for it, NEXT_ADAPTER_PATH as config-shared.js read it when Next loaded
+// it): Next runs an adapter's `modifyConfig` after it evaluates next.config, and it may add roots. None too when a
+// setting cannot be read (a getter that throws, no Next installed in `app`): withIntl stays total and errs towards
+// accepting. The settings are read by name, before Next's module: Next's config clone keeps non-enumerable ones.
+function loaderRoots(
+  config: LoaderRootsConfig,
+  root: TurbopackRoot,
+  app: string
+): TurbopackRoots | undefined {
+  try {
+    const selected = Boolean(config.adapterPath) || Boolean(config.experimental?.adapterPath);
+    const additional = additionalRoots(config.experimental?.turbopackAdditionalRoots ?? {});
+    // SAFETY: Next's own module (unexported, so untyped), present in every Next >= 16.4 that runs this config; the
+    // po-loader.test.ts refusal rows go red if its shape changes (the catch then passes no roots).
+    const { defaultConfig } = createRequire(resolve(app, "package.json"))(
+      "next/dist/server/config-shared.js"
+    ) as {
+      readonly defaultConfig: { readonly adapterPath?: string };
+    };
+
+    return selected || Boolean(defaultConfig.adapterPath) ? undefined : { ...root, additional };
+  } catch {
+    return undefined;
+  }
+}
+
+// The directories `experimental.turbopackAdditionalRoots` names, read as Next reads them: its config clone
+// (server/config.js, cloneObject) keeps every own key, non-enumerable data properties made enumerable, before
+// build/swc reads the entries and their `path`. Each resolves from the working directory through its links
+// (crates/next-api/src/additional_roots.rs); one that does not resolve yet (made later in the build) is kept as
+// written, absolute; an entry of no `{ path }` string is left out. Every other entry counts, though Next drops some
+// (one missing when Turbopack starts, one that overlaps the root or an earlier one): a file there then misses a
+// refusal, never gets a false one.
+function additionalRoots(
+  entries: NonNullable<NonNullable<LoaderRootsConfig["experimental"]>["turbopackAdditionalRoots"]>
+): ReadonlyArray<string> {
+  return Object.getOwnPropertyNames(entries).flatMap((key) => {
+    const path = entries[key]?.path;
+
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- additionalRoots parses untyped next.config values, and typeof reads a string without coercing an object (String() of a null-prototype object throws)
+    return typeof path === "string" && path !== "" ? [canonical(path) ?? resolve(path)] : [];
+  });
 }
 
 // The catalogs pattern as a RegExp over the path Turbopack matches: the catalog's path relative to its root, with
 // `{locale}` one path segment. Only regex metacharacters are escaped, with plain backslashes (not RegExp.escape's hex
 // escapes): Turbopack evaluates the pattern in its own engine.
-function catalogPathPattern(config: ProjectConfig, root: string): RegExp {
+function catalogPathPattern(config: ProjectConfig, { root, setting }: TurbopackRoot): RegExp {
   const catalogs = resolve(config.root, config.catalogs);
 
   if (!isBelow(root, catalogs)) {
     throw new Error(
-      `withIntl: the catalogs ${config.catalogs} are outside the Turbopack root ${root}, which resolves no file outside it; set turbopack.root to a directory that holds both the app and the catalogs`
+      `withIntl: the catalogs ${config.catalogs} are outside the Turbopack root ${root}, which resolves no file outside it; set ${setting} to a directory that holds both the app and the catalogs`
     );
   }
 
@@ -326,13 +388,6 @@ function catalogPathPattern(config: ProjectConfig, root: string): RegExp {
 
   // oxlint-disable-next-line require-unicode-regexp -- Turbopack evaluates this pattern's source in its own engine, not as a JS RegExp, so a JS flag is not part of what it reads
   return new RegExp(`^${pattern}$`);
-}
-
-// Whether a path lies in a directory, or is it.
-function isBelow(directory: string, path: string): boolean {
-  const below = relative(directory, path);
-
-  return below !== ".." && !below.startsWith(`..${sep}`) && !isAbsolute(below);
 }
 
 function escape(text: string): string {

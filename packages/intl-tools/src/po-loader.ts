@@ -3,6 +3,10 @@
 import type { CatalogImport } from "./catalog-import";
 import { compileCatalogImport } from "./catalog-import";
 import type { PoLoaderOptions } from "./next";
+import type { Problem } from "./problem";
+import { describeProblem } from "./problem";
+import type { TurbopackRoots } from "./turbopack-roots";
+import { isInRoots } from "./turbopack-roots";
 
 /** The part of Turbopack's webpack-loader context the loader uses. */
 type LoaderContext = {
@@ -47,9 +51,11 @@ async function run(
   }
 }
 
-// The import's outcome, every dependency it reports registered first, failed or not.
+// The import's outcome, every dependency it reports inside Turbopack's roots registered first, failed or not. Turbopack
+// fails an import on a dependency outside its roots with its own error, before the callback's, so the loader registers
+// none and fails the import with the placement instead, whatever its own outcome.
 function compile(context: LoaderContext, po: string): CatalogImport["outcome"] {
-  const { config, source } = context.getOptions();
+  const { config, source, roots } = context.getOptions();
   const { dependencies, outcome } = compileCatalogImport({
     config,
     file: context.resourcePath,
@@ -57,9 +63,40 @@ function compile(context: LoaderContext, po: string): CatalogImport["outcome"] {
     source,
   });
 
+  const outside: Array<string> = [];
+
   for (const dependency of dependencies) {
-    context.addDependency(dependency);
+    if (roots === undefined || isInRoots(roots, dependency)) {
+      context.addDependency(dependency);
+    } else {
+      outside.push(dependency);
+    }
   }
 
-  return outcome;
+  if (roots === undefined || outside.length === 0) {
+    return outcome;
+  }
+
+  const problems = outside.map((file) =>
+    describeProblem(placement(roots, file, file === config ? "the intl config" : "the formats module"))
+  );
+
+  return { _tag: "Failed", error: new Error(problems.join("\n")) };
+}
+
+// The problem with a dependency outside Turbopack's roots: the intl config, or the formats module it names.
+function placement(
+  roots: TurbopackRoots,
+  file: string,
+  what: "the intl config" | "the formats module"
+): Problem {
+  const additional =
+    roots.additional.length === 0 ? "" : ` and its additional roots ${roots.additional.join(", ")}`;
+
+  return {
+    code: "OutsideTurbopackRoots",
+    message: `${what} is outside the Turbopack root ${roots.root}${additional}, so Turbopack cannot load it as a dependency of this catalog import`,
+    fix: `set ${roots.setting} to a directory that holds the app, the intl config, its formats module and its catalogs, or list a directory that holds the file, and neither holds nor lies in the Turbopack root, in experimental.turbopackAdditionalRoots`,
+    file,
+  };
 }
