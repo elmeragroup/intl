@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type { HotPayload, InlineConfig, Plugin, ViteDevServer } from "vite";
 import { createLogger, createServer } from "vite";
 import { describe, expect } from "vitest";
@@ -31,95 +31,8 @@ import {
 } from "./vite-project";
 import { deliveredEvents, syncing } from "./watch-project";
 
-// The config with one more locale, and with another.
+// The config with one more locale.
 const SV_CONFIG = { ...CONFIG, locales: ["nb", "sv"] };
-const FI_CONFIG = { ...CONFIG, locales: ["nb", "fi"] };
-
-/** Vite's reports of a change to `elmera-intl.json`, seen from a plugin that runs last. */
-type ConfigClock = {
-  /** The plugin, placed after `intl()`'s. */
-  readonly plugin: Plugin;
-  /** How many reports every plugin's `watchChange` has been called for. */
-  readonly reported: () => number;
-  /** How many reports Vite has finished handling: each one's `hotUpdate`, after it awaited every `watchChange`. */
-  readonly handled: () => number;
-  /**
-   * Whether the server's close has called every plugin's `closeBundle`: Vite calls them in order, each without
-   * waiting for the last, so `intl()`'s has entered its close by then.
-   */
-  readonly closing: () => boolean;
-};
-
-// Vite calls every plugin's `watchChange` for a report together (in the client environment alone, by default), awaits
-// them all, then runs each plugin's `hotUpdate` in turn, the client environment's first. So once this plugin's
-// `hotUpdate` has run for every report its `watchChange` saw, `intl()`'s `watchChange` has settled for each of them.
-function configClock(): ConfigClock {
-  let reported = 0;
-  let handled = 0;
-  let closing = false;
-  const isConfig = (file: string) => file.endsWith("/elmera-intl.json");
-
-  return {
-    plugin: {
-      name: "config-clock",
-      enforce: "post",
-      watchChange(id) {
-        if (isConfig(id)) {
-          reported += 1;
-        }
-      },
-      hotUpdate({ file }) {
-        if (this.environment.name === "client" && isConfig(file)) {
-          handled += 1;
-        }
-      },
-      closeBundle() {
-        closing = true;
-      },
-    },
-    reported: () => reported,
-    handled: () => handled,
-    closing: () => closing,
-  };
-}
-
-// Makes `edit` (again each probe interval, until Vite reports a change after it: a poll watcher can miss a write made
-// before it attached), and returns once Vite has handled every report so far. A report Vite made after the edit was
-// written is among them, and `intl()`'s follow of it read the config after the edit.
-async function untilHandled(project: Project, clock: ConfigClock, edit: () => void): Promise<void> {
-  const before = clock.reported();
-  await expect
-    .poll(
-      () => {
-        if (clock.reported() === before) {
-          edit();
-        }
-
-        return clock.reported() > before && clock.handled() === clock.reported();
-      },
-      { ...project.guard(), interval: PROBE_INTERVAL_MS }
-    )
-    .toBe(true);
-}
-
-// How many notices naming the project's config the dev server has sent open tabs, from now on.
-function toldConfig(server: ViteDevServer): () => number {
-  let told = 0;
-  const { hot } = server.environments.client;
-  const send = hot.send.bind(hot);
-  hot.send = (payload: HotPayload) => {
-    if (
-      payload.type === "custom" &&
-      payload.event === CATALOG_UPDATE_EVENT &&
-      JSON.stringify(payload.data) === JSON.stringify({ file: join(server.config.root, "elmera-intl.json") })
-    ) {
-      told += 1;
-    }
-    send(payload);
-  };
-
-  return () => told;
-}
 
 // Writes the project's config.
 function save(project: Project, text: string): () => void {
@@ -135,45 +48,60 @@ function catalog(project: Project, locale: string): string {
   return existsSync(project.path(path)) ? project.read(path) : "(missing)";
 }
 
-// Whether the dev server's own watcher watches `file`, an existing file, by its directory's realpath (as Vite roots it).
-function watchedBy(server: ViteDevServer, file: string): boolean {
-  return server.watcher.getWatched()[realpathSync(dirname(file))]?.includes(basename(file)) === true;
-}
-
-// Records every path a plugin adds to the dev server's watcher, from a plugin that configures the server first.
-function watcherAdds() {
-  const added: Array<string> = [];
-
+// A logger that records every info line, and every error line in `errors` when given; it drops the rest.
+function recording(infos: Array<string>, errors: Array<string> = []): InlineConfig["customLogger"] {
   return {
-    plugin: {
-      name: "records-watcher-adds",
-      enforce: "pre",
-      configureServer(server) {
-        const add = server.watcher.add.bind(server.watcher);
-        server.watcher.add = (paths) => {
-          added.push(...[paths].flat());
-
-          return add(paths);
-        };
-      },
-    } satisfies Plugin,
-    added: (): ReadonlyArray<string> => added,
+    ...createLogger("silent"),
+    info: (message) => {
+      infos.push(message);
+    },
+    error: (message) => {
+      errors.push(message);
+    },
   };
 }
 
-// A dev server config on the project that `clock` watches: rooted at the project, or at `app/` below it with
-// `intl()`'s config pointing up at the project's, outside the Vite root.
-function followingServer(project: Project, outside: boolean, clock: ConfigClock): InlineConfig {
-  if (!outside) {
-    return { server: SERVER_WATCH, plugins: [intl(), clock.plugin] };
-  }
+// Waits until the dev plugin has logged the watch's restart on an edited config: the follow has read the edit (it
+// writes `ConfigChanged` as it reads a new text), and the watch running then is being stopped. At least once: an
+// in-place save truncates before it writes, so a read between the two is a change of its own.
+async function untilRestarting(project: Project, infos: ReadonlyArray<string>): Promise<void> {
+  await expect
+    .poll(() => infos.some((info) => info.includes("restarting the catalog watch")), project.guard())
+    .toBe(true);
+}
 
-  mkdirSync(project.path("app"));
+// The catalog notices the dev server sends open tabs, from now on: what each names, and whether `sv.po` existed then.
+function notices(
+  project: Project,
+  server: ViteDevServer
+): Array<{ readonly file: string; readonly sv: boolean }> {
+  const sent: Array<{ readonly file: string; readonly sv: boolean }> = [];
+  const { hot } = server.environments.client;
+  const send = hot.send.bind(hot);
+  hot.send = (payload: HotPayload) => {
+    if (payload.type === "custom" && payload.event === CATALOG_UPDATE_EVENT) {
+      sent.push({ file: JSON.stringify(payload.data), sv: existsSync(project.path("messages/sv.po")) });
+    }
+    send(payload);
+  };
+
+  return sent;
+}
+
+// A plugin after `intl()`'s that records when the server's close has called every plugin's `closeBundle`: Vite calls
+// them in order, each without waiting for the last, so `intl()`'s has entered its close by then.
+function closeClock() {
+  let closing = false;
 
   return {
-    root: project.path("app"),
-    server: SERVER_WATCH,
-    plugins: [intl({ config: "../elmera-intl.json" }), clock.plugin],
+    plugin: {
+      name: "close-clock",
+      enforce: "post",
+      closeBundle() {
+        closing = true;
+      },
+    } satisfies Plugin,
+    closing: () => closing,
   };
 }
 
@@ -244,29 +172,6 @@ async function gatedServer(
   return server;
 }
 
-// Makes `edit` (by default, saves the `sv` config), again each probe interval, until the gate's `hold`th sync is held, or (with nothing following
-// the config) until Vite has handled the save, which waits for a held sync's release.
-async function untilHeld(
-  project: Project,
-  clock: ConfigClock,
-  gate: SyncGate,
-  hold = 0,
-  edit: () => void = save(project, JSON.stringify(SV_CONFIG))
-): Promise<void> {
-  const before = clock.reported();
-  await expect
-    .poll(
-      () => {
-        edit();
-
-        return gate.entered(hold) || (clock.reported() > before && clock.handled() === clock.reported());
-      },
-      { ...project.guard(), interval: PROBE_INTERVAL_MS }
-    )
-    .toBe(true);
-  expect(gate.entered(hold)).toBe(true);
-}
-
 // Saves a source, again each probe interval, until the gate holds a sync of it (the gate's first hold).
 async function untilSourceHeld(project: Project, gate: SyncGate): Promise<void> {
   await expect
@@ -281,92 +186,89 @@ async function untilSourceHeld(project: Project, gate: SyncGate): Promise<void> 
     .toBe(true);
 }
 
-// Saves `text` and waits until Vite has reported a change after it, saving it again each probe interval only while
-// none is reported (a poll watcher misses a write made before it attached). The writing stops before the test's next
-// save, so no write of `text` lands after it; and once Vite's watcher has reported the config, the first write is the
-// only one.
-async function savedOnce(project: Project, clock: ConfigClock, text: string): Promise<void> {
-  const reported = clock.reported();
-  await expect
-    .poll(
-      () => {
-        if (clock.reported() === reported) {
-          save(project, text)();
-        }
+// A PO import's load through the dev server: "loaded", or the error it failed with.
+async function load(server: ViteDevServer): Promise<string> {
+  try {
+    await server.ssrLoadModule("/messages/nb.po");
 
-        return clock.reported() > reported;
-      },
-      { ...project.guard(), interval: PROBE_INTERVAL_MS }
-    )
-    .toBe(true);
+    return "loaded";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
-// Waits until Vite has handled every report so far: each `watchChange` of `intl()`'s, and the follow it awaited.
-async function untilAllHandled(project: Project, clock: ConfigClock): Promise<void> {
-  await expect.poll(() => clock.handled() === clock.reported(), project.guard()).toBe(true);
-}
-
-// Unit under test: the dev plugin's watch across edits of `elmera-intl.json` while the dev server runs (#52). Oracle:
-// the config contract, by hand: a watch syncs one catalog per configured locale, its start included, so once Vite has
-// handled an edit adding `sv`, the watch on it has written `messages/sv.po` with the project's message, and a message
-// saved after the edit reaches it.
+// Unit under test: the dev plugin's watch across edits of `elmera-intl.json` while a real dev server runs, polling
+// (#52). The watch reads the config itself (`followConfig`), so one write of it is enough, wherever it lies; every wait
+// is on the follow's own report (its restart line) or on the catalogs. Oracle: the config contract, by hand: a watch
+// syncs one catalog per configured locale, its start included, so after an edit adding `sv` the watch has written
+// `messages/sv.po` with the project's message, and a message saved later reaches it.
 describe("intl() vite dev config", { timeout: 15_000 }, () => {
-  // Rows: the config in the Vite root or outside it (`options.config`, which only the plugin adds to Vite's watcher),
-  // and an edit that makes the config invalid on the way: the edit after it is followed all the same.
+  // Rows: the config in the Vite root or outside it (`options.config`, which Vite's own watcher does not cover), and an
+  // edit that makes the config invalid on the way: the edit after it is followed all the same.
   it.for([
     { edits: "an edit of its config", outside: false, invalidFirst: false },
     { edits: "an edit that fixes its config after an invalid one", outside: false, invalidFirst: true },
     { edits: "an edit of its config outside the Vite root", outside: true, invalidFirst: false },
   ])("follows $edits during dev", async ({ outside, invalidFirst }, { project }) => {
-    const clock = configClock();
-    const adds = watcherAdds();
-    const config = followingServer(project, outside, clock);
-    const server = await devServer(project, { ...config, plugins: [adds.plugin, ...(config.plugins ?? [])] });
-    // Vite's watcher covers its root; the plugin adds a config outside it, and only that one. (Vite adds directories
-    // of its own, such as a package's.)
-    expect(adds.added().filter((path) => basename(path) === "elmera-intl.json")).toEqual(
-      outside ? [join(realpathSync(project.root), "elmera-intl.json")] : []
-    );
-    await expect.poll(() => watchedBy(server, project.path("elmera-intl.json")), project.guard()).toBe(true);
+    const errors: Array<string> = [];
+    const logger = recording([], errors);
 
-    if (invalidFirst) {
-      await untilHandled(project, clock, save(project, "{"));
+    if (outside) {
+      mkdirSync(project.path("app"));
+      await devServer(project, {
+        root: project.path("app"),
+        customLogger: logger,
+        server: SERVER_WATCH,
+        plugins: [intl({ config: "../elmera-intl.json" })],
+      });
+    } else {
+      await devServer(project, { customLogger: logger, server: SERVER_WATCH, plugins: [intl()] });
     }
 
-    await untilHandled(project, clock, save(project, JSON.stringify(SV_CONFIG)));
-    expect(catalog(project, "sv")).toContain(`msgid "Hello"`);
+    if (invalidFirst) {
+      save(project, "{")();
+      await expect
+        .poll(() => errors.some((error) => error.includes("ConfigInvalid")), project.guard())
+        .toBe(true);
+    }
+
+    save(project, JSON.stringify(SV_CONFIG))();
+    await expect.poll(() => catalog(project, "sv"), project.guard()).toContain(`msgid "Hello"`);
 
     await untilSynced(project, "src/new.tsx", "New", "messages/sv.po");
   });
 
-  // Unit under test: the dev plugin when the server starts on a config that does not parse, or on none, then the config
-  // is written (#52). Oracle: the watch contract, by hand: a watch's start syncs, so once Vite has handled the fix, a
-  // message the PO lacked before the server started is in it.
+  // Unit under test: the dev plugin when the server starts on a config that does not parse, or on none, then a config
+  // adding `sv` is written (#52). Oracle: the watch contract, by hand: the server starts all the same, and a watch's
+  // start syncs, so once the config is fixed a message the PO lacked before the server started is in it; and the
+  // reload contract: a tab told reloads its catalogs, so it is told again once the new watch has written them, when
+  // `sv.po` exists (a new locale's PO is a file no module imports yet, which no PO save announces).
   it.for([
     { start: "does not parse", setup: (project: Project) => project.write("elmera-intl.json", "{") },
     { start: "is missing", setup: (project: Project) => rmSync(project.path("elmera-intl.json")) },
   ])("starts its watch when a config that $start is fixed during dev", async ({ setup }, { project }) => {
     project.write("src/new.tsx", component("New"));
     setup(project);
-    const clock = configClock();
-    await devServer(project, followingServer(project, false, clock));
-    await untilHandled(project, clock, save(project, JSON.stringify(CONFIG)));
+    const server = await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
+    const sent = notices(project, server);
+    const config = JSON.stringify({ file: join(server.config.root, "elmera-intl.json") });
+    save(project, JSON.stringify(SV_CONFIG))();
 
-    expect(catalog(project, "nb")).toContain(`msgid "New"`);
+    await expect.poll(() => catalog(project, "nb"), project.guard()).toContain(`msgid "New"`);
+    await expect.poll(() => sent.some(({ file, sv }) => file === config && sv), project.guard()).toBe(true);
   });
 
-  // Unit under test: the dev server's close while a follow of a config edit is starting the new watch, its first sync
+  // Unit under test: the dev server's close while the watch restarts on an edited config, the new watch's first sync
   // held (the services' sync step). Oracle: the close contract, by hand: a watch's close lets a running sync finish,
-  // so the held sync has written `sv.po` once the close settles; and every watch runs on the server's one runtime,
-  // which the close disposes once, so no watch is left to sync: `[built, disposed]` is `[1, 1]`. The hold is released
-  // once the plugin's close has begun.
-  it("closes the watch a follow of its config is starting when the dev server closes", async ({
-    project,
-  }) => {
+  // so the held sync has written `sv.po` once the close settles; and the server's watch builds its services once and
+  // releases them once as it ends: `[built, released]` is `[1, 1]`. The hold is released once the plugin's close has
+  // begun.
+  it("closes the watch a restart is starting when the dev server closes", async ({ project }) => {
     const gate = syncGate();
-    const clock = configClock();
+    const clock = closeClock();
     const server = await gatedServer(project, gate, [clock.plugin]);
-    await untilHeld(project, clock, gate);
+    save(project, JSON.stringify(SV_CONFIG))();
+    await expect.poll(() => gate.entered(0), project.guard()).toBe(true);
 
     const closing = server.close();
     await expect.poll(() => clock.closing(), project.guard()).toBe(true);
@@ -379,189 +281,112 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
     ]);
   });
 
-  // Unit under test: the dev server's close while a follow of a config edit is still closing the old watch, whose sync
-  // of a source save is held. Oracle: the close contract, by hand: a close during a follow starts nothing more, so once
-  // the close settles the follow has logged its restart but no watch on the edited config ever synced (no `sv.po`), and
-  // the server's one runtime is disposed once. The hold is released once the plugin's close has begun.
-  it("starts no watch from a follow the dev server closes during", async ({ project }) => {
+  // Unit under test: the dev server's close while the watch's restart on an edited config is still stopping the old
+  // watch, whose sync of a source save is held. Oracle: the close contract, by hand: a close during a restart starts
+  // nothing more, so once the close settles the restart has been logged but no watch on the edited config ever synced
+  // (no `sv.po`), and the services were built and released once. The hold is released once the plugin's close has
+  // begun.
+  it("starts no watch from a restart the dev server closes during", async ({ project }) => {
     // The first sync after the server's start sync: the old watch's, of the save below.
     const gate = syncGate((_config, call) => call === 1);
     const infos: Array<string> = [];
-    const clock = configClock();
-    const server = await gatedServer(project, gate, [clock.plugin], {
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          infos.push(message);
-        },
-      },
-    });
+    const clock = closeClock();
+    const server = await gatedServer(project, gate, [clock.plugin], { customLogger: recording(infos) });
     await untilSourceHeld(project, gate);
 
-    // Once Vite has called every `watchChange` for the edit, the follow is closing the old watch, which waits for its
-    // held sync.
-    await savedOnce(project, clock, JSON.stringify(SV_CONFIG));
+    save(project, JSON.stringify(SV_CONFIG))();
+    await untilRestarting(project, infos);
     const closing = server.close();
     await expect.poll(() => clock.closing(), project.guard()).toBe(true);
     gate.release(0);
     await project.within(closing, "the close");
 
-    expect([
-      infos.some((info) => info.includes("restarting the catalog watch")),
-      catalog(project, "sv"),
-      gate.services.counts(),
-    ]).toEqual([true, "(missing)", [1, 1]]);
+    expect([catalog(project, "sv"), gate.services.counts()]).toEqual(["(missing)", [1, 1]]);
   });
 
-  // Unit under test: the dev plugin's follow when the config changes again while a follow is starting a watch, its
-  // first sync held. Oracle: the follow contract, by hand: a report during a follow schedules one more, which reads
-  // the config as it is then, so once Vite has handled every report, the last config's watch has synced `fi.po`, and a
-  // message saved after both edits reaches it.
-  it("follows a config edit made while a follow of an earlier one is starting", async ({ project }) => {
-    const gate = syncGate();
-    const clock = configClock();
-    await gatedServer(project, gate, [clock.plugin]);
-    await untilHeld(project, clock, gate);
-
-    await savedOnce(project, clock, JSON.stringify(FI_CONFIG));
-    gate.release(0);
-    await untilAllHandled(project, clock);
-    expect(catalog(project, "fi")).toContain(`msgid "Hello"`);
-
-    await untilSynced(project, "src/new.tsx", "New", "messages/fi.po");
-  });
-
-  // Unit under test: the dev plugin's follow across three saves, each landing during a different step of the follow
-  // in flight: `sv` while it closes the old watch (whose sync of a source save is held), `fi` before it starts the new
-  // one, and `sv` again while that start's first sync is held. Oracle: the config on disk, by hand: it ends as `sv`,
-  // so once Vite has handled every report, the watch running is on `sv` (it wrote `sv.po`, and no watch ever started on
-  // `fi`), and a message saved later reaches `sv.po`.
-  it("follows the config on disk after saves during a follow's close and its start", async ({ project }) => {
-    // The old watch's sync of the source save below (call 1), and the next sync: the new watch's first.
-    const gate = syncGate((_config, call) => call >= 1);
-    const clock = configClock();
-    await gatedServer(project, gate, [clock.plugin]);
-    await untilSourceHeld(project, gate);
-
-    await savedOnce(project, clock, JSON.stringify(SV_CONFIG));
-    await savedOnce(project, clock, JSON.stringify(FI_CONFIG));
-    gate.release(0);
-    await expect.poll(() => gate.entered(1), project.guard()).toBe(true);
-    await savedOnce(project, clock, JSON.stringify(SV_CONFIG));
-    gate.releaseAll();
-    await untilAllHandled(project, clock);
-
-    expect([catalog(project, "sv"), catalog(project, "fi")]).toEqual([
-      expect.stringContaining(`msgid "Hello"`),
-      "(missing)",
-    ]);
-    await untilSynced(project, "src/later.tsx", "Later", "messages/sv.po");
-  });
-
-  // Unit under test: what the dev plugin sends open tabs while it follows a config edit: every catalog notice the
-  // browser channel receives, a PO save's included. Oracle: the reload contract, by hand: a tab told reloads its
-  // catalogs, so nothing goes out until the new config's watch has written them, not even for the old watch's last PO
-  // write (its sync of a source save is held across the edit, and released, while the new watch's first sync is held,
-  // until Vite has handled that write's report, made through Vite's watcher); then one notice, the config's, sent when
-  // `sv.po` existed.
-  it("tells open tabs about a config edit once the new watch has synced, and nothing before", async ({
+  // Unit under test: what the dev plugin sends open tabs as the watch restarts on an edited config adding `sv`, the new
+  // watch's first sync held. Oracle: the reload contract, by hand: a tab told reloads its catalogs, at least once and
+  // never held back. So a notice naming the config goes out at the change (the catalogs compile against the edited
+  // config), before `sv.po` exists, and another once the new watch has written its first result, when `sv.po` exists:
+  // a new locale's PO is a file no module imports yet, which no PO save announces. At least one at the change, not
+  // exactly one: the save is in place, as most editors make it, and a read between its truncate and its write is a
+  // change of its own (the contract pairs no change with one notice).
+  it("tells open tabs about a config edit, and again once the new watch has written its catalogs", async ({
     project,
   }) => {
-    // The old watch's sync of the source save below (call 1), and the first sync of the `sv` config.
-    const gate = syncGate((config, call) => call === 1 || config.locales.includes("sv"));
-    const clock = configClock();
-    const infos: Array<string> = [];
-    // At each report of `nb.po` Vite handled: whether the PO held the saved source's message.
-    const nbHandled: Array<boolean> = [];
-    const server = await gatedServer(
-      project,
-      gate,
-      [
-        clock.plugin,
-        {
-          name: "nb-clock",
-          enforce: "post",
-          hotUpdate({ file }) {
-            if (this.environment.name === "client" && file.endsWith("/messages/nb.po")) {
-              nbHandled.push(catalog(project, "nb").includes(`msgid "New"`));
-            }
-          },
-        },
-      ],
-      {
-        customLogger: {
-          ...createLogger("silent"),
-          info: (message) => {
-            infos.push(message);
-          },
-        },
-      }
-    );
-    // Every catalog notice: what it names, and whether `sv.po` existed then.
-    const notices: Array<{ readonly data: string; readonly sv: boolean }> = [];
-    const { hot } = server.environments.client;
-    const send = hot.send.bind(hot);
-    hot.send = (payload: HotPayload) => {
-      if (payload.type === "custom" && payload.event === CATALOG_UPDATE_EVENT) {
-        notices.push({ data: JSON.stringify(payload.data), sv: existsSync(project.path("messages/sv.po")) });
-      }
-      send(payload);
-    };
-    await untilSourceHeld(project, gate);
+    const gate = syncGate();
+    const server = await gatedServer(project, gate, []);
+    const sent = notices(project, server);
+    // The plugin names the config as Vite resolves its root; a PO's own notice (Vite's watcher seeing `sv.po` created)
+    // may come as well.
+    const config = JSON.stringify({ file: join(server.config.root, "elmera-intl.json") });
+    const told = () => sent.filter(({ file }) => file === config);
+    save(project, JSON.stringify(SV_CONFIG))();
+    await expect.poll(() => gate.entered(0), project.guard()).toBe(true);
+    const whileHeld = [...told()];
 
-    // Once the restart is logged, the follow is closing the old watch, which waits for its held sync.
-    await savedOnce(project, clock, JSON.stringify(SV_CONFIG));
-    await expect
-      .poll(() => infos.some((info) => info.includes("restarting the catalog watch")), project.guard())
-      .toBe(true);
     gate.release(0);
-    await expect.poll(() => gate.entered(1), project.guard()).toBe(true);
-    // The old watch's write of `nb.po`, reported here rather than awaited from the poll watcher, which may not have
-    // taken the PO's baseline: emitted on Vite's watcher as chokidar emits it.
-    server.watcher.emit("change", project.path("messages/nb.po"));
-    await expect.poll(() => nbHandled.includes(true), project.guard()).toBe(true);
-    const whileHeld = [...notices];
+    await expect.poll(() => told().some(({ sv }) => sv), project.guard()).toBe(true);
 
-    gate.release(1);
-    await untilAllHandled(project, clock);
+    expect({ told: whileHeld.length > 0, withSv: whileHeld.some(({ sv }) => sv) }).toEqual({
+      told: true,
+      withSv: false,
+    });
+  });
 
-    // The plugin names the config as Vite resolves it, through links.
-    const config = JSON.stringify({ file: realpathSync(project.path("elmera-intl.json")) });
-    expect({
-      whileHeld,
-      first: notices[0],
-      told: notices.filter(({ data }) => data === config).length,
-    }).toEqual({ whileHeld: [], first: { data: config, sv: true }, told: 1 });
+  // Unit under test: the notice to open tabs of a config edit that makes the config invalid, when the server's logger
+  // throws on the restart line (a plugin's logger wrapper, say). Oracle: the reload contract, by hand: the catalogs
+  // compile against the config as it is, so a tab is told at the change whatever the log line does; no restarted watch
+  // follows an invalid config to tell it later.
+  it("tells open tabs about a config edit when the logger throws on the restart line", async ({
+    project,
+  }) => {
+    const errors: Array<string> = [];
+    const server = await devServer(project, {
+      customLogger: {
+        ...createLogger("silent"),
+        info: (message) => {
+          if (message.includes("restarting the catalog watch")) {
+            throw new Error("logger gone");
+          }
+        },
+        error: (message) => {
+          errors.push(message);
+        },
+      },
+      server: SERVER_WATCH,
+      plugins: [intl()],
+    });
+    const sent = notices(project, server);
+    const config = JSON.stringify({ file: join(server.config.root, "elmera-intl.json") });
+    save(project, "{")();
+    await expect
+      .poll(() => errors.some((error) => error.includes("ConfigInvalid")), project.guard())
+      .toBe(true);
+
+    // At least once, as the save is in place (see the test above).
+    expect(sent.some(({ file }) => file === config)).toBe(true);
   });
 
   // Unit under test: the dev server's start when its config is edited during the start's first sync (held), and the
   // new watch's first sync is held in turn. Oracle: the start contract, by hand: `createServer` resolves once the watch
-  // the config selects by then has synced, so a plugin that configures the server after `intl()` finds `sv.po`; and
-  // none has configured it while the new watch's sync is held.
+  // on the config as it is when a first sync's result is written has synced, so a plugin that configures the server
+  // after `intl()` finds `sv.po`; and none has configured it while the new watch's sync is held.
   it("finishes starting once the watch on a config edited during its start has synced", async ({
     project,
   }) => {
     // The server's start sync (call 0), and the first sync of the edited config.
     const gate = syncGate((config, call) => call === 0 || config.locales.includes("sv"));
-    const clock = configClock();
+    const infos: Array<string> = [];
     // Whether `sv.po` existed when the next plugin configured the server.
     let configured: boolean | undefined;
-    // The server, before its start resolves: its watcher is up before any plugin configures it.
-    let starting: ViteDevServer | undefined;
     const opening = createServer({
       root: project.root,
       configFile: false,
-      logLevel: "silent",
+      customLogger: recording(infos),
       server: SERVER_WATCH,
       plugins: [
-        {
-          name: "captures-the-server",
-          configureServer(created) {
-            starting = created;
-          },
-        },
         ...intlPlugins({}, gate.services.layer),
-        clock.plugin,
         {
           name: "configures-after",
           configureServer() {
@@ -574,25 +399,21 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
     // made, if it made one.
     project.defer(async () => {
       gate.releaseAll();
-      const server = await opening.catch(() => undefined);
-      await server?.close();
+      // The close chained onto the start, so a server that opens past the deadline is still closed.
+      await project.within(
+        opening.then(
+          (server) => server.close(),
+          () => undefined
+        ),
+        "the start and its close at teardown"
+      );
     });
     await expect.poll(() => gate.entered(0), project.guard()).toBe(true);
-    // The follow waits to close the start's watch until its held sync runs, so the edit is saved once Vite watches it.
-    await expect
-      .poll(
-        () => starting !== undefined && watchedBy(starting, project.path("elmera-intl.json")),
-        project.guard()
-      )
-      .toBe(true);
-    await savedOnce(project, clock, JSON.stringify(SV_CONFIG));
+    save(project, JSON.stringify(SV_CONFIG))();
+    // The follow has read the edit before the start sync's result is written.
+    await untilRestarting(project, infos);
     gate.release(0);
-    // The new watch's first sync, its config naming `sv`; or, with nothing following the config, Vite having handled
-    // the save, which waits for a follow.
-    await expect
-      .poll(() => gate.entered(1) || clock.handled() === clock.reported(), project.guard())
-      .toBe(true);
-    expect(gate.entered(1)).toBe(true);
+    await expect.poll(() => gate.entered(1), project.guard()).toBe(true);
     const whileHeld = configured;
 
     gate.release(1);
@@ -604,10 +425,9 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
   // Unit under test: the dev server's start when its first watch fails to start on its own (its sources' tree refused
   // as it opens, the catalogs' tree already open), and its config is edited while that failed start's cleanup is held
   // (a host watcher that closes asynchronously). The watch uses native events, through a fake that opens the trees (a
-  // polled watch opens none); Vite's watcher ignores the config, whose report is made through the server's plugin
-  // container. Oracle: the start contract, by hand: `createServer` settles from the watch selected once every follow
-  // scheduled by then has run, so it resolves, on the edited config's watch, which has written `sv.po`; the refused
-  // start's failure is not the selected watch's.
+  // polled watch opens none), and reads the config itself. Oracle: the start contract, by hand: the follow settles its
+  // start from the watch on the config waiting once the failed one is gone, so `createServer` resolves, on the edited
+  // config's watch, which has written `sv.po`; the refused start's failure is not the start's.
   it("finishes starting on a config edited while a failed first start cleans up", async ({ project }) => {
     // The watch names its trees from the canonical root. The catalogs' tree opens first (path order); the sources'
     // tree is refused once, to the first watch alone.
@@ -631,27 +451,12 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
         return held.promise;
       },
     });
-    const config = join(root, "elmera-intl.json");
     const infos: Array<string> = [];
-    let starting: ViteDevServer | undefined;
     const opening = createServer({
       root: project.root,
       configFile: false,
-      logLevel: "silent",
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          infos.push(message);
-        },
-      },
-      server: { watch: { ignored: (file: string) => file === config } },
+      customLogger: recording(infos),
       plugins: [
-        {
-          name: "captures-the-server",
-          configureServer(created) {
-            starting = created;
-          },
-        },
         ...intlPlugins(
           {},
           Layer.mergeAll(Layer.provideMerge(CatalogSync.layer(), projectServices()), events.layer)
@@ -671,118 +476,31 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
     // it made, if it made one.
     project.defer(async () => {
       held.resolve();
-      const server = await opening.catch(() => undefined);
-      await server?.close();
+      // The close chained onto the start, so a server that opens past the deadline is still closed.
+      await project.within(
+        opening.then(
+          (server) => server.close(),
+          () => undefined
+        ),
+        "the start and its close at teardown"
+      );
     });
     await project.within(cleanup.promise, "the failed start's cleanup");
     save(project, JSON.stringify(SV_CONFIG))();
-    const reported = starting?.environments.client.pluginContainer.watchChange(config, { event: "update" });
-    // Once the restart is logged, the follow is closing the failed watch, which waits for its cleanup.
-    await expect
-      .poll(() => infos.some((info) => info.includes("restarting the catalog watch")), project.guard())
-      .toBe(true);
+    await untilRestarting(project, infos);
     held.resolve();
 
     expect([await project.within(outcome, "the start"), catalog(project, "sv")]).toEqual([
       "started",
       expect.stringContaining(`msgid "Hello"`),
     ]);
-    await project.within(Promise.resolve(reported), "the report");
   });
 
-  // Unit under test: the dev plugin's follow when the new watch fails to start (its logger throws on the first sync's
-  // result, and on that sync's SyncFailed), then the config is edited again. Oracle: the follow contract, by hand: the
-  // failed start is logged, tells open tabs nothing and leaves no watch, and the next edit starts one, so open tabs are
-  // told once, and a message saved after it reaches `sv.po`.
-  it("follows a config edit after a follow whose watch failed to start", async ({ project }) => {
-    let failing = true;
-    const errors: Array<string> = [];
-    const clock = configClock();
-    const server = await devServer(project, {
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          if (failing && message.includes("wrote messages/sv.po")) {
-            throw new Error("logger gone");
-          }
-        },
-        error: (message) => {
-          if (failing && message.startsWith("SyncFailed:")) {
-            throw new Error("logger gone");
-          }
-
-          errors.push(message);
-        },
-      },
-      server: SERVER_WATCH,
-      plugins: [intl(), clock.plugin],
-    });
-    const told = toldConfig(server);
-
-    await untilHandled(project, clock, save(project, JSON.stringify(SV_CONFIG)));
-    expect([errors, told()]).toEqual([
-      [expect.stringContaining("the catalog watch did not start: logger gone")],
-      0,
-    ]);
-
-    failing = false;
-    await untilHandled(project, clock, save(project, JSON.stringify(SV_CONFIG, null, 2)));
-    expect(told()).toBe(1);
-    await untilSynced(project, "src/new.tsx", "New", "messages/sv.po");
-  });
-
-  // Unit under test: the dev plugin's follow when one step of it throws: the logger on the restart line, or the hot
-  // channel on the notice to open tabs. Oracle: the follow contract, by hand: each step reports its own failure and
-  // the next save is followed all the same, so once Vite has handled it, the `fi` config's watch has written `fi.po`.
-  it.for([
-    { fails: "the logger", logger: true },
-    { fails: "the hot channel", logger: false },
-  ])("follows the next save after a follow where $fails threw", async ({ logger }, { project }) => {
-    let failing = true;
-    const errors: Array<string> = [];
-    const clock = configClock();
-    const server = await devServer(project, {
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          if (logger && failing && message.includes("restarting the catalog watch")) {
-            failing = false;
-            throw new Error("logger gone");
-          }
-        },
-        error: (message) => {
-          errors.push(message);
-        },
-      },
-      server: SERVER_WATCH,
-      plugins: [intl(), clock.plugin],
-    });
-    const { hot } = server.environments.client;
-    const send = hot.send.bind(hot);
-    hot.send = (payload: HotPayload) => {
-      if (!logger && failing && payload.type === "custom" && payload.event === CATALOG_UPDATE_EVENT) {
-        failing = false;
-        throw new Error("channel gone");
-      }
-      send(payload);
-    };
-
-    await untilHandled(project, clock, save(project, JSON.stringify(SV_CONFIG)));
-    await untilHandled(project, clock, save(project, JSON.stringify(FI_CONFIG)));
-
-    expect([
-      failing,
-      errors.filter((error) => error.includes("gone")).length,
-      catalog(project, "fi"),
-    ]).toEqual([false, 1, expect.stringContaining(`msgid "Hello"`)]);
-  });
-
-  // Unit under test: the dev plugin on a config link repointed to another target outside the root with the same text
-  // (a deploy swapping versions), under chokidar's `followSymlinks: false`. Oracle: Vite's watcher reports only what
-  // it watches (its root, and what a plugin adds), so the plugin adds the new target, at the watcher's boundary, when
-  // the repoint is reported; and a later edit of that target, adding `sv`, is followed: `sv.po` gets the project's
-  // message.
-  it("follows edits of the target a config link is repointed to with the same text", async ({ project }) => {
+  // Unit under test: the dev plugin on a config link to a target outside the root, repointed to another target outside
+  // it (a deploy swapping versions), which is then edited to add `sv`. Oracle: the follow reads the config through the
+  // link, whatever Vite's watcher reports (it watches neither target), so the edit of the target the link points at
+  // now is followed: `sv.po` gets the project's message.
+  it("follows an edit of the target outside the root a config link is repointed to", async ({ project }) => {
     const outside = outsideRoot(project);
     const old = join(outside, "old", "elmera-intl.json");
     const next = join(outside, "next", "elmera-intl.json");
@@ -792,220 +510,18 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
     });
     rmSync(project.path("elmera-intl.json"));
     symlinkSync(old, project.path("elmera-intl.json"));
-    const clock = configClock();
-    const adds = watcherAdds();
-    await devServer(project, {
-      server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
-      plugins: [adds.plugin, intl(), clock.plugin],
-    });
+    await devServer(project, { server: SERVER_WATCH, plugins: [intl()] });
 
-    // Reported as the link changed or created.
-    await untilHandled(project, clock, () => {
-      applyEdit({ _tag: "Link", file: project.path("elmera-intl.json"), target: next });
-    });
-    expect(adds.added()).toContain(realpathSync(next));
-
-    await untilHandled(project, clock, () => {
-      writeFileSync(next, JSON.stringify(SV_CONFIG));
-    });
-    expect(catalog(project, "sv")).toContain(`msgid "Hello"`);
-  });
-
-  // Unit under test: the dev plugin on a config link that the Vite config imports, whose target outside the root
-  // Vite records as its config's dependency (canonical) and watches. An edit of the target can be reported twice, as
-  // the target and as the link (seen in review on a polled host); both reports are made here, right after the edit,
-  // so the link's reaches the server Vite is about to replace. Oracle: Vite's restart contract: it restarts the server
-  // for a change it reports at a dependency of its config, and the replacement reads the config itself; so the plugin
-  // restarts no watch for either report, and Vite's restart is the only one.
-  it("leaves a linked config that the Vite config imports to Vite's restart", async ({ project }) => {
-    const target = join(outsideRoot(project), "prev.json");
-    writeFileSync(target, project.read("elmera-intl.json"));
-    rmSync(project.path("elmera-intl.json"));
-    symlinkSync(target, project.path("elmera-intl.json"));
-    project.write(
-      "vite.config.mjs",
-      `import config from "./elmera-intl.json" with { type: "json" };\nexport default { define: { LOCALES: JSON.stringify(config.locales) } };\n`
-    );
-    const infos: Array<string> = [];
-    const server = await devServer(project, {
-      configFile: project.path("vite.config.mjs"),
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          infos.push(message);
-        },
-      },
-      server: SERVER_WATCH,
-      plugins: [intl()],
-    });
-    expect(server.config.configFileDependencies).toContain(realpathSync(target));
-
-    // Both reports of the edit, made here rather than awaited from the poll watcher, which may not have taken the
-    // target's baseline yet: the target's, at its canonical path, emitted on Vite's watcher as chokidar emits it (Vite
-    // restarts the server for it), then the link's, through the server's plugin container.
-    writeFileSync(target, JSON.stringify(SV_CONFIG));
-    server.watcher.emit("change", realpathSync(target));
-    await server.environments.client.pluginContainer.watchChange(
-      join(realpathSync(project.root), "elmera-intl.json"),
-      { event: "update" }
-    );
-    await expect
-      .poll(() => infos.some((info) => info.includes("server restarted")), project.guard())
-      .toBe(true);
-
-    expect(infos.filter((info) => info.includes("restarting the catalog watch"))).toEqual([]);
-  });
-
-  // Unit under test: the dev plugin on a config link repointed to another target the Vite config imports, when the
-  // link itself is no dependency of the Vite config. Oracle: Vite's restart contract: Vite restarts for a change it
-  // reports at a dependency of its config, and it reports the repoint at the link's path, which is none, so no restart
-  // follows; the plugin follows the repoint itself: it restarts its watch, and the new target's `sv` gets the project's
-  // message.
-  it("follows a config link repointed to another target the Vite config imports", async ({ project }) => {
-    const outside = outsideRoot(project);
-    const old = join(outside, "old.json");
-    const next = join(outside, "next.json");
-    writeFileSync(old, project.read("elmera-intl.json"));
-    writeFileSync(next, JSON.stringify(SV_CONFIG));
-    rmSync(project.path("elmera-intl.json"));
-    symlinkSync(old, project.path("elmera-intl.json"));
-    project.write(
-      "vite.config.mjs",
-      `import config from "./elmera-intl.json" with { type: "json" };\nimport next from ${JSON.stringify(next)} with { type: "json" };\nexport default { define: { LOCALES: JSON.stringify([config.locales, next.locales]) } };\n`
-    );
-    const infos: Array<string> = [];
-    const clock = configClock();
-    const server = await devServer(project, {
-      configFile: project.path("vite.config.mjs"),
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          infos.push(message);
-        },
-      },
-      server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
-      plugins: [intl(), clock.plugin],
-    });
-    expect(server.config.configFileDependencies).toEqual(
-      expect.arrayContaining([realpathSync(old), realpathSync(next)])
-    );
-
-    // Reported as the link changed or created.
-    await untilHandled(project, clock, () => {
-      applyEdit({ _tag: "Link", file: project.path("elmera-intl.json"), target: next });
-    });
-
-    expect([
-      infos.some((info) => info.includes("restarting the catalog watch")),
-      catalog(project, "sv"),
-    ]).toEqual([true, expect.stringContaining(`msgid "Hello"`)]);
-  });
-
-  // Unit under test: the dev plugin on a config that is, from the start, a link to a target outside the Vite root,
-  // under chokidar's `followSymlinks: false`. Oracle: Vite's watcher reports only what it watches (its root, and what a
-  // plugin adds), so the plugin adds the target, at the watcher's boundary, as the server starts; and an edit of the
-  // target, adding `sv`, is followed: `sv.po` gets the project's message.
-  it("follows edits of a config link's target outside the Vite root from the start", async ({ project }) => {
-    const target = join(outsideRoot(project), "elmera-intl.json");
-    writeFileSync(target, project.read("elmera-intl.json"));
-    rmSync(project.path("elmera-intl.json"));
-    symlinkSync(target, project.path("elmera-intl.json"));
-    const adds = watcherAdds();
-    await devServer(project, {
-      server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
-      plugins: [adds.plugin, intl()],
-    });
-    expect(adds.added()).toContain(realpathSync(target));
-
-    // Written again each probe interval until the watch on it has synced: the add's own report can come first.
-    await expect
-      .poll(
-        () => {
-          writeFileSync(target, JSON.stringify(SV_CONFIG));
-
-          return catalog(project, "sv");
-        },
-        { ...project.guard(), interval: PROBE_INTERVAL_MS }
-      )
-      .toContain(`msgid "Hello"`);
-  });
-
-  // Unit under test: the dev server's close while a follow is starting a watch (its first sync held) and a repoint of
-  // the config link is queued behind it; both reports made through the server's plugin container. Oracle: the close
-  // contract, by hand: a follow queued before the close does nothing, so once the close settles no path was added to
-  // Vite's watcher after the close began, and no watch started on the repointed config (no `fi.po`). The hold is
-  // released once the plugin's close has begun.
-  it("registers nothing with the watcher for a follow queued before the dev server closes", async ({
-    project,
-  }) => {
-    const outside = outsideRoot(project);
-    const old = join(outside, "old.json");
-    const next = join(outside, "next.json");
-    writeFileSync(old, project.read("elmera-intl.json"));
-    writeFileSync(next, JSON.stringify(FI_CONFIG));
-    rmSync(project.path("elmera-intl.json"));
-    symlinkSync(old, project.path("elmera-intl.json"));
-    const gate = syncGate();
-    const clock = configClock();
-    const adds = watcherAdds();
-    const server = await gatedServer(project, gate, [adds.plugin, clock.plugin], {
-      server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
-    });
-    const report = () =>
-      server.environments.client.pluginContainer.watchChange(
-        join(realpathSync(project.root), "elmera-intl.json"),
-        { event: "update" }
-      );
-
-    writeFileSync(old, JSON.stringify(SV_CONFIG));
-    const first = report();
-    await expect.poll(() => gate.entered(0), project.guard()).toBe(true);
     applyEdit({ _tag: "Link", file: project.path("elmera-intl.json"), target: next });
-    const second = report();
-    const closing = server.close();
-    await expect.poll(() => clock.closing(), project.guard()).toBe(true);
-    const before = adds.added().length;
-    gate.release(0);
-    await project.within(Promise.all([closing, first, second]), "the close");
+    writeFileSync(next, JSON.stringify(SV_CONFIG));
 
-    expect([adds.added().slice(before), catalog(project, "fi")]).toEqual([[], "(missing)"]);
-  });
-
-  // Unit under test: the dev plugin on a config outside the Vite root that is a link, under chokidar's
-  // `followSymlinks: false`, which reports a link it is asked to watch as created (#52). Oracle: the follow contract,
-  // by hand: only a change to the config's text restarts the watch, and watching the link changes none, so once Vite
-  // has handled that report, the plugin has logged no restart.
-  it("restarts no watch on a report that leaves its config's text as it was", async ({ project }) => {
-    const outside = outsideRoot(project);
-    writeFileSync(join(outside, "elmera-intl.json"), project.read("elmera-intl.json"));
-    rmSync(project.path("elmera-intl.json"));
-    symlinkSync(join(outside, "elmera-intl.json"), project.path("elmera-intl.json"));
-    mkdirSync(project.path("app"));
-    const infos: Array<string> = [];
-    const clock = configClock();
-    await devServer(project, {
-      root: project.path("app"),
-      customLogger: {
-        ...createLogger("silent"),
-        info: (message) => {
-          infos.push(message);
-        },
-      },
-      server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
-      plugins: [intl({ config: "../elmera-intl.json" }), clock.plugin],
-    });
-
-    await expect
-      .poll(() => clock.reported() > 0 && clock.handled() === clock.reported(), project.guard())
-      .toBe(true);
-    expect(infos.filter((info) => info.includes("restarting the catalog watch"))).toEqual([]);
+    await expect.poll(() => catalog(project, "sv"), project.guard()).toContain(`msgid "Hello"`);
   });
 
   // Unit under test: a PO import across a repoint of the config symlink to another config, during dev (#52's comment).
-  // Oracle: Intl rejects the currency "NOKK", which only the repointed config's formats module makes reachable. The
-  // watcher reports the repoint as the link created, under its own path, with chokidar's `followSymlinks: false`, and
-  // Vite invalidates no module for a file created; once Vite has handled it, the next load compiles with the new
-  // target.
+  // Oracle: Intl rejects the currency "NOKK", which only the repointed config's formats module makes reachable. Vite
+  // invalidates no module for a link it reports as created (`followSymlinks: false`); the plugin invalidates every
+  // compiled catalog as the watch restarts, so once it has, the next load compiles with the new target.
   it("loads a catalog with the config symlink repointed during dev", async ({ project }) => {
     await useMoneyFormats(project, "NOK");
     project.write("intl-formats-next.ts", moneyFormats("NOKK"));
@@ -1017,37 +533,28 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
     );
     rmSync(project.path("elmera-intl.json"));
     symlinkSync(join(outside, "valid.json"), project.path("elmera-intl.json"));
-    const clock = configClock();
+    const infos: Array<string> = [];
     const server = await devServer(project, {
+      customLogger: recording(infos),
       server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
-      plugins: [intl(), clock.plugin],
+      plugins: [intl()],
     });
-    const load = async () => {
-      try {
-        await server.ssrLoadModule("/messages/nb.po");
+    await expect(load(server)).resolves.toBe("loaded");
 
-        return "loaded";
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
-    };
-    await expect(load()).resolves.toBe("loaded");
-
-    await untilHandled(project, clock, () => {
-      applyEdit({
-        _tag: "Link",
-        file: project.path("elmera-intl.json"),
-        target: join(outside, "invalid.json"),
-      });
+    applyEdit({
+      _tag: "Link",
+      file: project.path("elmera-intl.json"),
+      target: join(outside, "invalid.json"),
     });
+    await untilRestarting(project, infos);
 
-    await expect(load()).resolves.toMatch(/Invalid currency code : NOKK/u);
+    await expect(load(server)).resolves.toMatch(/Invalid currency code : NOKK/u);
   });
-  // Unit under test: a PO import loaded while a follow of a config symlink repoint is starting the new watch, its first
+
+  // Unit under test: a PO import loaded while the watch restarts on a config symlink repoint, the new watch's first
   // sync held. Oracle: Intl rejects the currency "NOKK", which only the repointed config's formats module makes
-  // reachable. Vite invalidates no module for a link it reports as created (`followSymlinks: false`), so the plugin
-  // invalidates the compiled catalogs when it restarts the watch, before the new watch has synced: a load in between
-  // compiles with the config as it is.
+  // reachable. The plugin invalidates the compiled catalogs at the change, before the new watch has synced, so a load
+  // in between compiles with the config as it is.
   it("compiles a catalog with a repointed config before the new watch has synced", async ({ project }) => {
     await useMoneyFormats(project, "NOK");
     project.write("intl-formats-next.ts", moneyFormats("NOKK"));
@@ -1060,29 +567,107 @@ describe("intl() vite dev config", { timeout: 15_000 }, () => {
     rmSync(project.path("elmera-intl.json"));
     symlinkSync(join(outside, "valid.json"), project.path("elmera-intl.json"));
     const gate = syncGate((config) => config.formats?.endsWith("intl-formats-next.ts") === true);
-    const clock = configClock();
-    const server = await gatedServer(project, gate, [clock.plugin], {
+    const server = await gatedServer(project, gate, [], {
       server: { watch: { ...SERVER_WATCH.watch, followSymlinks: false } },
     });
-    const load = async () => {
-      try {
-        await server.ssrLoadModule("/messages/nb.po");
+    await expect(load(server)).resolves.toBe("loaded");
 
-        return "loaded";
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
-    };
-    await expect(load()).resolves.toBe("loaded");
-
-    await untilHeld(project, clock, gate, 0, () => {
-      applyEdit({
-        _tag: "Link",
-        file: project.path("elmera-intl.json"),
-        target: join(outside, "invalid.json"),
-      });
+    applyEdit({
+      _tag: "Link",
+      file: project.path("elmera-intl.json"),
+      target: join(outside, "invalid.json"),
     });
+    await expect.poll(() => gate.entered(0), project.guard()).toBe(true);
 
-    await expect(load()).resolves.toMatch(/Invalid currency code : NOKK/u);
+    await expect(load(server)).resolves.toMatch(/Invalid currency code : NOKK/u);
+  });
+
+  // Unit under test: the notice to open tabs of a PO save made while the dev watch restarts on an edited config adding
+  // `sv`, the new watch's first sync held, when that sync then dies, so the new watch fails to start. Oracle: the
+  // reload contract, by hand: a tab told nothing keeps a stale catalog, so a PO save is announced to open tabs as Vite
+  // reports it, whatever the restart around it does: one notice naming `nb.po` while the restart is held, and still
+  // that one once the failed start is logged.
+  it("tells open tabs about a PO save made during a restart whose new watch fails to start", async ({
+    project,
+  }) => {
+    const held = Promise.withResolvers<void>();
+    let entered = false;
+    const services = countedServices(
+      syncing((config: ProjectConfig) =>
+        config.locales.includes("sv")
+          ? Effect.sync(() => {
+              entered = true;
+            }).pipe(
+              Effect.andThen(Effect.promise(() => held.promise)),
+              Effect.andThen(Effect.die(new Error("sync crashed")))
+            )
+          : syncCatalogs(config)
+      )
+    );
+    const errors: Array<string> = [];
+    let nbHandled = 0;
+    const server = await devServer(project, {
+      customLogger: {
+        ...createLogger("silent"),
+        error: (message) => {
+          errors.push(message);
+        },
+      },
+      server: SERVER_WATCH,
+      plugins: [
+        ...intlPlugins({}, services.layer),
+        {
+          name: "nb-clock",
+          enforce: "post",
+          hotUpdate({ file }) {
+            if (this.environment.name === "client" && file.endsWith("/messages/nb.po")) {
+              nbHandled += 1;
+            }
+          },
+        },
+      ],
+    });
+    // Before the server's close (`project.defer` runs the last registered first), so the close never waits on the hold.
+    project.defer(() => {
+      held.resolve();
+    });
+    const poNotices: Array<string> = [];
+    const { hot } = server.environments.client;
+    const send = hot.send.bind(hot);
+    hot.send = (payload: HotPayload) => {
+      if (
+        payload.type === "custom" &&
+        payload.event === CATALOG_UPDATE_EVENT &&
+        JSON.stringify(payload.data).endsWith(`/messages/nb.po"}`)
+      ) {
+        poNotices.push(JSON.stringify(payload.data));
+      }
+      send(payload);
+    };
+    // Saved again each probe interval until the new watch's first sync is held: a poll watcher can miss a write made
+    // before it attached.
+    await expect
+      .poll(
+        () => {
+          if (!entered) {
+            save(project, JSON.stringify(SV_CONFIG))();
+          }
+
+          return entered;
+        },
+        { ...project.guard(), interval: PROBE_INTERVAL_MS }
+      )
+      .toBe(true);
+
+    // A translator's save of `nb.po`, reported as chokidar reports it.
+    server.watcher.emit("change", project.path("messages/nb.po"));
+    await expect.poll(() => nbHandled, project.guard()).toBe(1);
+    const whileHeld = poNotices.length;
+    held.resolve();
+    await expect
+      .poll(() => errors.some((error) => error.includes("did not start")), project.guard())
+      .toBe(true);
+
+    expect({ whileHeld, told: poNotices.length }).toEqual({ whileHeld: 1, told: 1 });
   });
 });

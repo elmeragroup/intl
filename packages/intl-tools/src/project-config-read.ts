@@ -12,7 +12,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import { posix } from "node:path";
 
 import { nodeSyncError, readText } from "./catalog-files";
-import type { ConfigLoaded, ConfigSnapshot } from "./project-config";
+import type { ConfigLoaded } from "./project-config";
 import {
   configInvalid,
   escapingGlob,
@@ -169,6 +169,14 @@ const existsAsNode = (files: FileSystem.FileSystem, path: string) =>
         : Effect.succeed(false)
     )
   );
+
+/** One read of the project config: the text read, and the config parsed from that same text. */
+export type ConfigSnapshot = {
+  /** The file's text; none when it is missing or cannot be read. */
+  readonly text: string | undefined;
+  /** The config parsed from `text`, or the problem with it. */
+  readonly loaded: ConfigLoaded;
+};
 
 /**
  * The watch's read of the config (`followConfig`): `readConfig`'s config or problem, worded as there, and the text it

@@ -151,27 +151,8 @@ export function configInvalid(path: string, message: string): ConfigLoaded {
  * @returns The config, or the problem with it.
  */
 export function loadConfig(path: string): ConfigLoaded {
-  return snapshotConfig(path).loaded;
-}
-
-/** One read of the project config: the text read, and the config parsed from that same text. */
-export type ConfigSnapshot = {
-  /** The file's text; none when it is missing or cannot be read. */
-  readonly text: string | undefined;
-  /** The config parsed from `text`, or the problem with it. */
-  readonly loaded: ConfigLoaded;
-};
-
-/**
- * `loadConfig`, keeping the text it read: a host that compares one read with the next acts on exactly the config it
- * compared, never on a later read of the file.
- *
- * @param path - Path of `elmera-intl.json`, as the problems name it.
- * @returns The text and the config parsed from it.
- */
-export function snapshotConfig(path: string): ConfigSnapshot {
   if (!existsSync(path)) {
-    return { text: undefined, loaded: configInvalid(path, `${path} not found`) };
+    return configInvalid(path, `${path} not found`);
   }
 
   let text: string;
@@ -180,13 +161,10 @@ export function snapshotConfig(path: string): ConfigSnapshot {
   } catch (error) {
     // A read failure (a directory, no permission) reads as "not JSON", as it did when the read and the parse shared
     // one try: the CLI's output stays as it was.
-    return {
-      text: undefined,
-      loaded: configInvalid(path, `not JSON: ${error instanceof Error ? error.message : String(error)}`),
-    };
+    return configInvalid(path, `not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  return { text, loaded: parseConfig(text, path, dirname(resolve(path))) };
+  return parseConfig(text, path, dirname(resolve(path)));
 }
 
 /**

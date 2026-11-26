@@ -28,13 +28,11 @@ import process from "node:process";
 import { printProblems, ProblemsFound, reportCrash, runOnce } from "./command-run";
 import { CONFIG_FILE } from "./project-config";
 import { readConfigSnapshot } from "./project-config-read";
-import { projectServices } from "./project-services";
 import type { ReporterIo } from "./reporter";
 import { Reporter } from "./reporter";
 import type { PollIntervalOutOfRange, SyncResult, WatchMode } from "./watch";
-import { CatalogSync, MAX_POLL_MS, MIN_POLL_MS, pollEvery } from "./watch";
+import { hostServices, MAX_POLL_MS, MIN_POLL_MS, pollEvery } from "./watch";
 import { followConfig } from "./watch-follow";
-import { FileEvents } from "./watch-trees";
 
 /** The directory the default config path resolves in. */
 export type CliOptions = {
@@ -232,7 +230,7 @@ function scanArgs(args: ReadonlyArray<string>): Scanned {
 /**
  * The `elmera-intl` program for `args`: parse them, apply the rules between flags, and run the command. A defect (an
  * exception the commands do not classify) stays a defect. A watch syncs through the `CatalogSync`, and listens through
- * the `FileEvents`, that the host provides for the whole program (their `layer()`s in the executable), so both outlive
+ * the `FileEvents`, that the host provides for the whole program (`hostServices()` in the executable), so both outlive
  * the watch.
  *
  * @param args - The arguments after the program name.
@@ -334,7 +332,8 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
 
 /**
  * The executable's program: the arguments from `Stdio`, the command's output on `io`, the project's services on Node,
- * the extract and Node's file events for a watch, provided once for the whole program, and a crash printed.
+ * the extract and Node's file events for a watch (`hostServices()`), provided once for the whole program, and a crash
+ * printed.
  *
  * @param io - The process's working directory and output streams.
  * @returns The program to run as the process's main fiber; `exitCodeOf` reads its exit.
@@ -343,15 +342,7 @@ export function executable(io: CliIo): Effect.Effect<void, CliFailure> {
   return Effect.gen(function* () {
     const args = yield* Stdio.Stdio.use((stdio) => stdio.args);
     yield* cliProgram(args, io);
-  }).pipe(
-    reportCrash,
-    Effect.provide([
-      CliPlatform,
-      Reporter.layer(io),
-      Layer.provideMerge(CatalogSync.layer(), projectServices()),
-      FileEvents.layer(),
-    ])
-  );
+  }).pipe(reportCrash, Effect.provide([CliPlatform, Reporter.layer(io), hostServices()]));
 }
 
 /**

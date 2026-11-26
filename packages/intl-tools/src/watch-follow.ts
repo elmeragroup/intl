@@ -11,7 +11,8 @@ import * as Scope from "effect/Scope";
 import { basename } from "node:path";
 
 import type { Problem } from "./problem";
-import type { ConfigSnapshot, ProjectConfig } from "./project-config";
+import type { ProjectConfig } from "./project-config";
+import type { ConfigSnapshot } from "./project-config-read";
 import { readConfigSnapshot } from "./project-config-read";
 import type { Output, Watching, WatchMode, WatchOutput } from "./watch";
 import { failed, handOff, watchCatalogs, writeResult } from "./watch";

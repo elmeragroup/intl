@@ -6,7 +6,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { mkdirSync } from "node:fs";
@@ -92,24 +91,18 @@ export function projectConfig(project: Project): ProjectConfig {
 }
 
 /**
- * A host's runtime for `watchProject`, as the Vite plugin makes one: `syncCatalogs` on the project's services on
- * Node and Node's file events, disposed when the test ends (after every cleanup registered later, such as a watch's
- * close).
+ * The services `watchProject` runs a session on, as the Vite plugin hands them over: `syncCatalogs` on the project's
+ * services on Node and Node's file events, built and released by the session itself.
  *
- * @param project - The project whose teardown disposes it.
  * @param events - The file events it provides; Node's unless a test delivers its own.
  * @param sync - The sync's extract it provides; `syncCatalogs` unless a test holds it.
- * @returns The runtime.
+ * @returns The layer.
  */
-export function hostRuntime(
-  project: Project,
+export function watchServices(
   events: Layer.Layer<FileEvents> = FileEvents.layer(),
   sync: Layer.Layer<CatalogSync, never, SyncServices> = CatalogSync.layer()
-): ManagedRuntime.ManagedRuntime<WatchServices, never> {
-  const runtime = ManagedRuntime.make(Layer.mergeAll(Layer.provide(sync, projectServices()), events));
-  project.defer(() => runtime.dispose());
-
-  return runtime;
+): Layer.Layer<WatchServices> {
+  return Layer.mergeAll(Layer.provideMerge(sync, projectServices()), events);
 }
 
 /**
