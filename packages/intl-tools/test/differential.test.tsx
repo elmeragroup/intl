@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { isValidElement } from "react";
 
 import * as Effect from "effect/Effect";
@@ -19,11 +20,53 @@ import { extractMessages } from "../src/extract";
 // key and the key the runtime looks up come from one source and cannot be hand-copied apart.
 const HEADER = `import { Plural, Select, T, Val, msg, useT, useIntl, createIntl } from "@elmeragroup/intl/react";\n`;
 
-type Row =
-  | { readonly label: string; readonly code: string; readonly keys: ReadonlyArray<string> }
-  | { readonly label: string; readonly code: string; readonly fails: string }
+/** What the runtime does with a `<T>` the extractor rejects. */
+type RuntimeEnding =
+  // A defect the extractor rules out: <T> refuses to render.
+  | { readonly throws: string; readonly reports?: never; readonly looksUp?: never }
+  // onError receives this, and the children render untranslated, looking up exactly these keys (none when absent: an
+  // inner <T> translating itself looks up its own).
+  | { readonly reports: string; readonly looksUp?: Lookups; readonly throws?: never }
+  // The runtime reads what React built, which the extractor's static refusal cannot see, and looks these keys up.
+  | { readonly looksUp: Lookups; readonly throws?: never; readonly reports?: never };
+
+/** The keys a render looks up, written out: at least one. */
+type Lookups = readonly [string, ...Array<string>];
+
+// One kind per row: each names its own field and rules out the others', so no field is silently ignored.
+type Row = { readonly label: string; readonly code: string } & (
+  | {
+      readonly keys: ReadonlyArray<string>;
+      // A value the extractor cannot see: it extracts the key, and the runtime refuses to render it.
+      readonly runtime?: Extract<RuntimeEnding, { readonly throws: string }>;
+      readonly fails?: never;
+      readonly rejects?: never;
+      readonly misses?: never;
+    }
+  | {
+      readonly fails: string;
+      readonly runtime?: never;
+      readonly keys?: never;
+      readonly rejects?: never;
+      readonly misses?: never;
+    }
+  // A <T> grammar rule: both halves, the extractor's failure and the runtime's ending for the same text.
+  | {
+      readonly rejects: string;
+      readonly runtime: RuntimeEnding;
+      readonly keys?: never;
+      readonly fails?: never;
+      readonly misses?: never;
+    }
   // A documented residual: the extractor finds nothing and the runtime looks these keys up.
-  | { readonly label: string; readonly code: string; readonly misses: ReadonlyArray<string> };
+  | {
+      readonly misses: ReadonlyArray<string>;
+      readonly runtime?: never;
+      readonly keys?: never;
+      readonly fails?: never;
+      readonly rejects?: never;
+    }
+);
 
 const rows: ReadonlyArray<Row> = [
   { label: "plain text", code: `export const el = <T>Hello</T>;`, keys: ["Hello"] },
@@ -91,32 +134,128 @@ const rows: ReadonlyArray<Row> = [
   {
     label: "spread on a nested element",
     code: `const props = { children: "Hidden" };\nexport const el = <T>Read <a {...props} /></T>;`,
-    fails: "spread",
+    rejects: "spread",
+    runtime: { looksUp: ["Read <x0>Hidden</x0>"] },
   },
   {
     label: "explicit children attribute overridden by JSX children",
     code: `export const el = <T>Read <a children="X">Y</a></T>;`,
-    fails: "`children`",
+    rejects: "`children`",
+    runtime: { looksUp: ["Read <x0>Y</x0>"] },
   },
   {
     label: "<Val> named like a positional tag",
     code: `export const el = <T><Val x0="Ada" /> read <a>terms</a></T>;`,
-    fails: "reserved",
+    rejects: "argument name `x0` is reserved for positional tags (x0, x1, …) in <T>; rename it",
+    runtime: { reports: "argument name `x0` is reserved for positional tags (x0, x1, …) in <T>; rename it" },
   },
   {
     label: "<Select> named like a positional tag",
     code: `export const el = <T><Select x0="a" _a="A" other="O" /> in <b>cart</b></T>;`,
-    fails: "reserved",
+    rejects: "reserved",
+    runtime: { reports: "reserved" },
   },
   {
     label: "<Plural> named like a positional tag",
     code: `export const el = <T><Plural x0={2} one="# item" other="# items" /> in <b>cart</b></T>;`,
-    fails: "reserved",
+    rejects: "reserved",
+    runtime: { reports: "reserved" },
   },
+  {
+    label: "<Select> without other",
+    code: `export const el = <T>Got <Select k="a" _a="A" /></T>;`,
+    rejects: "needs an `other` branch",
+    runtime: { throws: "<Select> needs an `other` branch" },
+  },
+  {
+    label: "<Select> branch that is not text",
+    code: `export const el = <T>Got <Select k="a" _a={1} other="O" /></T>;`,
+    rejects: "branch `_a` must be a string literal",
+    runtime: { throws: "<Select _a> needs a string literal branch" },
+  },
+  {
+    label: "<Select> branch that is no select key",
+    code: `export const el = <T>Got <Select k="a" _a-b="A" other="O" /></T>;`,
+    rejects: "is no select key",
+    runtime: { throws: "is no select key" },
+  },
+  {
+    label: "<Select> branch spelling other",
+    code: `export const el = <T>Got <Select k="a" _other="A" other="O" /></T>;`,
+    rejects: "duplicates `other`",
+    runtime: { throws: "duplicates `other`" },
+  },
+  {
+    label: "<Select> with a second value prop",
+    code: `export const el = <T>Got <Select k="a" kind="b" other="O" /></T>;`,
+    rejects: "needs exactly one value prop",
+    runtime: { throws: "needs exactly one value prop, got k, kind" },
+  },
+  {
+    label: "<Plural> form that is not text",
+    code: `export const el = <T>Got <Plural n={1} one={1} other="#" /></T>;`,
+    rejects: "form `one` must be a string literal",
+    runtime: { throws: "<Plural one> needs a string literal form" },
+  },
+  {
+    label: "<Val> with two value props",
+    code: `export const el = <T>Got <Val a="1" b="2" /></T>;`,
+    rejects: "needs exactly one value prop",
+    runtime: { throws: "needs exactly one value prop, got a, b" },
+  },
+  {
+    label: "<Select> without a value prop",
+    code: `export const el = <T>Got <Select _a="A" other="O" /></T>;`,
+    rejects: "needs exactly one value prop",
+    runtime: { throws: "needs exactly one value prop, got none" },
+  },
+  {
+    // Numbered in pre-order: the outer tag first.
+    label: "a tag inside a tag",
+    code: `export const el = <T><b><i>x</i></b></T>;`,
+    keys: ["<x0><x1>x</x1></x0>"],
+  },
+  {
+    // An untyped value (`await res.json()`) passes ValProps; only the runtime sees it is neither text nor a number.
+    // Whether it should report and fall back instead of throwing is #99.
+    label: "a <Val> value that is neither text nor a number",
+    code: `const o: any = JSON.parse('{"a":1}');\nexport const el = <T>x <Val v={o} /></T>;`,
+    keys: ["x {v}"],
+    runtime: { throws: "<Val v> needs a string or number value" },
+  },
+
+  {
+    // Literal-only: a const is text to the runtime.
+    label: "<Select> branch from a const",
+    code: `const v = "A";\nexport const el = <T>Got <Select k="a" _a={v} other="O" /></T>;`,
+    rejects: "branch `_a` must be a string literal",
+    runtime: { looksUp: ["Got {k, select, a {A} other {O}}"] },
+  },
+  {
+    label: "<T> inside <T>",
+    code: `export const el = <T>a <T>b</T></T>;`,
+    rejects: "<T> cannot contain another <T>",
+    // The outer message is never looked up; the inner <T>, rendered as written, translates itself.
+    runtime: { reports: "<T> cannot contain another <T>", looksUp: ["b"] },
+  },
+  {
+    label: "<T> inside a tag inside <T>",
+    code: `export const el = <T>a <b><T>c</T></b></T>;`,
+    rejects: "<T> cannot contain another <T>",
+    // The outer message is never looked up; the inner <T>, rendered as written, translates itself.
+    runtime: { reports: "<T> cannot contain another <T>", looksUp: ["c"] },
+  },
+  {
+    label: "a branch name on <Val> is its value",
+    code: `const n = "1";\nexport const el = <T>Got <Val one={n} /></T>;`,
+    keys: ["Got {one}"],
+  },
+
   {
     label: "one <Val> name with two values",
     code: `const a = 1;\nconst b = 2;\nexport const el = <T><Val n={a} /> of <Val n={b} /></T>;`,
-    fails: "two values",
+    rejects: "two values",
+    runtime: { reports: "two values" },
   },
   {
     label: "<T> called as a function",
@@ -473,7 +612,8 @@ async function importRow(name: string, code: string): Promise<object> {
   return new Object(loaded);
 }
 
-async function runtimeKeys(index: number, code: string): Promise<ReadonlyArray<string>> {
+// The row's element, loaded and checked outside any try: a setup failure fails the row, never passes as an ending.
+async function rowElement(index: number, code: string): Promise<ReactElement> {
   const imported = await importRow(`row-${index}`, HEADER + code);
   const el = "el" in imported ? imported.el : undefined;
 
@@ -481,24 +621,75 @@ async function runtimeKeys(index: number, code: string): Promise<ReadonlyArray<s
     throw new Error(`row ${index} exports no element`);
   }
 
+  return el;
+}
+
+/** What one render of a row did: the wire keys it looked up and the messages it reported, in order. */
+type Rendered = { readonly keys: ReadonlyArray<string>; readonly reports: ReadonlyArray<string> };
+
+// The row's one render path. Everything a render needs (the module imported, its element checked, a recording catalog,
+// the provider) is built here, outside any assertion on the render, so a setup failure fails the row instead of passing
+// as a throw; the returned function only renders.
+async function rowRender(index: number, code: string): Promise<() => Rendered> {
+  const el = await rowElement(index, code);
+  const reports: Array<string> = [];
   const { catalog, keys } = recordingCatalog();
-  renderToStaticMarkup(
-    <IntlProvider locale="nb" catalog={catalog} timeZone="UTC">
+  const tree = (
+    <IntlProvider
+      locale="nb"
+      catalog={catalog}
+      timeZone="UTC"
+      onError={(error) => reports.push(error.message)}>
       {el}
     </IntlProvider>
   );
 
-  return keys;
+  return () => {
+    renderToStaticMarkup(tree);
+
+    return { keys, reports };
+  };
+}
+
+// A lookup the recording catalog misses also reports (not extracted yet), so a `looksUp` ending reads the lookups
+// alone, and a `reports` ending the first report with every lookup.
+function expectEnding(render: () => Rendered, expected: RuntimeEnding): void {
+  if (expected.throws !== undefined) {
+    expect(render).toThrow(expected.throws);
+
+    return;
+  }
+
+  const { keys, reports } = render();
+  // Neither a lookup nor a report is no ending a <T> has: the row is broken.
+  expect(keys.length + reports.length, "the row looked nothing up and reported nothing").toBeGreaterThan(0);
+
+  if (expected.reports === undefined) {
+    expect(keys).toEqual(expected.looksUp.map((key) => hashKey(key)));
+  } else {
+    expect(reports[0]).toEqual(expect.stringContaining(expected.reports));
+    expect(keys).toEqual((expected.looksUp ?? []).map((key) => hashKey(key)));
+  }
 }
 
 // Unit under test: the extractor and the runtime lookup, on the same module text. Oracle: the hand-written key both
 // must produce (the runtime looks up its wire key, hashKey of it), the failure the extractor must report for a form
-// whose runtime key it cannot know, or (a residual) the keys the runtime looks up while the extractor finds none.
+// whose runtime key it cannot know, (a residual) the keys the runtime looks up while the extractor finds none, or, for
+// a <T> grammar rule, the extractor's failure and the runtime's hand-written ending (throws, reports, or looks up).
 describe("extractor and runtime agree", () => {
   it.each(rows.map((row, i) => [row.label, i, row] as const))("%s", async (_label, i, row) => {
     const extracted = extractMessages(`row-${i}.tsx`, HEADER + row.code);
 
-    if ("fails" in row) {
+    if (row.rejects !== undefined) {
+      expect(
+        extracted._tag === "Failed" ? extracted.failures.map((f) => f.message).join("\n") : extracted.messages
+      ).toEqual(expect.stringContaining(row.rejects));
+      expectEnding(await rowRender(i, row.code), row.runtime);
+
+      return;
+    }
+
+    if (row.fails !== undefined) {
       expect(
         extracted._tag === "Failed" ? extracted.failures.map((f) => f.message).join("\n") : extracted.messages
       ).toEqual(expect.stringContaining(row.fails));
@@ -506,13 +697,19 @@ describe("extractor and runtime agree", () => {
       return;
     }
 
-    const expected = "keys" in row ? row.keys : [];
     expect(
       extracted._tag === "Extracted" ? extracted.messages.map((m) => m.key) : extracted.failures
-    ).toEqual(expected);
-    expect(await runtimeKeys(i, row.code)).toEqual(
-      ("keys" in row ? row.keys : row.misses).map((key) => hashKey(key))
-    );
+    ).toEqual(row.keys ?? []);
+
+    const render = await rowRender(i, row.code);
+
+    if (row.runtime !== undefined) {
+      expect(render).toThrow(row.runtime.throws);
+
+      return;
+    }
+
+    expect(render().keys).toEqual((row.keys ?? row.misses).map((key) => hashKey(key)));
   });
 });
 

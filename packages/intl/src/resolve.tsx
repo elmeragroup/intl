@@ -103,23 +103,31 @@ type ElementProps = { readonly children?: ReactNode };
  * @param intl - The translator for the current locale.
  * @param children - The `<T>` children: text, elements, fragments, `<Val>`, `<Plural>` and `<Select>`.
  * @param context - The `<T context>` prop.
+ * @param self - The calling `<T>`, which its message may not contain.
  * @returns The translated content, with the children's elements around their translated text. An argument the
- *   extractor rejects (a reserved name, one name with two values) is reported to `onError`, and the children render
- *   untranslated, so every value shows as written; so do they when the catalog lacks a structured message (not
- *   extracted yet).
+ *   extractor rejects (a reserved name, one name with two values) or a `<T>` at any depth inside this one is reported
+ *   to `onError` (an app's own only, #100), and the children render untranslated, so every value shows as written and
+ *   an inner `<T>` translates itself; so do they when the catalog lacks a structured message (not extracted yet).
  * @throws When a child is not text, an element, `<Val>`, `<Plural>` or `<Select>`, a value component lacks its one
- *   value prop, or a `<Select>` branch is malformed: the extractor rejects each, so reaching this is a defect.
+ *   value prop, or a `<Plural>` form or `<Select>` branch is malformed: the extractor rejects each, so reaching one is
+ *   a defect. Also when a value is neither text nor a number, which the extractor cannot see and only the
+ *   `Val`/`Plural`/`Select` prop types rule out (#99).
  */
-export function renderT(intl: IntlInstance, children: ReactNode, context: string | undefined): ReactNode {
+export function renderT(
+  intl: IntlInstance,
+  children: ReactNode,
+  context: string | undefined,
+  self: ReactElement["type"]
+): ReactNode {
   const values: Record<string, MessageValue> = {};
   const elements: Array<ReactElement<ElementProps>> = [];
-  const problems: Array<ArgProblem> = [];
-  const nodes = toNodes(children, { values, seen: new Map(), problems }, elements);
+  const problems: Array<Problem> = [];
+  const nodes = toNodes(children, { values, seen: new Map(), problems, self }, elements);
   const message = sourceMessage(serialize(nodes), context);
   const [problem] = problems;
 
   if (problem) {
-    intl[REPORT](new Error(describeArgProblem(problem)), message.key);
+    intl[REPORT](new Error(describeProblem(problem)), message.key);
 
     return <>{children}</>;
   }
@@ -136,28 +144,49 @@ export function renderT(intl: IntlInstance, children: ReactNode, context: string
   return outcome._tag === "NotExtracted" ? <>{children}</> : <>{outcome.value}</>;
 }
 
-/** Where `toNodes` collects a message's arguments. */
-type ArgSink = {
+/**
+ * A `<T>` inside the one being rendered: as a tag, its own translation would replace the outer one's text for it, so
+ * the outer message cannot render translated (the extractor's rule too).
+ */
+type NestedT = { readonly _tag: "NestedT" };
+
+/** Why a `<T>` renders its children untranslated: the slot rules' argument problems, or a `<T>` inside it. */
+type Problem = ArgProblem | NestedT;
+
+function describeProblem(problem: Problem): string {
+  return problem._tag === "NestedT"
+    ? "<T> cannot contain another <T>; keep the whole text in the outer <T>"
+    : describeArgProblem(problem);
+}
+
+/** What one `<T>`'s message walk carries: where it collects the arguments, and the `<T>` it may not meet again. */
+type Walk = {
   /** Receives each `<Val>`/`<Plural>`/`<Select>` value by argument name. */
   readonly values: Record<string, MessageValue>;
   /** Arguments recorded so far, for the shared slot rules. */
   readonly seen: Map<string, MessageValue>;
-  /** Receives each argument the slot rules reject. */
-  readonly problems: Array<ArgProblem>;
+  /** Receives each argument the slot rules reject, and each `<T>` inside the calling one. */
+  readonly problems: Array<Problem>;
+  /**
+   * The calling `<T>`. `/react` resolves to one `T` per environment, so a `<T>` written inside it is this function;
+   * a second loaded copy of the package is not caught.
+   */
+  readonly self: ReactElement["type"];
 };
 
 /**
  * Turn `<T>` children into message parts, collecting argument values and the elements behind positional tags.
  *
  * @param children - The children to read.
- * @param args - Receives the arguments and any slot-rule problems.
+ * @param walk - Receives the arguments and the problems that keep the message untranslated, and names the calling
+ *   `<T>`.
  * @param elements - Receives each element, in tag order.
  * @returns The message parts.
  * @throws On a child `<T>` cannot represent (see `renderT`).
  */
 function toNodes(
   children: ReactNode,
-  args: ArgSink,
+  walk: Walk,
   elements: Array<ReactElement<ElementProps>>
 ): Array<MessageNode> {
   const nodes: Array<MessageNode> = [];
@@ -173,7 +202,7 @@ function toNodes(
     }
 
     if (Array.isArray(child)) {
-      nodes.push(...toNodes(child, args, elements));
+      nodes.push(...toNodes(child, walk, elements));
       continue;
     }
 
@@ -183,12 +212,17 @@ function toNodes(
       );
     }
 
+    // Read on as a tag, so the message (and its key) stays the one the walk computes; renderT reports it.
+    if (child.type === walk.self) {
+      walk.problems.push({ _tag: "NestedT" });
+    }
+
     if (child.type === Fragment) {
-      nodes.push(...toNodes(child.props.children, args, elements));
+      nodes.push(...toNodes(child.props.children, walk, elements));
       continue;
     }
 
-    nodes.push(toElementNode(child, args, elements));
+    nodes.push(toElementNode(child, walk, elements));
   }
 
   return nodes;
@@ -196,21 +230,21 @@ function toNodes(
 
 function toElementNode(
   element: ReactElement<ElementProps>,
-  args: ArgSink,
+  walk: Walk,
   elements: Array<ReactElement<ElementProps>>
 ): MessageNode {
   const { props } = element;
 
   if (element.type === Val) {
     const [name, value] = singleArg(element, "Val");
-    addArg(args, name, value);
+    addArg(walk, name, value);
 
     return { kind: "arg", name };
   }
 
   if (element.type === Plural) {
     const [name, value] = singleArg(element, "Plural");
-    addArg(args, name, value);
+    addArg(walk, name, value);
     const forms = Object.fromEntries(
       propEntries(element).flatMap(([key, form]) => {
         if (!isPluralForm(key)) {
@@ -230,14 +264,14 @@ function toElementNode(
 
   if (element.type === Select) {
     const [name, value] = singleArg(element, "Select");
-    addArg(args, name, value);
+    addArg(walk, name, value);
 
     return selectNode(element, name);
   }
 
   const index = elements.push(element) - 1;
 
-  return { kind: "el", index, children: toNodes(props.children, args, elements) };
+  return { kind: "el", index, children: toNodes(props.children, walk, elements) };
 }
 
 // The extractor rejects each throw's case, so reaching one is a defect.
@@ -273,13 +307,13 @@ function selectNode(element: ReactElement<ElementProps>, name: string): MessageN
   return { kind: "select", name, cases, other };
 }
 
-function addArg(args: ArgSink, name: string, value: MessageValue): void {
-  const problem = recordArg(args.seen, name, value);
+function addArg(walk: Walk, name: string, value: MessageValue): void {
+  const problem = recordArg(walk.seen, name, value);
 
   if (problem) {
-    args.problems.push(problem);
+    walk.problems.push(problem);
   } else {
-    args.values[name] = value;
+    walk.values[name] = value;
   }
 }
 

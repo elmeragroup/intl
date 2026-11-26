@@ -89,7 +89,7 @@ export type TProps = {
  * @returns The translated content.
  */
 export function T({ children, context }: TProps): ReactNode {
-  return renderT(useIntl(), children, context);
+  return renderT(useIntl(), children, context, T);
 }
 
 /**
