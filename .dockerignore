@@ -1,0 +1,43 @@
+# The docs image's build context (apps/docs/Dockerfile): the repository as committed. Installs, build output, caches,
+# the Fuse reference clone and local tool state stay out, so the context is small and the image installs and builds
+# from the lockfile and source alone.
+.git
+.ref
+.scratch
+.artifacts
+.cache
+.turbo
+**/.turbo
+**/node_modules
+**/dist
+**/coverage
+**/.next
+**/.next-*
+**/.output
+**/.nitro
+**/.tanstack
+**/test-results
+**/playwright-report
+**/blob-report
+**/*.tsbuildinfo
+# Environment files hold local secrets, and Next copies a `.env.production` into its standalone output.
+.env
+.env.*
+**/.env
+**/.env.*
+.DS_Store
+**/.DS_Store
+.agent
+.agents
+.claude
+.codex
+.continue
+.cursor
+.gemini
+.idea
+.opencode
+.pi
+.roo
+.vscode
+.windsurf
+.zed

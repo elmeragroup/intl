@@ -1,0 +1,40 @@
+{
+  "name": "@elmeragroup/docs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The documentation site for @elmeragroup/intl and @elmeragroup/intl-tools: a Next.js App Router app on Elmera's Fuse design system, its docs pages in MDX, deployed per pull request as a preview.",
+  "type": "module",
+  "scripts": {
+    "build": "next build && cp -R .next/static .next/standalone/apps/docs/.next/",
+    "clean": "git clean -xdf .next .turbo node_modules playwright-report test-results",
+    "dev": "next dev -p 3033",
+    "e2e": "DOCS_ORIGIN=http://localhost:3042 pnpm build && playwright test",
+    "start": "node scripts/start.ts",
+    "ci:checks": "pnpm type-check && pnpm test:run",
+    "tcw": "tsrs --noEmit --watch",
+    "type-check": "tsrs --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@elmeragroup/fuse": "catalog:",
+    "@fontsource/inter": "catalog:",
+    "@next/mdx": "catalog:",
+    "next": "catalog:",
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19"
+  },
+  "devDependencies": {
+    "@elmeragroup/typescript-config": "workspace:*",
+    "@mdx-js/loader": "catalog:",
+    "@playwright/test": "catalog:",
+    "@tailwindcss/postcss": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:react19",
+    "@types/react-dom": "catalog:react19",
+    "tailwindcss": "catalog:",
+    "tsrs": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,18 @@
+/* Tailwind v4 with Fuse's components and themes (Fuse's README, "Tailwind v4"). Fuse ships compiled class names in its
+   package, which Tailwind scans only where @source points: the installed package root, two directories up from here. */
+@import "tailwindcss";
+@import "@elmeragroup/fuse/css";
+@import "@elmeragroup/fuse/themes.css";
+@source "../../node_modules/@elmeragroup/fuse";
+
+@theme {
+  --spacing-docs-header: 3.5rem;
+}
+
+/* Fuse sets body text in --font-sans and headings in --font-heading and loads no font (its README, "Fonts"):
+   components/site-font.ts loads Inter into --font-inter. */
+:root,
+[data-theme-identity] {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+}

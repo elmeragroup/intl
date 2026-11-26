@@ -1,0 +1,19 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Strict env mode hides undeclared variables from the build. The origin, or the PORT its localhost fallback names,
+    // is baked into every prerendered og:image URL (src/lib/site-origin.ts), so both reach the build and key its cache.
+    // `next build` also reads the origin from the app's dotenv files (.env, .env.production and their .local copies),
+    // which git ignores and so turbo's default inputs leave out: `.env*` puts them in the key. The container image
+    // builds through this task (Dockerfile).
+    "build": {
+      "env": ["DOCS_ORIGIN", "PORT"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"]
+    },
+    // `next dev` renders the same og:image URLs on each request, so a DOCS_ORIGIN set for it must reach it.
+    "dev": {
+      "passThroughEnv": ["$TURBO_EXTENDS$", "DOCS_ORIGIN"]
+    }
+  }
+}

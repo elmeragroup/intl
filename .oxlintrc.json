@@ -245,6 +245,15 @@
         "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }]
       }
     },
+    // The docs site's document element loads its global stylesheet (Tailwind and Fuse) for its effect. The root layout,
+    // the global error page and the global not-found page each render a document of their own, so the one component all
+    // three render is the one place the stylesheet is imported.
+    {
+      "files": ["apps/docs/src/components/document-root.tsx"],
+      "rules": {
+        "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }]
+      }
+    },
     // @elmeragroup/intl and intl-tools are self-contained: they may import no other @elmeragroup package. Their source
     // implements the API the extraction contract restricts, and their tests break it on purpose.
     {

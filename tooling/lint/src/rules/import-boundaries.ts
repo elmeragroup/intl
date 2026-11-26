@@ -2,8 +2,8 @@ import type { ESTree, Rule } from "@oxlint/plugins";
 // The workspace's dependency direction: intl-e2e → intl-tools → intl, and nothing back.
 //
 // - Nothing imports @elmeragroup/intl-e2e: it is a test harness.
-// - Nothing outside an example app (`apps/<name>`) imports a file inside it: an app is a leaf, and its code is copy for
-//   readers, not a module to share. A package cannot import one by name either: none may declare it (the manifest
+// - Nothing outside an app (`apps/<name>`: an example or the docs site) imports a file inside it: an app is a leaf, and
+//   its code is copy for readers, not a module to share. A package cannot import one by name either: none may declare it (the manifest
 //   test), so the name does not resolve.
 // - @elmeragroup/intl never imports @elmeragroup/intl-tools: the runtime ships to browsers, the tools to build steps.
 // - @elmeragroup/intl/internal/* is for intl-tools (and the runtime itself): it carries no semver promise.
@@ -40,7 +40,7 @@ export const importBoundaries: Rule = {
     docs: { description: "Imports follow the dependency direction intl-e2e → intl-tools → intl." },
     messages: {
       e2e: "Nothing imports @elmeragroup/intl-e2e: it is the private test harness, and nothing depends on it.",
-      app: "`{{specifier}}` reaches into the example app {{app}}: nothing outside an app imports it. Copy the code, or move what is shared into @elmeragroup/intl or @elmeragroup/intl-tools.",
+      app: "`{{specifier}}` reaches into the app {{app}}: nothing outside an app imports it. Copy the code, or move what is shared into @elmeragroup/intl or @elmeragroup/intl-tools.",
       tools:
         "@elmeragroup/intl never imports @elmeragroup/intl-tools: the runtime ships to browsers, the tools run at build time (the dependency points from intl-tools to intl).",
       internal:

@@ -37,7 +37,7 @@ export const RUNTIME = "@elmeragroup/intl";
 export const TOOLS = "@elmeragroup/intl-tools";
 /** The private e2e harness package. */
 export const E2E = "@elmeragroup/intl-e2e";
-/** The workspace directory that holds the example apps (`apps/<name>`), as pnpm-workspace.yaml globs it. */
+/** The workspace directory that holds the apps (`apps/<name>`), as pnpm-workspace.yaml globs it. */
 export const APPS_DIRECTORY = "apps";
 
 const byDirectory = new Map<string, WorkspacePackage | undefined>();
@@ -110,7 +110,7 @@ export function packageOf(filename: string): WorkspacePackage | undefined {
 }
 
 /**
- * Whether the package is an example app: a private package directly under the workspace's `apps/`. Nothing depends on
+ * Whether the package is an app (an example or the docs site): a private package directly under the workspace's `apps/`. Nothing depends on
  * an app, and none publishes.
  *
  * @param pkg - A workspace package.

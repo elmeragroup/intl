@@ -24,6 +24,9 @@ catalogs:
     '@elmeragroup/internal':
       specifier: 0.2.0-canary.22
       version: 0.2.0-canary.22
+    '@fontsource/inter':
+      specifier: 5.3.0
+      version: 5.3.0
     '@jridgewell/trace-mapping':
       specifier: 0.3.31
       version: 0.3.31
@@ -183,6 +186,61 @@ importers:
       turbo:
         specifier: 'catalog:'
         version: 2.11.10
+
+  apps/docs:
+    dependencies:
+      '@elmeragroup/fuse':
+        specifier: 'catalog:'
+        version: 0.1.0-canary.208(@tanstack/react-table@9.2.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.3)
+      '@fontsource/inter':
+        specifier: 'catalog:'
+        version: 5.3.0
+      '@next/mdx':
+        specifier: 'catalog:'
+        version: 16.4.6(@mdx-js/loader@3.1.1)
+      next:
+        specifier: 'catalog:'
+        version: 16.4.6(@babel/core@7.29.13)(@playwright/test@1.64.1)(@types/node@26.6.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      react:
+        specifier: catalog:react19
+        version: 19.3.1
+      react-dom:
+        specifier: catalog:react19
+        version: 19.3.1(react@19.3.1)
+    devDependencies:
+      '@elmeragroup/typescript-config':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+      '@mdx-js/loader':
+        specifier: 'catalog:'
+        version: 3.1.1
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.64.1
+      '@tailwindcss/postcss':
+        specifier: 'catalog:'
+        version: 4.3.3
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.5
+      '@types/react':
+        specifier: catalog:react19
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: catalog:react19
+        version: 19.3.0(@types/react@19.3.0)
+      tailwindcss:
+        specifier: 'catalog:'
+        version: 4.3.3
+      tsrs:
+        specifier: 'catalog:'
+        version: 0.25.0-ts7.1.0-beta
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.6.5)(jsdom@29.1.1)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0)(yaml@2.9.1))
 
   apps/effect-example:
     dependencies:
@@ -960,6 +1018,9 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
+
+  '@fontsource/inter@5.3.0':
+    resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
 
   '@formatjs/fast-memoize@3.1.7':
     resolution: {integrity: sha512-zXfhLpvA6T7+efdt9JLbBwZ00tT7NsBMDVnDu8rpHeNNv8KfRZAMo2gkG0k9lK/Nzc//3kJ9pImsfuJxk3KhUA==}
@@ -4943,6 +5004,8 @@ snapshots:
       react-dom: 19.3.1(react@19.3.1)
 
   '@floating-ui/utils@0.2.12': {}
+
+  '@fontsource/inter@5.3.0': {}
 
   '@formatjs/fast-memoize@3.1.7': {}
 

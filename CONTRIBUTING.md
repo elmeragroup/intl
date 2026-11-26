@@ -128,6 +128,13 @@ additive, a rename or a removal. `/internal/*` subpaths carry no semver promise.
 
 Edit an existing changeset only to correct what it says shipped, never to move a gate.
 
+## Preview the docs site
+
+Every PR from a branch of this repository deploys the docs site (`apps/docs`) as a preview, and a
+comment on the PR, edited in place on each push, links to it. The link opens only on the VPN. A PR
+that leaves the site unchanged can carry the `no-preview` label to deploy nothing; a fork PR gets no
+preview. Closing the PR removes it ([preview.yml](.github/workflows/preview.yml)).
+
 <a id="releases"></a>
 
 ## Releases

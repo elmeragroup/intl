@@ -1,0 +1,79 @@
+name: Push docs image
+description: >-
+  Build one of the docs site's images for linux/amd64 and push it to the Azure Container
+  Registry's intl-docs repository, then report it by digest. The caller must already be logged
+  in with azure/login.
+
+inputs:
+  registry:
+    description: Azure Container Registry name, without the .azurecr.io suffix.
+    required: true
+  tag:
+    description: >-
+      The tag to push, unique to the build (the commit, run and attempt), so the registry shows
+      which run pushed an image. Deploys name the digest, never the tag.
+    required: true
+  context:
+    description: The build context.
+    required: true
+  file:
+    description: The Dockerfile.
+    required: true
+  build-args:
+    description: Newline-separated build arguments.
+    required: false
+    default: ""
+  cache-scope:
+    description: The GitHub Actions cache scope of the image's layers.
+    required: true
+
+outputs:
+  image:
+    description: The pushed image by digest, `<registry>.azurecr.io/intl-docs@sha256:…`.
+    value: ${{ steps.ref.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    # The registry is shared with other Elmera sites, so the docs push to a repository of their
+    # own. `latest` is never pushed.
+    - name: Repository
+      id: repository
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: echo "repository=${REGISTRY}.azurecr.io/intl-docs" >> "$GITHUB_OUTPUT"
+
+    - name: Log in to the registry
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: az acr login --name "$REGISTRY"
+
+    - name: Set up Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - name: Build and push
+      id: build
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        platforms: linux/amd64
+        push: true
+        tags: ${{ steps.repository.outputs.repository }}:${{ inputs.tag }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: type=gha,scope=${{ inputs.cache-scope }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.cache-scope }}
+
+    # A revision names the digest, so it runs exactly the bytes this step pushed, whatever later
+    # happens to the tag.
+    - name: Image reference
+      id: ref
+      shell: bash
+      env:
+        REPOSITORY: ${{ steps.repository.outputs.repository }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+      run: |
+        [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-push-action reported no digest: '$DIGEST'"; exit 1; }
+        echo "image=${REPOSITORY}@${DIGEST}" >> "$GITHUB_OUTPUT"
