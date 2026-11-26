@@ -88,6 +88,47 @@ describe("extract --watch follows its config", () => {
       ]);
     })
   );
+
+  // Two checkouts of one app, their configs byte for byte the same, the config's directory reached through a link a
+  // deploy repoints from one to the other: the config's root is its directory's real path (#75), so a repoint moves the
+  // root while the text stays. Oracle: the config contract, by hand: the watch writes the catalogs below the config's
+  // directory as the kernel resolves it now, `b/messages/nb.po` with b's message, and names it from that root.
+  it.effect.each([
+    { mode: "native file events", flags: [], read: Duration.millis(250) },
+    { mode: "polling", flags: ["--poll", POLL_MS], read: Duration.millis(Number(POLL_MS)) },
+  ])(
+    "restarts when a link to its config's directory is repointed, on $mode",
+    ({ flags, read }, { project }) =>
+      Effect.gen(function* () {
+        for (const [checkout, message] of [
+          ["a", "Hello"],
+          ["b", "Hei"],
+        ] as const) {
+          project.write(`${checkout}/elmera-intl.json`, CONFIG_TEXT);
+          project.write(`${checkout}/src/page.tsx`, component(message));
+        }
+        symlinkSync(project.path("a"), project.path("current"));
+        const output = yield* runWatch(
+          project,
+          ["--config", "current/elmera-intl.json", ...flags],
+          deliveredEvents().layer
+        );
+        yield* TestClock.adjust("1 millis");
+        expect(output()).toContain("watching");
+
+        rmSync(project.path("current"));
+        symlinkSync(project.path("b"), project.path("current"));
+        yield* afterRead(read);
+
+        const written = existsSync(project.path("b/messages/nb.po"))
+          ? project.read("b/messages/nb.po")
+          : "(missing)";
+        expect([written, output()]).toEqual([
+          expect.stringContaining(`msgid "Hei"`),
+          expect.stringContaining("elmera-intl.json changed, restarting the watch\nwrote messages/nb.po\n"),
+        ]);
+      })
+  );
 });
 
 // Unit under test: `followConfig`, the watch that follows its config, on the test clock, polling every 50 ms (its
@@ -390,14 +431,14 @@ describe("followConfig", () => {
       let reads = 0;
       const { stop } = yield* launchFollow(project, {
         layer: sync.layer,
-        fileSystem: syncFileSystem(
-          (read) => (path) =>
+        fileSystem: syncFileSystem({
+          readFile: (read) => (path) =>
             Effect.suspend(() => {
               reads += path === project.path("elmera-intl.json") ? 1 : 0;
 
               return read(path);
-            })
-        ),
+            }),
+        }),
       });
       yield* gate.release;
       yield* Deferred.succeed(stop, undefined);

@@ -1,10 +1,10 @@
 // Where a project's catalogs live: each locale's PO path, and the locale a PO path is the catalog of. A leaf, so a
 // catalog import (catalog-import.ts, which Next's po-loader and Vite's `load` share) resolves its catalog without
 // loading the extractor.
-import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { ProjectConfig } from "./project-config";
+import { identityPathSync, realPathSync } from "./real-path";
 
 /**
  * Path of a locale's PO file.
@@ -20,26 +20,36 @@ export function catalogPath(config: ProjectConfig, locale: string): string {
 }
 
 /**
- * The configured locale a PO file is the catalog of: what a loader compiles an imported `.po` for.
+ * Every configured locale whose catalog resolves to a PO file: what a loader compiles an imported `.po` for when it is
+ * one, and refuses naming them when it is several (a file their catalogs share through a link), or as no catalog when
+ * it is none.
  *
  * @param config - The project config.
  * @param file - An absolute path.
- * @returns The locale, or undefined when the file is not one of the configured locales' catalogs.
+ * @returns The locales, in the config's order.
  */
-export function catalogLocale(config: ProjectConfig, file: string): string | undefined {
-  // As written first, with no system call: the common case of every import. A host hands over the file at its real
-  // path (Turbopack's loader, Vite's resolved id), so the catalogs the config names through a link match on a miss.
-  const written = config.locales.find((locale) => resolve(catalogPath(config, locale)) === resolve(file));
+export function catalogLocales(config: ProjectConfig, file: string): ReadonlyArray<string> {
+  // Each locale is matched, also when one locale's catalog names the file as written (`locales/sv -> nb`: compiled for
+  // `nb`, `sv`'s import would get `nb`'s plural rules and formats). So each import resolves the file and every locale's
+  // catalog, one real-path lookup each, with no as-written shortcut: an as-written match says nothing of the other
+  // locales' links (#98). A host hands over the file at its real path (Turbopack's loader, Vite's resolved id), so
+  // catalogs the config names through a link match too. Each catalog's path is resolved as `extract` writes it, never
+  // collapsed: a `..` in an absolute pattern climbs where the kernel takes it, and one after a directory that does not
+  // exist names no file (`extract` refuses it as `CatalogClimbsMissing`), while the imported file exists. Whether the
+  // file is a catalog is a question of identity, so both sides take the kernel's answer (`identityPathSync`).
+  const { base, rest } = nearestReal(resolve(file), identityPathSync);
+  const real = join(base, ...rest);
 
-  if (written !== undefined) {
-    return written;
-  }
+  return config.locales.filter((locale) => catalogIdentity(catalogPath(config, locale)) === real);
+}
 
-  // Only a file one locale's catalog resolves to: a file several link to names none of them.
-  const real = realPath(resolve(file));
-  const matched = config.locales.filter((locale) => realPath(resolve(catalogPath(config, locale))) === real);
+// A catalog's real path, as the kernel resolves it (`identityPathSync`), or none when a `..` follows its nearest
+// existing ancestor: the kernel climbs out of no missing directory, so joining that `..` onto the ancestor would name a
+// file the path never reaches.
+function catalogIdentity(path: string): string | undefined {
+  const { base, rest } = nearestReal(path, identityPathSync);
 
-  return matched.length === 1 ? matched[0] : undefined;
+  return rest.includes("..") ? undefined : join(base, ...rest);
 }
 
 /**
@@ -50,25 +60,31 @@ export function catalogLocale(config: ProjectConfig, file: string): string | und
  * @returns The real path.
  */
 export function realPath(path: string): string {
+  const { base, rest } = nearestReal(path, realPathSync);
+
+  return join(base, ...rest);
+}
+
+// A path's nearest existing ancestor, at its real path as `resolveReal` reads it (the hosts' `realPathSync`, or the
+// kernel's `identityPathSync` for a comparison), and the segments after it as written.
+function nearestReal(path: string, resolveReal: (path: string) => string) {
   let ancestor = path;
-  let rest = "";
+  const rest: Array<string> = [];
 
   for (;;) {
     const parent = dirname(ancestor);
     let resolved: string | undefined;
     try {
-      resolved = realpathSync.native(ancestor);
+      resolved = resolveReal(ancestor);
     } catch {
       resolved = undefined;
     }
 
     if (resolved !== undefined || parent === ancestor) {
-      const base = resolved ?? ancestor;
-
-      return rest === "" ? base : join(base, rest);
+      return { base: resolved ?? ancestor, rest };
     }
 
-    rest = rest === "" ? basename(ancestor) : join(basename(ancestor), rest);
+    rest.unshift(basename(ancestor));
     ancestor = parent;
   }
 }

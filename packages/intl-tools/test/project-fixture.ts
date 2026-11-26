@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
   writeSync,
@@ -98,7 +99,9 @@ export type OpenProject = {
  * @returns The project, and its teardown for the fixture's cleanup.
  */
 export function openProject(prefix: string, timeoutMs: number): OpenProject {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  // At its real path, as the tools root a config (`configLocation`): the temporary directory may be reached through a link
+  // (macOS's `/tmp`), and a path a test spells from the root then names each file as the tools do.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   // Read on the monotonic clock: a wall-clock step neither shortens nor stretches the guards.
   const deadline = performance.now() + timeoutMs - Math.min(MARGIN_MS, timeoutMs / 10);
   const cleanups: Array<Cleanup> = [];

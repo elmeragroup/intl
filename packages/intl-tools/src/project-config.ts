@@ -2,9 +2,10 @@
 // `withIntl` needs (Next calls it inside next.config, which returns synchronously). A leaf beside problem.ts, so
 // next.config loads neither the extractor nor the rest of the project module.
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, posix, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path";
 
 import type { Problem } from "./problem";
+import { realPathSync } from "./real-path";
 
 /** The config file name the CLI looks for in the project root. */
 export const CONFIG_FILE = "elmera-intl.json";
@@ -145,26 +146,112 @@ export function configInvalid(path: string, message: string): ConfigLoaded {
 
 /**
  * Read and parse the project config, synchronously. The read is the boundary that resolves a relative path, against
- * the working directory; every caller passes an absolute one.
+ * the working directory; every caller passes an absolute one. The file is read in the directory its root names
+ * (`configLocation`), so the text and the root are one directory's.
  *
  * @param path - Path of `elmera-intl.json`, as the problems name it.
  * @returns The config, or the problem with it.
  */
 export function loadConfig(path: string): ConfigLoaded {
-  if (!existsSync(path)) {
+  const location = configLocation(path);
+
+  if (location === undefined || !existsSync(location.file)) {
     return configInvalid(path, `${path} not found`);
   }
 
+  const { root, file } = location;
+
   let text: string;
   try {
-    text = readFileSync(path, "utf8");
+    text = readFileSync(file, "utf8");
   } catch (error) {
-    // A read failure (a directory, no permission) reads as "not JSON", as it did when the read and the parse shared
-    // one try: the CLI's output stays as it was.
-    return configInvalid(path, `not JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return configUnreadable(path, file, error instanceof Error ? error.message : String(error));
   }
 
-  return parseConfig(text, path, dirname(resolve(path)));
+  return parseConfig(text, path, root);
+}
+
+/**
+ * The directory a config's path names: `dirname` of the path as spelled, so a symlinked `elmera-intl.json` keeps the
+ * directory its link is in (#52's repoints, #53's replay rows c1 and c2). `configLocation` and the Effect readers'
+ * `readConfigLocation` (project-config-read.ts) resolve it through its links.
+ *
+ * @param path - Path of `elmera-intl.json`, relative paths from the working directory.
+ * @returns The directory, absolute and lexical.
+ */
+export function configDirectory(path: string): string {
+  return dirname(resolve(path));
+}
+
+/** Where a config is read: its root, and the file read for it, in that directory. */
+export type ConfigLocation = {
+  /** The directory the config's relative paths resolve from. */
+  readonly root: string;
+  /** The config's file in `root`: its base name, which the read follows when it is a link. */
+  readonly file: string;
+};
+
+/**
+ * Where a config is read once its directory is resolved: the file by its base name in that directory, so the text a
+ * read returns is the file in the directory the root names, never another's through a link repointed between the
+ * lookup and the read. A symlinked `elmera-intl.json` is that link, which the read follows to its target.
+ *
+ * @param root - The config's directory, resolved.
+ * @param path - Path of `elmera-intl.json`, relative paths from the working directory.
+ * @returns The root and the file.
+ */
+export function configIn(root: string, path: string): ConfigLocation {
+  return { root, file: join(root, basename(resolve(path))) };
+}
+
+/**
+ * Where a config is read, synchronously: its root, the directory its relative paths resolve from, `configDirectory`
+ * resolved through its links, and the file in it (`configIn`). Every spelling of one directory (`/mnt/web ->
+ * /repo/apps/web`, macOS's `/tmp` and the working directory's `/private/tmp`) reads the config one way, and a `..` in
+ * `catalogs` climbs where the kernel climbs from it (#75). Resolved the hosts' way (`realPathSync`, real-path.ts), as
+ * the Effect readers' `FileSystem.realPath` resolves it on Node (`NodePlatform`, project-services.ts), so the CLI, the
+ * watch, `withIntl` and the Vite plugin read one root, the kernel's on POSIX, also where a link's target climbs with
+ * `..` through a second link (#118).
+ *
+ * None when the directory does not resolve, which every reader reports as the config "not found", as Node's
+ * `existsSync` answered for the path before the directory was resolved: it swallows every failure to reach a path, a
+ * missing directory, a dangling or looping link and a directory on the way it may not search (`EACCES`) alike. A read
+ * through the directory as written instead could follow a link repointed after the lookup failed (`ln -sfn` unlinks,
+ * then links) and pair the new target's config with the link as its root. The one failure `existsSync` throws, a
+ * lookup the permission model denies (`ERR_ACCESS_DENIED`), is thrown here too, so it is the crash it was.
+ *
+ * @param path - Path of `elmera-intl.json`, relative paths from the working directory.
+ * @returns The root, absolute, and the file; none when the directory does not resolve.
+ */
+export function configLocation(path: string): ConfigLocation | undefined {
+  let root: string;
+  try {
+    root = realPathSync(configDirectory(path));
+  } catch (error) {
+    // Node's permission model refusing the lookup: the one failure existsSync throws rather than answers as absent.
+    if (error instanceof Error && "code" in error && error.code === "ERR_ACCESS_DENIED") {
+      throw error;
+    }
+
+    return undefined;
+  }
+
+  return configIn(root, path);
+}
+
+/**
+ * The problem with a config whose file exists but could not be read (a directory, no permission): "not JSON", as it
+ * was when the read and the parse shared one try, so the CLI's output stays as it was. The read's error names the file
+ * as read, in the resolved directory (`configIn`); the problem names it as the caller spelled it.
+ *
+ * @param path - Path of `elmera-intl.json`, as the problems name it.
+ * @param file - The file read for it (`ConfigLocation.file`).
+ * @param message - The read's error message.
+ * @returns The problem.
+ */
+export function configUnreadable(path: string, file: string, message: string): ConfigLoaded {
+  // A replacement function, not a string: a string's `$&` or `$1` in the caller's path would be expanded.
+  return configInvalid(path, `not JSON: ${message.replaceAll(`'${file}'`, () => `'${path}'`)}`);
 }
 
 /**

@@ -1,7 +1,7 @@
 // The Vite plugins' assembly, over the services their sessions run on: `intl()` (vite.ts) supplies the real ones.
 import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Environment, Plugin, ResolvedConfig, ViteDevServer } from "vite";
 
@@ -17,6 +17,7 @@ import { CONFIG_FILE, loadConfig } from "./project-config";
 import type { ProjectServices } from "./project-services";
 import type { ProjectWatchEnd, ProjectWatcher } from "./project-watcher";
 import { watchProject } from "./project-watcher";
+import { realPathSync } from "./real-path";
 import { Reporter } from "./reporter";
 import type { SyncResult, WatchMode, WatchServices } from "./watch";
 import { MAX_POLL_MS, MIN_POLL_MS, pollEvery } from "./watch";
@@ -184,7 +185,7 @@ export function intlPlugins(
         // `vite build --watch` rebuilds when only the config or catalogs change, so a catalog repair unstalls it. A
         // missing input cannot be watched, so its nearest existing ancestor is (recursively), which sees it created.
         catalogInputs(config).forEach((input) => {
-          this.addWatchFile(realpathSync(nearestExisting(input)));
+          this.addWatchFile(realPathSync(nearestExisting(input)));
         });
         const result = await check(buildSessions, this.environment, config);
         // And each source the check read, so a repair of one rebuilds: a failed check stops the build before it loads
@@ -431,5 +432,5 @@ function watchedPaths(path: string): ReadonlyArray<string> {
 function canonical(path: string): string {
   const existing = nearestExisting(path);
 
-  return join(realpathSync(existing), relative(existing, path));
+  return join(realPathSync(existing), relative(existing, path));
 }

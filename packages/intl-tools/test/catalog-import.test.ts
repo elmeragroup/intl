@@ -48,9 +48,9 @@ it.for([
 });
 
 // Unit under test: the same import, for a file that is the real path of several locales' catalogs. Oracle: a catalog
-// import compiles one locale, the one its file names (`main` refuses a file that names no configured locale with
-// `… is not a configured catalog`); a file two locales' catalogs link to names neither uniquely, so the real-path
-// match must not pick one by the order of `locales`, and the import is refused as one that names no locale.
+// import compiles one locale, the one its file names; a file two locales' catalogs link to names neither uniquely, so
+// the real-path match must not pick one by the order of `locales`, and the import is refused naming both locales, each
+// of which needs a PO of its own.
 it("refuses a file that several locales' catalogs link to, given at its real path", ({ project }) => {
   project.write("shared/en.po", PO);
   mkdirSync(project.path("intl"), { recursive: true });
@@ -70,6 +70,59 @@ it("refuses a file that several locales' catalogs link to, given at its real pat
   });
 
   expect(outcome._tag === "Failed" ? outcome.error.message : outcome._tag).toBe(
-    "elmera-intl: shared/en.po is not a configured catalog (intl/{locale}.po, en-US, en-GB)"
+    "elmera-intl: shared/en.po is the catalog of en-US, en-GB through a link; each locale needs a PO of its own (intl/{locale}.po)"
+  );
+});
+
+// Unit under test: the import both hosts share, for a locale whose catalog directory links to another locale's
+// (`intl/sv -> nb`), given the file at its real path, as the hosts hand it over (#98). Oracle: as for a shared file
+// above, a file the catalogs of two locales resolve to names neither, also when one locale's catalog names it as
+// written: compiled for `nb`, `sv`'s import would get `nb`'s plural rules and formats with no error, so the import is
+// refused naming both locales, though `nb` is configured and names the file as written.
+it("refuses a file one locale names and another's catalog directory links to, given at its real path", ({
+  project,
+}) => {
+  project.write("intl/nb/messages.po", PO);
+  symlinkSync("nb", project.path("intl/sv"), "dir");
+  project.write(
+    "elmera-intl.json",
+    JSON.stringify({ include: ["*.ts"], catalogs: "intl/{locale}/messages.po", locales: ["nb", "sv"] })
+  );
+
+  const { outcome } = compileCatalogImport({
+    config: project.path("elmera-intl.json"),
+    file: project.path("intl/nb/messages.po"),
+    readPo: () => PO,
+    source: false,
+  });
+
+  expect(outcome._tag === "Failed" ? outcome.error.message : outcome._tag).toBe(
+    "elmera-intl: intl/nb/messages.po is the catalog of nb, sv through a link; each locale needs a PO of its own (intl/{locale}/messages.po)"
+  );
+});
+
+// Unit under test: the import both hosts share, for an absolute `catalogs` with a `..` after a directory that does not
+// exist (`/mnt/web -> app`, `unmounted` absent), given the PO checked in where that pattern collapses lexically.
+// Oracle: the kernel resolves the pattern as written, so no locale's catalog exists there (`extract` refuses it with
+// `CatalogClimbsMissing`, #91), and a catalog path that does not resolve cannot be the file imported, which exists: the
+// import is refused by name as the catalog of none, never compiled for `nb` by a collapsed `..`.
+it("refuses a file an absolute catalog pattern reaches only by collapsing a `..` after a missing directory", ({
+  project,
+}) => {
+  project.write("messages/nb.po", PO);
+  mkdirSync(project.path("app"), { recursive: true });
+  symlinkSync(project.path("app"), project.path("mnt-web"), "dir");
+  const catalogs = `${project.path("mnt-web")}/unmounted/../../messages/{locale}.po`;
+  project.write("app/elmera-intl.json", JSON.stringify({ include: ["*.ts"], catalogs, locales: ["nb"] }));
+
+  const { outcome } = compileCatalogImport({
+    config: project.path("app/elmera-intl.json"),
+    file: project.path("messages/nb.po"),
+    readPo: () => PO,
+    source: false,
+  });
+
+  expect(outcome._tag === "Failed" ? outcome.error.message : outcome._tag).toBe(
+    `elmera-intl: ../messages/nb.po is not a configured catalog (${catalogs}, nb)`
   );
 });
