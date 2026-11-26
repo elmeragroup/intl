@@ -17,17 +17,23 @@ import {
   RouterContextProvider,
 } from "@tanstack/react-router";
 import { join } from "node:path";
-import { queryObjects } from "node:v8";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { rolldown } from "rolldown";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { useLocaleSwitch as useNextSwitch } from "../src/next";
 import type { LocaleSwitch } from "../src/start";
 import { useLocaleSwitch as useStartSwitch } from "../src/start";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+// A hang guard only, for each test in this file: one took at most 0.05 s idle and 0.25 s with this machine's cores four
+// times oversubscribed at lowest priority, where the heap walk the count below replaced took 2.1 s there, and 5.1 s on a
+// loaded CI runner.
+vi.setConfig({ testTimeout: 30_000 });
 
 type Persist = (locale: string) => Promise<void>;
 type UseSwitch = (persist: Persist) => LocaleSwitch;
@@ -91,22 +97,33 @@ function nextTask(): Promise<void> {
   });
 }
 
-// Persists that each capture a payload, reachable exactly as long as the persist is. Only an obsolete persist's
-// payload is an `Obsolete`, a class of this test's own, so the heap's count of them is what a mount kept that it no
-// longer needs. A task first, so no WeakRef the last job read is still held for it; queryObjects collects first.
-function payloads() {
-  class Obsolete {
-    readonly payload = "obsolete";
-  }
-  const persistFor = (payload: "obsolete" | "needed"): Persist => {
-    const held = payload === "obsolete" ? new Obsolete() : {};
+// V8's own full collection, which the flag exposes to a new context. A major collection marks everything reachable and
+// clears every WeakRef whose target it did not mark. It costs a few milliseconds here; v8.queryObjects, which walks the
+// whole heap after collecting, took about 0.2 s.
+setFlagsFromString("--expose-gc");
+// SAFETY: with --expose-gc set, a new context's global `gc` is V8's collection function, called with no arguments.
+const collect = runInNewContext("gc") as () => void;
 
-    return (locale) => Promise.resolve(void [held, locale]);
+// Persists, each a new function object, every obsolete one tracked by a WeakRef, which alone does not keep it, so the
+// obsolete persists still alive after a full collection are what a mount kept that it no longer needs. A task first, so
+// no WeakRef made or read in the job that rendered still holds its target. One collection suffices: V8's gc() finishes
+// any incremental marking already in progress, then runs a full marking of its own from the roots, which leaves
+// unmarked whatever that earlier marking reached and nothing reaches now.
+function persists() {
+  const obsolete: Array<WeakRef<Persist>> = [];
+  const persistFor = (need: "obsolete" | "needed"): Persist => {
+    const persist: Persist = () => Promise.resolve();
+    if (need === "obsolete") {
+      obsolete.push(new WeakRef(persist));
+    }
+
+    return persist;
   };
   const retained = async (): Promise<number> => {
     await nextTask();
+    collect();
 
-    return queryObjects(Obsolete, { format: "count" });
+    return obsolete.filter((ref) => ref.deref() !== undefined).length;
   };
 
   return { persistFor, retained };
@@ -168,12 +185,12 @@ describe.each(BUILDS)("useLocaleSwitch's retained persists (%s)", (_build, hosts
   }
 
   it("lets go of what a Start switcher committed under each router it left", async () => {
-    const { persistFor, retained } = payloads();
+    const { persistFor, retained } = persists();
     const app = root();
-    const show = (router: AnyRouter, payload: "obsolete" | "needed"): void => {
+    const show = (router: AnyRouter, need: "obsolete" | "needed"): void => {
       app.render(
         <RouterContextProvider router={router}>
-          <Switcher use={hosts.start} persist={persistFor(payload)} />
+          <Switcher use={hosts.start} persist={persistFor(need)} />
         </RouterContextProvider>
       );
     };
@@ -198,22 +215,22 @@ describe.each(BUILDS)("useLocaleSwitch's retained persists (%s)", (_build, hosts
   it.each(["start", "next"] as const)(
     "lets go of the first persists a %s switcher committed under one router",
     async (host) => {
-      const { persistFor, retained } = payloads();
+      const { persistFor, retained } = persists();
       const router = startRouter();
       const app = root();
-      const show = (payload: "obsolete" | "needed"): void => {
+      const show = (need: "obsolete" | "needed"): void => {
         app.render(
           <AppRouterContext.Provider value={nextRouter}>
             <RouterContextProvider router={router}>
-              <Switcher use={hosts[host]} persist={persistFor(payload)} />
+              <Switcher use={hosts[host]} persist={persistFor(need)} />
             </RouterContextProvider>
           </AppRouterContext.Provider>
         );
       };
       try {
         // The third stays on the alternate fiber, the fourth is committed.
-        for (const payload of ["obsolete", "obsolete", "needed", "needed"] as const) {
-          show(payload);
+        for (const need of ["obsolete", "obsolete", "needed", "needed"] as const) {
+          show(need);
         }
         expect(await retained()).toBe(0);
       } finally {
