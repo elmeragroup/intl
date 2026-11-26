@@ -134,6 +134,60 @@ it.each([
   ]);
 });
 
+// Unit under test: the Turbopack rule's path condition, for catalogs reached through links. Oracle: Next 16.4.6's
+// Turbopack, replayed for #63 with one tagging rule per spelling: it matches a rule's path against the module's path
+// below the root after resolving its links, so a link inside the root is matched at its target, never as written
+// (p4b).
+it.each([
+  {
+    name: "a config spelled through a directory alias of the app",
+    links: [{ from: "alias", to: "workspace/apps/web" }],
+    config: "../../../alias/elmera-intl.json",
+    catalogs: "intl/{locale}.po",
+    matched: ["apps/web/intl/nb.po"],
+    missed: ["alias/intl/nb.po", "intl/nb.po"],
+  },
+  {
+    name: "catalogs through a link inside the root",
+    links: [{ from: "workspace/apps/web/intl-link", to: "workspace/apps/web/intl" }],
+    config: undefined,
+    catalogs: "intl-link/{locale}.po",
+    matched: ["apps/web/intl/nb.po"],
+    missed: ["apps/web/intl-link/nb.po"],
+  },
+])("matches $name at the path Turbopack matches", ({ links, config, catalogs, matched, missed }) => {
+  installNext(".");
+  writeIntlConfig(catalogs);
+  for (const link of links) {
+    mkdirSync(join(sandbox, link.to), { recursive: true });
+    symlinkSync(join(sandbox, link.to), join(sandbox, link.from), "dir");
+  }
+  const options: WithIntlOptions =
+    config === undefined
+      ? { dir: join(workspace, "apps/web") }
+      : { dir: join(workspace, "apps/web"), config };
+  const paths = poRulePaths(withIntl({}, options)(BUILD));
+
+  expect(paths).toHaveLength(2);
+  expect(paths.map((path) => [...matched, ...missed].filter((file) => path.test(file)))).toEqual([
+    matched,
+    matched,
+  ]);
+});
+
+// Unit under test: withIntl's catalogs check, for catalogs written inside the root through a link out of it. Oracle:
+// Next 16.4.6's Turbopack refuses such an import itself (`the symlink target leaves the configured filesystem roots`,
+// replayed for #63, p2), with or without an additional root, and withIntl accepted these catalogs before: it adds no
+// refusal of its own, and leaves the import to Turbopack.
+it("accepts catalogs written inside the root through a link out of it", () => {
+  installNext(".");
+  writeIntlConfig("linkout/cat/{locale}.po");
+  mkdirSync(join(sandbox, "elsewhere/cat"), { recursive: true });
+  symlinkSync(join(sandbox, "elsewhere"), join(workspace, "apps/web/linkout"), "dir");
+
+  expect(poRulePaths(withIntl({}, { dir: join(workspace, "apps/web") })(BUILD))).toHaveLength(2);
+});
+
 // Unit under test: withIntl's catalogs check. Oracle: Turbopack resolves no file outside its root, so such a catalog
 // could never load; Next 16.4.6 makes `outputFileTracingRoot` Turbopack's root when set, over `turbopack.root`
 // (server/config.js), so the fix names the setting that decides it.
