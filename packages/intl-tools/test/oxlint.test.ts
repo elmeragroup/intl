@@ -46,8 +46,27 @@ new RuleTester({ languageOptions: { sourceType: "module", parserOptions: { lang:
         code: `${preEffect}export const f = Effect.gen(function* () { const { t } = yield* CurrentIntl; return t("Hello"); });`,
         filename: "effect.ts",
       },
+      // An IntlInstance's own members may be passed on (#40).
+      {
+        code: `import { useIntl } from "@elmeragroup/intl/react";\nimport { due } from "./due";\nexport function Page() { const intl = useIntl(); return <p>{due(intl.format, intl.locale)}</p>; }`,
+        filename: "members.tsx",
+      },
     ],
     invalid: [
+      // An IntlInstance passed on fails in the file that binds it (#40): the file that receives it cannot tell.
+      {
+        code: `import { useIntl } from "@elmeragroup/intl/react";\nimport { Row } from "./row";\nexport function Page() { const intl = useIntl(); return <Row intl={intl} />; }`,
+        filename: "page.tsx",
+        errors: [
+          {
+            message:
+              "`intl` is an IntlInstance (or a promise of one) used as a value, not through its own members, so wherever it goes its `t` is not extracted; bind one where it is used (`useT()` or `useIntl()` in the child, `await getIntl()`, `yield* CurrentIntl` provided by `CurrentIntl.layer(options)` or `CurrentIntl.provide(effect)`, or `createIntl(config)` with the config passed), or pass `msg()` descriptors, its `format` or its `locale`",
+            line: 3,
+            // oxlint columns are 0-based: `intl` in `intl={intl}`.
+            column: 67,
+          },
+        ],
+      },
       // Any other read of the service, at its position in the source.
       {
         code: `${preEffect}export const f = CurrentIntl.use((intl) => Effect.succeed(intl.locale));\n`,

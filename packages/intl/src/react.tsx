@@ -59,7 +59,7 @@ export function IntlProvider({
 }
 
 /**
- * The current translator, for code that needs the locale or passes an `IntlInstance` on (`intl.t("literal")` is extracted).
+ * The current translator, for code that needs the locale, the formatter or `t.from` (`intl.t("literal")` is extracted).
  *
  * @returns The provided `IntlInstance`.
  * @throws Outside `<IntlProvider>`: a setup defect.

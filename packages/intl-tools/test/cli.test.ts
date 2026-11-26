@@ -32,6 +32,7 @@ import { projectServices } from "../src/project-services";
 import { Reporter } from "../src/reporter";
 import { CatalogSync } from "../src/watch";
 import { FileEvents } from "../src/watch-trees";
+import { AS_VALUE, NOT_BOUND, UNTRACED_T } from "./extract-expectations";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
 
@@ -140,7 +141,10 @@ type CheckReport = {
     readonly key?: string;
     readonly fix: string;
     readonly file?: string;
+    readonly line?: number;
+    readonly column?: number;
   }>;
+  readonly messages: number;
   readonly unreachable: ReadonlyArray<object>;
 };
 type CheckRun = { readonly code: number; readonly report: CheckReport };
@@ -1450,5 +1454,57 @@ describe("a bare t from an app module", BIN_TEST, () => {
 
     expect(oxlint(project, off)).toEqual({ code: 1, reported: SIBLINGS });
     expect([checked.code, extractFailed.toSorted()]).toEqual([1, SIBLINGS]);
+  });
+});
+
+// Unit under test: `elmera-intl check` on the two files of #40. Oracle: the exit code and the whole report, written out:
+// the child (untyped, so it reads as another library's `{ t }`) extracts nothing, so the page fails where the instance
+// is bound. Each file has its own `include` entry, which fails as unmatched if the file is not scanned, and the child is
+// first written importing the package, which fails at the child, so the report shows the child is read.
+describe("an IntlInstance passed to another file", () => {
+  const ROW = `export function Row({ intl }) { const { t } = intl; return <td>{t("Due date")}</td>; }\n`;
+  const at = (report: CheckReport) =>
+    report.problems.map(({ code, file, line, column, message }) => ({ code, file, line, column, message }));
+
+  it("fails the page that passes it, not the child that reads it", async ({ project }) => {
+    project.write(
+      "elmera-intl.json",
+      JSON.stringify({ ...CONFIG, include: ["src/page.tsx", "src/row.jsx"] })
+    );
+    // An empty catalog, as neither file has a message the extractor reads: without the instance check the run is #40's
+    // silent green (exit 0, no problems), not a missing catalog.
+    project.write("messages/nb.po", HEADER);
+    project.write(
+      "src/page.tsx",
+      `import { useIntl } from "@elmeragroup/intl/react";\nimport { Row } from "./row";\nexport function Page() { const intl = useIntl(); return <Row intl={intl} />; }\n`
+    );
+    const page = {
+      code: "ExtractFailed",
+      file: "src/page.tsx",
+      line: 3,
+      column: 67,
+      message: AS_VALUE("intl"),
+    };
+    project.write(
+      "src/row.jsx",
+      `import { msg } from "@elmeragroup/intl/react";\nexport const D = msg("Row");\n${ROW}`
+    );
+    const importing = await check(project);
+    project.write("src/row.jsx", ROW);
+    const { code, report } = await check(project);
+
+    expect([importing.code, at(importing.report)]).toEqual([
+      1,
+      [
+        page,
+        { code: "ExtractFailed", file: "src/row.jsx", line: 3, column: 38, message: NOT_BOUND },
+        { code: "ExtractFailed", file: "src/row.jsx", line: 3, column: 64, message: UNTRACED_T },
+      ],
+    ]);
+    expect({ code, problems: at(report), messages: report.messages }).toEqual({
+      code: 1,
+      problems: [page],
+      messages: 0,
+    });
   });
 });

@@ -4,8 +4,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { extractMessages } from "../src/extract";
-
-const PKG = "@elmeragroup/intl";
+import {
+  APP_T,
+  APP_T_IMPORTING,
+  AS_VALUE,
+  NOT_YIELDED,
+  PKG,
+  UNTRACED_INTL,
+  UNTRACED_T,
+} from "./extract-expectations";
 
 function keys(code: string, file = "x.tsx"): Array<string> {
   const outcome = extractMessages(file, code);
@@ -399,11 +406,6 @@ function result(code: string): ReadonlyArray<string> {
     : extracted.failures.map((f) => f.message);
 }
 
-const UNTRACED_INTL = (receiver: string) =>
-  `cannot trace \`${receiver}\` to useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\` in this file, so \`.t(…)\` on it is not extracted; bind the IntlInstance here, or translate a msg() descriptor with \`.t.from\``;
-const UNTRACED_T =
-  "cannot trace `t` to useT() or getT(), or to the `.t` of an IntlInstance from useIntl(), getIntl(), createIntl() or `yield* CurrentIntl`, in this file, so `t(…)` is not extracted; bind it here (`const t = useT()`, `const t = await getT()`, or an instance's `const { t } = await getIntl()`), or translate `msg()` descriptors with `t.from(descriptor)` / `.t.from`";
-
 // Unit under test: the package specifier classifier, for a specifier that names the intl package through a registry
 // scheme, as Deno imports it. Oracle: the keys and failures the same code gives when it imports `@elmeragroup/intl`,
 // written out per case; the package under a scheme is the package, never an npm package whose translator passes.
@@ -540,49 +542,59 @@ describe("receiver provenance", () => {
       "an npm hook's result built by a callback",
       `import { useMemo } from "react";\nexport function A() { const i = useMemo(() => createIntl(${cfg}), []); return i.t("M"); }`,
       "i",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "an npm hook's result read from an app module's value",
       `import { useContext } from "react";\nimport { Ctx } from "./ctx";\nexport function A() { const i = useContext(Ctx); return i.t("M"); }`,
       "i",
+      [],
     ],
     [
       "a reassigned variable",
       `let i: { t(s: string): string } | null = null; i = createIntl(${cfg}); export const x = i.t("M");`,
       "i",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "a member written into a local object",
       `const box: { i?: { t(s: string): string } } = {}; box.i = createIntl(${cfg}); export const x = box.i.t("M");`,
       "box.i",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "an npm hook's result built by a named callback",
       `import { useMemo } from "react";\nconst make = () => createIntl(${cfg});\nexport function A() { const intl = useMemo(make, []); return intl.t("Hello {name}", { name: "Ada" }); }`,
       "intl",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "a destructured default",
       `const { intl = createIntl(${cfg}) } = {}; export const x = intl.t("M");`,
       "intl",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "a projection out of a local container",
       `const box = {}; box.intl = createIntl(${cfg}); const { intl } = box; export const x = intl.t("M");`,
       "intl",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "an npm hook's state set elsewhere",
       `import { useState } from "react";\nexport function A() { const [i, setI] = useState(null); setI(createIntl(${cfg})); return i.t("M"); }`,
       "i",
+      [AS_VALUE("createIntl(…)")],
     ],
     [
       "an npm hook's ref written elsewhere",
       `import { useRef } from "react";\nexport function A() { const r = useRef(null); r.current = createIntl(${cfg}); return r.current.t("M"); }`,
       "r.current",
+      [AS_VALUE("createIntl(…)")],
     ],
-  ] as const)("reports a .t call on %s", (_label, code, receiver) => {
-    expect(result(pre2 + code)).toEqual([UNTRACED_INTL(receiver)]);
+  ] as const)("reports a .t call on %s", (_label, code, receiver, escape) => {
+    // The fixture builds an escape to reach the receiver; the escape fails where the instance is bound (#40).
+    expect(result(pre2 + code)).toEqual([...escape, UNTRACED_INTL(receiver)]);
   });
 
   it("reports a bare t that is not bound from useT() or getT() in an importing file", () => {
@@ -591,15 +603,6 @@ describe("receiver provenance", () => {
     ]);
   });
 });
-
-// What a file that does not import the package is told when its `t` comes from an app module: the base text, the
-// module, and the migration advice only such a file gets.
-const APP_T = (specifier: string) =>
-  `cannot trace \`t\` to useT() or getT(), or to the \`.t\` of an IntlInstance from useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\`, in this file; it comes from \`${specifier}\`, so \`t(…)\` is not extracted; bind it here (\`const t = useT()\`, \`const t = await getT()\`, or an instance's \`const { t } = await getIntl()\`), or translate \`msg()\` descriptors with \`t.from(descriptor)\` / \`.t.from\`. If this \`t\` is another library's translator (an app module wrapping it while the app migrates), rename it in this file, or, if this file's only i18n is this legacy translator, list this file in \`exclude\` and turn \`elmera-intl/extractable\` off for it (see the README's migration section)`;
-// What a file that imports the package is told: no exclusion or rename advice, since either would lose its intl checks,
-// and a split file still needs a legacy-only remedy.
-const APP_T_IMPORTING = (specifier: string) =>
-  `cannot trace \`t\` to useT() or getT(), or to the \`.t\` of an IntlInstance from useIntl(), getIntl(), createIntl() or \`yield* CurrentIntl\`, in this file; it comes from \`${specifier}\`, so \`t(…)\` is not extracted; bind it here (\`const t = useT()\`, \`const t = await getT()\`, or an instance's \`const { t } = await getIntl()\`), or translate \`msg()\` descriptors with \`t.from(descriptor)\` / \`.t.from\`. If this \`t\` is another library's translator, have its module expose it under another name, or move the code that uses it to a file without the intl package and give that file a legacy-only remedy too (see the README's migration section)`;
 
 // A diamond of const aliases into an app import: `mid` reaches `c2` in one step, `a<ALIASES>` only through the whole
 // chain, which spends the depth budget before `c1`. A walk that visits `c2` once, the first time it is reached, misses
@@ -822,8 +825,6 @@ describe("a bare t from an app import", () => {
 });
 
 const preEffect = `import * as Effect from "effect/Effect";\nimport { CurrentIntl } from "${PKG}/effect";\nimport { msg } from "${PKG}/react";\n`;
-const NOT_YIELDED =
-  "`CurrentIntl` is only read with `yield* CurrentIntl` and provided with `.layer(…)` or `.provide(…)`, so extraction sees every translator; read the translator with `const { t } = yield* CurrentIntl`";
 
 // Unit under test: extraction of the Effect service `CurrentIntl` (README, extraction contract). Oracle: the keys each
 // documented form must produce, and the one failure every other read of the service must report, written out per case.

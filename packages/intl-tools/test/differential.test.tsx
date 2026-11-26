@@ -431,17 +431,18 @@ const rows: ReadonlyArray<Row> = [
     code: `function C() { const t = useT(); const { a = t }: { a?: (s: string) => string } = {}; return <>{a("Hidden")}</>; }\nexport const el = <C />;`,
     fails: "passed or stored",
   },
-  // Residual (README): a receiver of unknown kind is not followed. Type annotations are erased before extraction, so
-  // a parameter typed IntlInstance is unknown too; its unresolved computed read is missed and the runtime looks the key up.
+  // A receiver of unknown kind is not followed (README): type annotations are erased before extraction, so a parameter
+  // typed IntlInstance is unknown too, and its unresolved computed read is missed. The instance fails where it is handed
+  // on instead (#40), so the key the runtime looks up is never silently left out.
   {
-    label: "residual: unresolved computed key on a parameter typed IntlInstance (type-only import)",
+    label: "an IntlInstance passed to a helper that reads it by an unresolved key",
     code: `import type { IntlInstance } from "@elmeragroup/intl/core";\nfunction show(i: IntlInstance, k: string) { return i[k as "t"]("Hidden"); }\nfunction C() { return <>{show(useIntl(), "t")}</>; }\nexport const el = <C />;`,
-    misses: ["Hidden"],
+    fails: "`useIntl()` is an IntlInstance (or a promise of one) used as a value",
   },
   {
-    label: "residual: unresolved computed key on an IntlInstance passed through a container",
+    label: "an IntlInstance stored in a container and read by an unresolved key",
     code: `function C({ k }: { k: string }) { const box = { i: useIntl() }; const f = box.i[k as "t"]; return <>{f("Hidden")}</>; }\nexport const el = <C k="t" />;`,
-    misses: ["Hidden"],
+    fails: "`useIntl()` is an IntlInstance (or a promise of one) used as a value",
   },
   {
     label: "unresolved computed key, read as a value (an app's label map)",
@@ -534,17 +535,18 @@ const rows: ReadonlyArray<Row> = [
     code: `function C() { const i = useIntl(); try { throw i; } catch ({ t }) { return <>{String(t)}</>; } }\nexport const el = <C />;`,
     fails: "catch clause",
   },
-  // Enumeration: an IntlInstance's t is not enumerable, so value lists and copies never carry it. A function found there
-  // would be called with "Hidden", and the runtime would look that key up while the extractor saw nothing.
+  // Enumeration: an IntlInstance's t is not enumerable, so an object spread and a rest never carry it. A function found
+  // there would be called with "Hidden", and the runtime would look that key up while the extractor saw nothing. Handed to
+  // a call, the instance fails as any argument does (#40).
   {
     label: "Object.values of an IntlInstance",
     code: `function C() { const i = useIntl(); const f = Object.values(i).find((v): v is (s: string) => string => typeof v === "function"); return <>{f?.("Hidden")}</>; }\nexport const el = <C />;`,
-    keys: [],
+    fails: "`i` is an IntlInstance (or a promise of one) used as a value",
   },
   {
     label: "Object.entries of an IntlInstance",
     code: `function C() { const i = useIntl(); const f = Object.entries(i).map(([, v]) => v).find((v): v is (s: string) => string => typeof v === "function"); return <>{f?.("Hidden")}</>; }\nexport const el = <C />;`,
-    keys: [],
+    fails: "`i` is an IntlInstance (or a promise of one) used as a value",
   },
   {
     label: "object spread of an IntlInstance",
@@ -559,7 +561,7 @@ const rows: ReadonlyArray<Row> = [
   {
     label: "Object.assign from an IntlInstance",
     code: `function C() { const f = Object.values(Object.assign({}, useIntl())).find((v): v is (s: string) => string => typeof v === "function"); return <>{f?.("Hidden")}</>; }\nexport const el = <C />;`,
-    keys: [],
+    fails: "`useIntl()` is an IntlInstance (or a promise of one) used as a value",
   },
   {
     label: "with statement",
