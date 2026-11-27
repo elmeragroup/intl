@@ -25,7 +25,8 @@ import { openProject } from "./project-fixture";
 export const CONFIG = { include: ["src/**/*.{ts,tsx}"], catalogs: "messages/{locale}.po", locales: ["nb"] };
 // Every watcher here polls (Rolldown's build watcher and the dev server's, which the plugin's extract watch follows),
 // so a wait ends on the edit, not on the host's file-event daemon (fseventsd on macOS delays or drops events under
-// load). Polling is the same setting an app on such a host uses; the default native events run in the e2e dev loop.
+// load). Polling is the same setting an app on such a host uses; the e2e fixtures' dev servers poll too, and the tools'
+// own native path runs in `watch-native.test.ts` on Linux.
 const POLL_MS = 50;
 /**
  * The build watch's polling. Vite 8.3 builds Rolldown's watcher from `build.watch.chokidar`, which its types no longer

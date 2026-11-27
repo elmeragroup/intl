@@ -40,7 +40,8 @@ export const IMPORT = `import { T } from "@elmeragroup/intl/react";\n`;
 // Every watch here polls: a stat of each watched file every 50 ms sees an edit whatever the host's file events do
 // (macOS delivers them through fseventsd, which a busy host delays by seconds or drops), so each wait ends on the edit,
 // not on the event daemon. `--poll` and `watchProject`'s mode are the same seam the CLI and the Vite plugin expose to
-// such hosts; the native events stay the default, and the e2e dev loop and the native cases run on them.
+// such hosts. The native events stay the default: `watch-native.test.ts` runs the executable on them on Linux, and the
+// native cases here feed it events by hand.
 
 /** The poll interval, as the CLI takes it. */
 export const POLL_MS = "50";
