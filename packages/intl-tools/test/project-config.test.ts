@@ -100,6 +100,36 @@ it.for([
   );
 });
 
+// Unit under test: every config read (`loadConfig`, `readConfig`, `readConfigSnapshot`), given a path no file system
+// takes or one only text replacement can garble. Oracle: what each read reported before its directory was resolved
+// (2999867), stated as literals: a NUL in the path is "not found", as Node's existsSync answers for it; an unreadable
+// config is "not JSON" with Node's error naming the path as the caller spelled it, byte for byte, `$&` included.
+it.for([
+  { name: "a NUL in its directory", directory: "a\u0000b", unreadable: false },
+  { name: "$& in its directory, unreadable", directory: "a$&b", unreadable: true },
+])("reports a config with $name as before in every read", async ({ directory, unreadable }, { project }) => {
+  const config = project.path(`${directory}/elmera-intl.json`);
+
+  if (unreadable) {
+    project.write(`${directory}/elmera-intl.json`, "{}");
+    chmodSync(config, 0o000);
+  }
+
+  const reads = await Effect.runPromise(
+    Effect.all([readConfig(config), readConfigSnapshot(config)]).pipe(Effect.provide(NodePlatform))
+  );
+
+  expect(
+    [loadConfig(config), reads[0], reads[1].loaded].map((loaded) =>
+      loaded._tag === "ConfigInvalid" ? loaded.problem.message : loaded._tag
+    )
+  ).toEqual(
+    Array.from({ length: 3 }, () =>
+      unreadable ? `not JSON: EACCES: permission denied, open '${config}'` : `${config} not found`
+    )
+  );
+});
+
 // Unit under test: the watch's read of the config (`readConfigSnapshot`), on a file system whose `access` succeeds on a
 // dangling link, as Windows' can, where Node's existsSync then stats the path too (node src/node_file.cc, v26.13.0,
 // lines 1099-1109). Oracle: `readConfig` on Node, whose existsSync calls a dangling link missing: "not found".

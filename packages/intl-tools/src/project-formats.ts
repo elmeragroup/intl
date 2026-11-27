@@ -190,7 +190,9 @@ const ATTEMPTS = 3;
 // sides decode UTF-8, so bytes that are not UTF-8 compare as U+FFFD; and on Node 24 and 25 the path can be swapped to
 // another module and back between the CommonJS loader's resolution and the hook's look at the path, a window of
 // microseconds that only a swap to another valid formats module could use, which no security boundary sits behind
-// (the app's own files).
+// (the app's own files). `linkedTo` resolves the entry with Node's JavaScript `realpathSync`, not the hosts' way
+// (real-path.ts): it names the module as Node's own loader resolved it, through that same call (toRealPath in
+// lib/internal/modules/cjs/loader.js, finalizeResolution in lib/internal/modules/esm/resolve.js).
 const COMPARE_ON_LOAD = `
 import { readFileSync, realpathSync, writeSync } from "node:fs";
 import { registerHooks } from "node:module";

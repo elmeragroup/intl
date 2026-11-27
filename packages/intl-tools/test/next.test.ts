@@ -20,6 +20,16 @@ const { default: loadNextConfig } = require("next/dist/server/config.js") as {
   readonly default: typeof loadNextConfigType;
 };
 
+// SAFETY: Next's project directory as `next dev`, `next build` and `next start` take it (cli/next-build.js and the
+// others call it before they load the config); unexported, so its shape is the one lib/get-project-dir.js defines.
+const { getProjectDir } = require("next/dist/lib/get-project-dir.js") as {
+  readonly getProjectDir: (dir: string, exitOnEnoent: boolean) => string;
+};
+
+// SAFETY: Node's CommonJS loader, whose `_initPaths` rereads NODE_PATH into the lookup every `require` falls back to
+// (lib/internal/modules/cjs/loader.js); untyped, as it is not public.
+const { _initPaths: initPaths } = require("node:module") as { readonly _initPaths: () => void };
+
 // SAFETY: Next's config schema (a zod schema), which `next build` validates the loaded config against; its d.ts names
 // zod's types, which this package does not install, so only the call the tests make is typed.
 const { configSchema } = require("next/dist/server/config-schema.js") as {
@@ -83,6 +93,39 @@ function poRulePaths(config: IntlNextConfig): ReadonlyArray<RegExp> {
   });
 
   return found;
+}
+
+// The roots every PO loader of a config's rule map is given (`PoLoaderOptions.roots`), none where it is given none.
+function poLoaderRoots(config: IntlNextConfig): ReadonlyArray<RuleValue | undefined> {
+  const found: Array<RuleValue | undefined> = [];
+  JSON.stringify(config.turbopack?.rules, (key: string, value: RuleValue): RuleValue => {
+    if (key === "options" && value instanceof Object) {
+      found.push(new Map<string, RuleValue>(Object.entries(value)).get("roots"));
+    }
+
+    return value;
+  });
+
+  return found;
+}
+
+// `run` with Node's package lookup as a host launched without pnpm's shims has it: no NODE_PATH. The shim that starts
+// Vitest sets NODE_PATH to the store's hoisted packages, `next` among them, so every lookup of `next` would find one.
+// Removed for the run and restored after it, so its value decides no outcome: a task input turbo need not hash.
+const LOOKUP_VARIABLE = "NODE_PATH";
+
+function withoutNodePath<A>(run: () => A): A {
+  const saved = process.env[LOOKUP_VARIABLE];
+  Reflect.deleteProperty(process.env, LOOKUP_VARIABLE);
+  initPaths();
+  try {
+    return run();
+  } finally {
+    if (saved !== undefined) {
+      process.env[LOOKUP_VARIABLE] = saved;
+    }
+    initPaths();
+  }
 }
 
 // The path condition of every rule withIntl adds, for a Next config with the given Turbopack root (relative to the
@@ -186,6 +229,57 @@ it("accepts catalogs written inside the root through a link out of it", () => {
   symlinkSync(join(sandbox, "elsewhere"), join(workspace, "apps/web/linkout"), "dir");
 
   expect(poRulePaths(withIntl({}, { dir: join(workspace, "apps/web") })(BUILD))).toHaveLength(2);
+});
+
+// Unit under test: the Turbopack rule's path condition when `dir` is a link straight to the workspace app and no root
+// is set (#75). Oracle: Next 16.4.6's CLI (`next dev`, `next build`, `next start`) resolves the project directory
+// through its links (lib/get-project-dir.js, whose answer is asserted here) before it detects the root from it (server/config.js, lib/find-root.js), so its root is the workspace's pnpm-workspace.yaml
+// directory, as for the app's real path, though nothing above the link holds a workspace marker; each catalog then has
+// its one path below that root, and a climbing pattern stays inside it.
+it.each([
+  {
+    catalogs: "intl/{locale}.po",
+    matched: ["apps/web/intl/nb.po"],
+    missed: ["intl/nb.po", "web/intl/nb.po"],
+  },
+  {
+    catalogs: "../messages/{locale}.po",
+    matched: ["apps/messages/nb.po"],
+    missed: ["messages/nb.po", "mnt/messages/nb.po"],
+  },
+])("matches $catalogs below Next's root when dir is a link to the app", ({ catalogs, matched, missed }) => {
+  // Next where the app resolves it through the link, so only the root differs between the link and the real path.
+  installNext("apps/web");
+  writeIntlConfig(catalogs);
+  mkdirSync(join(sandbox, "mnt"));
+  symlinkSync(join(workspace, "apps/web"), join(sandbox, "mnt/web"), "dir");
+  const paths = poRulePaths(withIntl({}, { dir: join(sandbox, "mnt/web") })(BUILD));
+
+  expect({
+    project: getProjectDir(join(sandbox, "mnt/web"), false),
+    matched: paths.map((path) => [...matched, ...missed].filter((file) => path.test(file))),
+  }).toEqual({ project: join(workspace, "apps/web"), matched: [matched, matched] });
+});
+
+// Unit under test: the PO loader's roots when Next is hoisted to the workspace (`node_modules` at its root, none in
+// the app) and `dir` is a link to the app from outside the workspace (#75). Oracle: Next 16.4.6's CLI takes the project
+// directory through its links (getProjectDir, asserted here) and resolves itself from there, so it loads, detects the
+// workspace as its root and selects no adapter; the loader then checks its dependencies against that root, with no
+// additional root, as from the app's real path. Looked up with no NODE_PATH, as npm's or Yarn's hoisted install runs
+// `next`, so only the workspace's `node_modules` holds it.
+it("gives the loader Next's root when dir is a link to an app whose Next is hoisted", () => {
+  installNext(".");
+  writeIntlConfig("intl/{locale}.po");
+  mkdirSync(join(sandbox, "mnt"));
+  symlinkSync(join(workspace, "apps/web"), join(sandbox, "mnt/web"), "dir");
+
+  expect({
+    project: getProjectDir(join(sandbox, "mnt/web"), false),
+    roots: withoutNodePath(() => poLoaderRoots(withIntl({}, { dir: join(sandbox, "mnt/web") })(BUILD))),
+  }).toEqual({
+    project: join(workspace, "apps/web"),
+    roots: [0, 1].map(() => ({ root: workspace, setting: "turbopack.root", additional: [] })),
+  });
 });
 
 // Writes the intl config for several locales, makes each directory (relative to the sandbox) and each link to one.
@@ -325,6 +419,30 @@ it("rejects catalogs outside the root when one locale's catalog is written insid
   expect(() => withIntl({ turbopack: { root: app } }, { dir: app })(BUILD)).toThrow(
     `withIntl: the catalogs ../{locale}/messages.po are outside the Turbopack root ${app}, which resolves no file outside it; set turbopack.root to a directory that holds both the app and the catalogs`
   );
+});
+
+// Unit under test: the same check with the app and `turbopack.root` both spelled through a link to the workspace, where
+// the config's root is its directory's real path (#75) and the root as written is not. Oracle: as above, Turbopack
+// refuses the import itself, so withIntl adds no refusal, whichever spelling of the root holds the catalogs as written.
+it("accepts catalogs written inside the root through a link out of it, with the root spelled through a link", () => {
+  installNext(".");
+  writeIntlConfig("linkout/cat/{locale}.po");
+  mkdirSync(join(sandbox, "elsewhere/cat"), { recursive: true });
+  symlinkSync(join(sandbox, "elsewhere"), join(workspace, "apps/web/linkout"), "dir");
+  symlinkSync(workspace, join(sandbox, "alias"), "dir");
+  const alias = join(sandbox, "alias");
+
+  const paths = poRulePaths(
+    withIntl({ turbopack: { root: alias } }, { dir: join(alias, "apps/web") })(BUILD)
+  );
+  // The catalog as written below the root, either spelling of it; never its target's path, nor below the alias.
+  const matched = ["apps/web/linkout/cat/nb.po"];
+  const missed = ["elsewhere/cat/nb.po", "linkout/cat/nb.po", "alias/apps/web/linkout/cat/nb.po"];
+
+  expect(paths.map((path) => [...matched, ...missed].filter((file) => path.test(file)))).toEqual([
+    matched,
+    matched,
+  ]);
 });
 
 // Unit under test: withIntl's catalogs check. Oracle: Turbopack resolves no file outside its root, so such a catalog

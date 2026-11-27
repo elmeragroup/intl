@@ -47,7 +47,7 @@ export type SyncResult =
   /** A catalog was saved during the sync before it wrote anything, so it wrote nothing; another sync follows. */
   | { readonly _tag: "Superseded" }
   | { readonly _tag: "Failed"; readonly problems: ReadonlyArray<Problem> }
-  /** The config's text changed (see `followConfig`): written as it is accepted, before the watch on it restarts. */
+  /** The config's text or root changed (see `followConfig`): written as it is accepted, before the watch restarts. */
   | { readonly _tag: "ConfigChanged" }
   /** The watch a restart started has written its first sync's result. */
   | { readonly _tag: "Restarted" };

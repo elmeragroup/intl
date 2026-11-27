@@ -1,6 +1,6 @@
-// `extract --watch` on a config it follows (#73): `watchCatalogs` (watch.ts) once per config text, one after another,
-// each in a scope of its own with its own halt, run by one loop. One fiber rereads the config, and one fiber writes
-// every output in order.
+// `extract --watch` on a config it follows (#73): `watchCatalogs` (watch.ts) once per config text and root, one after
+// another, each in a scope of its own with its own halt, run by one loop. One fiber rereads the config, and one fiber
+// writes every output in order.
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -51,13 +51,32 @@ const claim = (generation: Generation, by: "host" | "follow") =>
   });
 
 /**
- * `watchCatalogs` on the config at `path`, following its edits: one watch per config text, each in a scope of its own
- * with its own halt, run one after another by one loop. One fiber reads the config (`readConfigSnapshot`) each poll
- * interval, or each `CONFIG_READ_MS` on native events, after the previous read ends; a text other than the last read
- * is written as `ConfigChanged` at once and kept, the newest only, until the watch running or starting has ended.
- * Only a stop interrupts a start. A valid config starts a watch, which writes `Restarted` after its first sync's result
- * (the first to sync writes the ready line); an invalid one writes its problem; a watch that fails to start once the
- * follow has started writes `WatchFailed`.
+ * Where a followed watch writes (`WatchOutput`), and, optionally, which config each watch it starts runs on.
+ */
+export type FollowOutput<R> = WatchOutput<R> & {
+  /**
+   * Called as each watch starts, before it writes anything and after every write of the watch before it: its config,
+   * whose root a host names the written catalogs from (a repointed link moves it, the text unchanged).
+   */
+  readonly starting?: (config: ProjectConfig) => void;
+};
+
+// What the follow restarts on: the config's text, or its root, the real path of its directory (configLocation,
+// project-config.ts), which a link to the directory repointed moves with the text byte for byte the same (two checkouts
+// of one app).
+const rootOf = (snapshot: ConfigSnapshot) =>
+  snapshot.loaded._tag === "Config" ? snapshot.loaded.config.root : undefined;
+const changed = (next: ConfigSnapshot, last: ConfigSnapshot) =>
+  next.text !== last.text || rootOf(next) !== rootOf(last);
+
+/**
+ * `watchCatalogs` on the config at `path`, following its edits: one watch per config text and root, each in a scope of
+ * its own with its own halt, run one after another by one loop. One fiber reads the config (`readConfigSnapshot`) each
+ * poll interval, or each `CONFIG_READ_MS` on native events, after the previous read ends; a text or a root other than
+ * the last read is written as `ConfigChanged` at once and kept, the newest only, until the watch running or starting
+ * has ended. Only a stop interrupts a start. A valid config starts a watch, which writes `Restarted` after its first
+ * sync's result (the first to sync writes the ready line); an invalid one writes its problem; a watch that fails to
+ * start once the follow has started writes `WatchFailed`.
  *
  * The start is `Ready` once an iteration has written its first result with no newer config waiting, and `Stopped` when
  * a stop came first unless a watch had halted on its own before it; otherwise it fails with a write that failed for
@@ -70,7 +89,8 @@ const claim = (generation: Generation, by: "host" | "follow") =>
  * @param first - The host's read of it, or none, for the follow to read it itself.
  * @param mode - Where change events come from.
  * @param stop - Done when the host wants the watch to stop.
- * @param output - Where the results are written, and the ready line after the first watch's first result.
+ * @param output - Where the results are written, the ready line after the first watch's first result, and each
+ *   watch's config as it starts.
  * @returns An effect that starts the followed watch in its scope, ending as its start did.
  */
 export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow")(function* <R>(
@@ -78,7 +98,7 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
   first: ConfigSnapshot | undefined,
   mode: WatchMode,
   stop: Deferred.Deferred<void>,
-  output: WatchOutput<R>
+  output: FollowOutput<R>
 ) {
   const own = yield* Scope.fork(yield* Effect.scope, "sequential");
   const generations = yield* Scope.fork(own, "sequential");
@@ -179,7 +199,7 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
     while (last !== undefined) {
       const next = yield* nextRead;
 
-      if (next !== undefined && next.text !== last.text && !stopping()) {
+      if (next !== undefined && changed(next, last) && !stopping()) {
         // In one step, waiting for neither: the newest config for the loop, and its announcement for the writer.
         Queue.offerUnsafe(mailbox, next);
         Queue.offerUnsafe(writes, [{ _tag: "Result", result: { _tag: "ConfigChanged" } }, undefined]);
@@ -193,6 +213,8 @@ export const followConfig = /* @__PURE__ */ Effect.fn("elmera-intl.watch.follow"
   const begin = Effect.fnUntraced(function* (config: ProjectConfig) {
     const scope = yield* Scope.fork(generations, "sequential");
     const generation: Generation = { scope, halt: yield* Deferred.make<void>(), claimed: undefined };
+    // The watch before it has retired, its scope closed and so its writer joined: every write of its is out.
+    yield* Effect.sync(() => output.starting?.(config));
     yield* Effect.raceFirst(
       Deferred.await(stop).pipe(Effect.as("host" as const)),
       ended.pipe(Effect.as("follow" as const))

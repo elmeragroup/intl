@@ -12,7 +12,7 @@ import * as Predicate from "effect/Predicate";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
-import { relative, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import process from "node:process";
 
 import type { OneShotCommand } from "./command-run";
@@ -223,18 +223,23 @@ const watchUntilSignal = /* @__PURE__ */ Effect.fn("elmera-intl.watch")(function
     return yield* new ProblemsFound({ count: 1 });
   }
 
-  const { root } = first.loaded.config;
+  // The root of the watch in force: the config's root is its directory's real path, which a link to the directory
+  // repointed moves (the follow restarts on it), so each watch's writes are named from its own.
+  let { root } = first.loaded.config;
   const stop = yield* Deferred.make<void>();
   yield* signalListeners(stop);
   // The watch writes every result, and the ready line after the first, in order, one at a time, so the Reporter may be
-  // asynchronous; it follows each edit of the config (its root, from the same path, stays). Until a signal, or a write
+  // asynchronous; it follows each edit of the config, and each move of its root. Until a signal, or a write
   // that fails for good: then it closes its watchers, drains and ends as the writing did; a watcher that failed to close
   // is a crash, after every report. A start a signal stopped is no failure: the program ends as the watch's end does.
   // Its extract is the program's `CatalogSync`, which the host provides around the whole program, so it outlives the
   // watch's stop, an interruption's included.
   yield* followConfig(configPath, first, mode, stop, {
+    starting: (config) => {
+      ({ root } = config);
+    },
     report: (result) => reportSync(configPath, root, result),
-    ready: reporter.stdout(`watching ${root} for message changes; Ctrl-C stops\n`),
+    ready: Effect.suspend(() => reporter.stdout(`watching ${root} for message changes; Ctrl-C stops\n`)),
   }).pipe(Effect.flatMap((watching) => watching.done));
 }, Effect.scoped);
 
@@ -250,7 +255,8 @@ const reportSync = /* @__PURE__ */ Effect.fn("elmera-intl.watch.report")(functio
   } else if (result._tag === "Failed") {
     yield* printProblems(result.problems);
   } else if (result._tag === "ConfigChanged") {
-    yield* reporter.stdout(`${relative(root, configPath)} changed, restarting the watch\n`);
+    // The config's own name: its root is the real path of its directory, which another spelling of the path reaches.
+    yield* reporter.stdout(`${basename(configPath)} changed, restarting the watch\n`);
   }
 });
 

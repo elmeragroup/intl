@@ -10,11 +10,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import { existsSync } from "node:fs";
 
 import { CatalogFiles } from "./catalog-files";
 import { SourceCaches, SourceDiscovery } from "./project";
 import { ProjectFormats } from "./project-formats-service";
+import { realPathAsync } from "./real-path";
 
 /** Node's platform services: its file system and paths. */
 export type NodePlatformServices = FileSystem.FileSystem | Path.Path;
@@ -40,9 +42,52 @@ export const nodeExists = (path: string): Effect.Effect<boolean, PlatformError.P
       }),
   });
 
+// The reasons a lookup of a real path fails with, by Node's error code; any other is `Unknown`.
+const REAL_PATH_REASONS = new Map<string, PlatformError.SystemErrorTag>([
+  ["ENOENT", "NotFound"],
+  ["ENOTDIR", "NotFound"],
+  ["EACCES", "PermissionDenied"],
+  ["EPERM", "PermissionDenied"],
+  ["ELOOP", "BadResource"],
+]);
+
+/**
+ * A path's real path, the hosts' way (`realPathAsync`, real-path.ts: the kernel's on POSIX, as Next and Vite
+ * resolve it), where Node's `FileSystem.realPath` takes the JavaScript `fs.realpath` on POSIX. Asynchronous, so a
+ * lookup stalled on a mount holds no stop of the watch.
+ *
+ * @param path - The path.
+ * @returns The real path; fails with Node's error as the cause when it does not resolve.
+ */
+export const nodeRealPath = (path: string): Effect.Effect<string, PlatformError.PlatformError> =>
+  Effect.callback<string, PlatformError.PlatformError>((resume) => {
+    // Node throws before it calls back on an argument it refuses (a path with a NUL byte, ERR_INVALID_ARG_VALUE): a
+    // failure like the callback's, as Node's `FileSystem.realPath` made it, never a defect.
+    try {
+      realPathAsync(path, (error, resolved) => {
+        resume(error === null ? Effect.succeed(resolved) : Effect.fail(realPathFailure(path, error)));
+      });
+    } catch (error) {
+      resume(Effect.fail(realPathFailure(path, error)));
+    }
+  });
+
+// A failed lookup of `path`'s real path, Node's error its cause and its code the reason.
+function realPathFailure(path: string, cause: unknown): PlatformError.PlatformError {
+  const code = Predicate.hasProperty(cause, "code") ? String(cause.code) : "";
+
+  return PlatformError.systemError({
+    _tag: REAL_PATH_REASONS.get(code) ?? "Unknown",
+    module: "FileSystem",
+    method: "realPath",
+    pathOrDescriptor: path,
+    cause,
+  });
+}
+
 /**
  * Node's file system and paths, from @effect/platform-node-shared, imported as the layer is built; its `exists` is
- * Node's `existsSync`.
+ * Node's `existsSync`, and its `realPath` the hosts' way (`nodeRealPath`).
  */
 export const NodePlatform: Layer.Layer<NodePlatformServices> = /* @__PURE__ */ Layer.unwrap(
   /* @__PURE__ */ Effect.promise(async () => {
@@ -52,7 +97,7 @@ export const NodePlatform: Layer.Layer<NodePlatformServices> = /* @__PURE__ */ L
     ]);
     const nodeFiles = Layer.effect(
       FileSystem.FileSystem,
-      FileSystem.FileSystem.useSync((live) => ({ ...live, exists: nodeExists }))
+      FileSystem.FileSystem.useSync((live) => ({ ...live, exists: nodeExists, realPath: nodeRealPath }))
     ).pipe(Layer.provide(files.layer));
 
     return Layer.merge(nodeFiles, paths.layer);

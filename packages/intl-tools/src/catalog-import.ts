@@ -8,7 +8,7 @@ import { SOURCE_LOCALE } from "@elmeragroup/intl/internal/catalog";
 
 import { compileCatalog } from "./compile";
 import { describeProblem } from "./problem";
-import { catalogLocale } from "./project-catalogs";
+import { catalogLocales } from "./project-catalogs";
 import { loadConfig } from "./project-config";
 import { loadFormats } from "./project-formats";
 
@@ -37,7 +37,8 @@ export type CatalogImport = {
  * Compile one imported PO to the module exporting its catalog, for the locale its path names (or English, with
  * `source`), with the app's `formats`. The dependencies are the config, on every outcome, and the formats module once
  * the PO is a configured locale's catalog: the paths the adapter reports to its host, which decides what a change to
- * one of them reruns. A PO of no configured locale fails with one text on every host; a catalog that does not compile
+ * one of them reruns. A PO of no configured locale fails with one text on every host, and a PO several locales'
+ * catalogs resolve to with another, naming them; a catalog that does not compile
  * fails with the `CatalogCompileError` itself.
  *
  * @param request - The import.
@@ -51,13 +52,25 @@ export function compileCatalogImport(request: CatalogImportRequest): CatalogImpo
   }
 
   const { config } = loaded;
-  const locale = catalogLocale(config, request.file);
+  const [locale, ...others] = catalogLocales(config, request.file);
+  const file = relative(config.root, request.file);
+
+  // A file several locales' catalogs resolve to is refused for each of them, naming them: compiled for one, another's
+  // import would get its plural rules and formats with no error. `check` still passes such a file (#120).
+  if (locale !== undefined && others.length > 0) {
+    return failed(
+      [request.config],
+      new Error(
+        `elmera-intl: ${file} is the catalog of ${[locale, ...others].join(", ")} through a link; each locale needs a PO of its own (${config.catalogs})`
+      )
+    );
+  }
 
   if (locale === undefined) {
     return failed(
       [request.config],
       new Error(
-        `elmera-intl: ${relative(config.root, request.file)} is not a configured catalog (${config.catalogs}, ${config.locales.join(", ")})`
+        `elmera-intl: ${file} is not a configured catalog (${config.catalogs}, ${config.locales.join(", ")})`
       )
     );
   }

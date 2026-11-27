@@ -8,6 +8,7 @@ import type { Stats } from "node:fs";
 import { accessSync, readFileSync, statSync } from "node:fs";
 
 import { nodeExists } from "../src/project-services";
+import { realPathSync } from "../src/real-path";
 
 // Node's file system, the operations the project reads through run synchronously: each completes inside the fiber that
 // asks, so a watch on the test clock syncs entirely within a `TestClock.adjust`, as it did when every read was sync.
@@ -66,25 +67,36 @@ const info = (stats: Stats): FileSystem.File.Info => ({
 const readSync = (path: string): Effect.Effect<Uint8Array, PlatformError.PlatformError> =>
   Effect.try({ try: () => new Uint8Array(readFileSync(path)), catch: failed("readFile", path) });
 
+// As the hosts' `FileSystem` resolves it (`NodePlatform`): the hosts' way (`realPathSync`).
+const realPathEffect = (path: string): Effect.Effect<string, PlatformError.PlatformError> =>
+  Effect.try({ try: () => realPathSync(path), catch: failed("realPath", path) });
+
+/** A test's hooks around the synchronous operations: each is given the synchronous one, and returns what runs. */
+export type SyncFileSystemHooks = {
+  /** Around a read, to hold it or stand a defect in. */
+  readonly readFile?: (read: typeof readSync) => typeof readSync;
+  /** Around a lookup of a real path, to repoint a link while it runs. */
+  readonly realPath?: (resolve: typeof realPathEffect) => typeof realPathEffect;
+};
+
 /**
- * `SYNC_FILE_SYSTEM` with its `readFile` wrapped: a test's hook around a read, to hold it or stand a defect in.
+ * `SYNC_FILE_SYSTEM` with its `readFile` or `realPath` wrapped.
  *
- * @param wrap - The read, given the synchronous one.
+ * @param hooks - The wrapped operations; the others are as in `SYNC_FILE_SYSTEM`.
  * @returns The file system.
  */
-export function syncFileSystem(
-  wrap: (read: typeof readSync) => typeof readSync = (read) => read
-): Layer.Layer<FileSystem.FileSystem> {
+export function syncFileSystem(hooks: SyncFileSystemHooks = {}): Layer.Layer<FileSystem.FileSystem> {
   return FileSystem.layerNoop({
     access: (path) => Effect.try({ try: () => accessSync(path), catch: failed("access", path) }),
     exists: nodeExists,
-    readFile: wrap(readSync),
+    readFile: hooks.readFile?.(readSync) ?? readSync,
+    realPath: hooks.realPath?.(realPathEffect) ?? realPathEffect,
     stat: (path) => Effect.try({ try: () => info(statSync(path)), catch: failed("stat", path) }),
   });
 }
 
 /**
- * A `FileSystem` whose `access`, `exists` (the hosts' own), `readFile` and `stat` are Node's synchronous calls; every
- * other operation a no-op.
+ * A `FileSystem` whose `access`, `exists` (the hosts' own), `readFile`, `realPath` and `stat` are Node's synchronous
+ * calls; every other operation a no-op.
  */
 export const SYNC_FILE_SYSTEM: Layer.Layer<FileSystem.FileSystem> = /* @__PURE__ */ syncFileSystem();

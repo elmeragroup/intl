@@ -187,12 +187,12 @@ describe("followConfig's start", () => {
       const reading = expected.length === 1;
       const { watching: start } = yield* launchFollow(project, {
         layer: sync.layer,
-        fileSystem: syncFileSystem(
-          (read) => (path) =>
+        fileSystem: syncFileSystem({
+          readFile: (read) => (path) =>
             breaks && path === project.path("elmera-intl.json")
               ? Effect.die(new Error("read defect"))
-              : read(path)
-        ),
+              : read(path),
+        }),
         report: (result) =>
           Effect.sync(() => {
             reports.push(result._tag);
@@ -227,12 +227,12 @@ describe("followConfig's start", () => {
       const { watching: start } = yield* launchFollow(project, {
         mode: NATIVE,
         events: events.layer,
-        fileSystem: syncFileSystem(
-          (read) => (path) =>
+        fileSystem: syncFileSystem({
+          readFile: (read) => (path) =>
             breaks && path === project.path("elmera-intl.json")
               ? Effect.die(new Error("read defect"))
-              : read(path)
-        ),
+              : read(path),
+        }),
       });
       yield* Effect.addFinalizer(() => Effect.sync(() => held.resolve()));
       breaks = true;
@@ -278,12 +278,12 @@ describe("followConfig's start", () => {
         mode: NATIVE,
         events: events.layer,
         layer: sync.layer,
-        fileSystem: syncFileSystem(
-          (read) => (path) =>
+        fileSystem: syncFileSystem({
+          readFile: (read) => (path) =>
             reading && path === project.path("elmera-intl.json")
               ? Deferred.await(gate.second).pipe(Effect.andThen(read(path)))
-              : read(path)
-        ),
+              : read(path),
+        }),
       });
       yield* gate.release;
       yield* Effect.addFinalizer(() => Effect.sync(() => held.resolve()));

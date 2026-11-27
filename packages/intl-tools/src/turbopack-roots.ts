@@ -1,12 +1,13 @@
 // Turbopack's roots as withIntl hands them to the PO loader, and whether Turbopack loads a file there. A leaf on
-// `node:*` alone: the loader imports it, and must not load next.ts. A missed refusal leaves Turbopack's own `outside
+// `node:*` and real-path.ts alone: the loader imports it, and must not load next.ts. A missed refusal leaves Turbopack's own `outside
 // configured roots` error, while a false one breaks a build that works, so the model is coarser than Turbopack's and
 // errs towards accepting, for the roots of the config withIntl is given. A root added to the config after withIntl
 // ran is not one of them: an `experimental.turbopackAdditionalRoots` entry that a wrapper applied outside withIntl
 // adds refuses a config or formats module there that Turbopack loads. withIntl cannot see such a wrapper, so the
 // README has it go outermost.
-import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, sep } from "node:path";
+
+import { realPathSync } from "./real-path";
 
 /** Turbopack's root and the setting that decides it. */
 export type TurbopackRoot = {
@@ -72,14 +73,14 @@ export function isBelow(directory: string, path: string): boolean {
 }
 
 /**
- * The real path of an existing file or directory.
+ * The real path of an existing file or directory, the hosts' way (`realPathSync`).
  *
  * @param path - The path, relative paths from the working directory.
  * @returns The real path, or none when it does not resolve (missing, or unreadable).
  */
 export function canonical(path: string): string | undefined {
   try {
-    return realpathSync.native(path);
+    return realPathSync(path);
   } catch {
     return undefined;
   }
