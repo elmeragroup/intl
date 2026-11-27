@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import type * as Layer from "effect/Layer";
 import * as References from "effect/References";
+import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { existsSync } from "node:fs";
@@ -618,9 +619,20 @@ describe("a watch's end, the caller's scope closing before `done` is taken", () 
 // its start and the close both settle, with every watcher it opened closed; a scope closed before the start opens
 // none and syncs nothing.
 // Each sweep starts a watch for each number of yields on the synchronous file system (`syncCatalogServices`) and the
-// test clock, so nothing in a start waits on the event loop (a read in Node's thread pool, a timer) and every run of a
-// sweep takes the same steps, however loaded the machine. The suite keeps the timeout of `watch-lifecycle.test.ts`'s
-// suite it came from.
+// test clock, so nothing in a start waits on the event loop (a read in Node's thread pool, a timer), and it runs on a
+// synchronous scheduler (`sweeping`). A sweep's cost grows with the square of the start's yields, and on Effect's
+// default scheduler each yield is a macrotask (a `setImmediate`): the event loop's turns, not the steps, were most of
+// it, so that a loaded machine took the sweeps up to the deadline. On the synchronous scheduler a yield is a microtask,
+// and a sweep has the offsets it has on the default one, at each of which the interruption or the close lands where it
+// does there (measured: the start's operations, file system calls and watcher opens), 3.5-13.7× faster idle and
+// 3.9× to at least 20× under load (50-100, where the slowest reached the deadline), row by row.
+// The suite's timeout is a hang guard only, never a budget a sweep's run time must fit. A sweep is one chain of
+// microtasks, during which no timer fires, so the project's deadline (`project.within`, 18 s, inside the 20 s timeout)
+// cannot end it: `sweeping` ends a sweep that would not end by counting steps, never time, and reports the offset it
+// stalled at, parked (the sweep's chain waits anywhere, on nothing that can come, reported at the offset it was on) or
+// spinning (an offset dispatching more than `DISPATCH_BOUND` tasks, a fiber that yields in a loop it never leaves).
+// Measured on a 12-core Mac, three runs each: the slowest sweep (followConfig's) took at most 153 ms idle (load 4) and
+// 1,307 ms at load 60-71, 117× and 13× inside the deadline.
 describe.for(["watchCatalogs", "followConfig"])(
   "a caller scope that closes before or during %s's start",
   { timeout: 20_000 },
@@ -652,50 +664,180 @@ describe.for(["watchCatalogs", "followConfig"])(
       return starting.pipe(Scope.provide(scope), Effect.provide([syncCatalogServices(), events]));
     }
 
+    /**
+     * Where a sweep stopped short: the offset whose run neither settled nor went on. `parked`, it waits on nothing that
+     * can come; `spinning`, it went on dispatching past the bound (`DISPATCH_BOUND`) without settling.
+     */
+    type Stall = { readonly offset: number; readonly as: "parked" | "spinning" };
+
+    /**
+     * A sweep's outcome: whether it reached an offset the start had ended before, the offsets that did not settle as
+     * the contract says, and the offset it stalled at, if it did.
+     */
+    type Swept = {
+      readonly swept: boolean;
+      readonly unsettled: ReadonlyArray<number>;
+      readonly stalled: Stall | undefined;
+    };
+
+    /**
+     * How each offset of a sweep settles the start, and whether what it settled to is what the contract says. `open`
+     * is the number of watchers still open once it has.
+     */
+    type Settling =
+      | {
+          /** The start is interrupted, then the scope closes. */
+          readonly by: "interrupt";
+          readonly settles: (settled: { readonly closed: Exit.Exit<void>; readonly open: number }) => boolean;
+        }
+      | {
+          /** The scope closes, then the start and its `done` are awaited. */
+          readonly by: "close";
+          readonly settles: (settled: {
+            readonly closed: Exit.Exit<void>;
+            readonly exit: Exit.Exit<{ readonly settled: string }>;
+            readonly ended: Exit.Exit<unknown>;
+            readonly open: number;
+          }) => boolean;
+        };
+
+    // The tasks one offset of a sweep may dispatch before it is a spin: 100× the most any offset of any row dispatches
+    // unmutated (1,619, followConfig's close at its last offset, where the whole start runs; measured on the synchronous
+    // scheduler, whose count is the same on every run).
+    const DISPATCH_BOUND = 161_900;
+
+    /**
+     * Runs a sweep with the scheduler yielding every `budget` operations, on a synchronous scheduler and the test clock:
+     * for each number of yields in turn, it starts a watch, yields that many times and settles the start as `settling`
+     * says, until the start has ended before it is settled.
+     *
+     * On that scheduler every step of every fiber is a microtask, so the event loop's next turn comes only once all of
+     * them wait, and no timer fires while a sweep runs. Two checks end a sweep that would otherwise not end, each with
+     * the offset it stalled at. A sweep that has not ended by the event loop's next turn (one `setImmediate`, armed as
+     * it starts) waits, wherever it is, on nothing that can come (no read, no timer, no promise of its own is
+     * outstanding in a sweep): it is `parked`, at the offset it was on. An offset that
+     * dispatches more than `DISPATCH_BOUND` tasks is `spinning` (a fiber that yields in a loop it never leaves, which
+     * would keep the microtask queue busy and the event loop, every timer, and the worker with it, held for good): the
+     * scheduler drops every task from there on. Both count steps, never time. The scheduler is the run's own (where the
+     * test clock wraps it as it wraps the default one), and the bookkeeping is plain calls, not Effect steps, so the
+     * interruption and the close land where they do on the default scheduler.
+     *
+     * @param project - The test's project, whose deadline guards the sweep.
+     * @param budget - The operations the scheduler allows between yields.
+     * @param settling - How each offset settles the start, and the contract it checks.
+     * @returns The sweep's outcome.
+     */
+    function sweeping(project: Project, budget: number, settling: Settling): Promise<Swept> {
+      const events = deliveredEvents();
+      const unsettled: Array<number> = [];
+      // The one promise of the sweep: settled by the run's exit, or by a stall, whichever comes first.
+      const result = Promise.withResolvers<Swept>();
+      let current = 0;
+      let dispatched = 0;
+      let stalled: Stall | undefined;
+      const stop = (as: Stall["as"]) => {
+        clearImmediate(parking);
+        stalled ??= { offset: current, as };
+        result.resolve({ swept: false, unsettled: [...unsettled], stalled });
+      };
+      const sync = new Scheduler.MixedScheduler("sync");
+      const scheduler: Scheduler.Scheduler = {
+        executionMode: sync.executionMode,
+        shouldYield: (fiber) => sync.shouldYield(fiber),
+        makeDispatcher: () => {
+          const dispatcher = sync.makeDispatcher();
+
+          return {
+            scheduleTask: (task, priority) => {
+              dispatched += 1;
+
+              if (stalled === undefined && dispatched > DISPATCH_BOUND) {
+                stop("spinning");
+              }
+
+              if (stalled === undefined) {
+                dispatcher.scheduleTask(task, priority);
+              }
+            },
+            flush: () => {
+              dispatcher.flush();
+            },
+          };
+        },
+      };
+      const swept = Effect.gen(function* () {
+        for (let yields = 0; yields < 1_000; yields += 1) {
+          current = yields;
+          dispatched = 0;
+          const scope = yield* Scope.make();
+          const starting = yield* Effect.forkDetach(watchIn(project, scope, events.layer));
+
+          for (let turn = 0; turn < yields; turn += 1) {
+            yield* Effect.yieldNow;
+          }
+
+          const startedFirst = starting.pollUnsafe() !== undefined;
+          let settles: boolean;
+
+          if (settling.by === "interrupt") {
+            yield* Fiber.interrupt(starting);
+            const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
+            settles = settling.settles({ closed, open: events.open().length });
+          } else {
+            const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
+            const exit = yield* Fiber.await(starting);
+            const ended = Exit.isSuccess(exit) ? yield* Effect.exit(exit.value.done) : exit;
+            settles = settling.settles({ closed, exit, ended, open: events.open().length });
+          }
+
+          if (!settles) {
+            unsettled.push(yields);
+          }
+
+          if (startedFirst) {
+            return yields > 0;
+          }
+        }
+
+        return false;
+      }).pipe(Effect.provideService(References.MaxOpsBeforeYield, budget), Effect.provide(TestClock.layer()));
+
+      // The sweep is one chain of microtasks, so this runs only once that chain waits, at whichever offset it is on, or
+      // never, cleared when the sweep settles.
+      const parking = setImmediate(() => {
+        stop("parked");
+      });
+      Effect.runCallback(swept, {
+        scheduler,
+        onExit: (exit) => {
+          clearImmediate(parking);
+
+          if (Exit.isSuccess(exit)) {
+            result.resolve({ swept: exit.value, unsettled, stalled });
+          } else {
+            result.reject(Cause.squash(exit.cause));
+          }
+        },
+      });
+
+      return project.within(result.promise, "the sweep");
+    }
+
     // With the scheduler yielding after each number of operations a budget allows, the start is interrupted after each
     // number of its yields in turn, until it has ended before that, and then the scope closes: an interrupted start
     // takes nothing, so wherever the interruption lands the close settles, clean, with every watcher closed. Each budget
-    // lines the interruptions up with the start's steps differently: in `followConfig`'s start, 4 and 6 land one between
-    // a claim on the follow's end and its release (`handOff` in watch.ts), which, left interruptible, leaves the close
-    // waiting for ever. They are an alignment with the start's steps as they are now; a change to them can move it.
+    // lines the interruptions up with the start's steps differently: in `followConfig`'s start, measured, only 4 lands one
+    // between a claim on the follow's end and its release (`handOff` in watch.ts), which, left interruptible, leaves the
+    // close waiting for ever. That is the start's steps as they are now; covering the window whatever their count is #127.
     it.for([1, 4, 6])(
       "settles the close wherever an interruption lands in the start, yielding every %i operations",
       async (budget, { project }) => {
-        const events = deliveredEvents();
-        const sweep = Effect.gen(function* () {
-          const unsettled: Array<number> = [];
-
-          for (let yields = 0; yields < 1_000; yields += 1) {
-            const scope = yield* Scope.make();
-            const starting = yield* Effect.forkDetach(watchIn(project, scope, events.layer));
-
-            for (let turn = 0; turn < yields; turn += 1) {
-              yield* Effect.yieldNow;
-            }
-
-            const startedFirst = starting.pollUnsafe() !== undefined;
-            yield* Fiber.interrupt(starting);
-            const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
-
-            if (Exit.isFailure(closed) || events.open().length > 0) {
-              unsettled.push(yields);
-            }
-
-            if (startedFirst) {
-              return { swept: yields > 0, unsettled };
-            }
-          }
-
-          return { swept: false, unsettled };
-        }).pipe(
-          Effect.provideService(References.MaxOpsBeforeYield, budget),
-          Effect.provide(TestClock.layer())
-        );
-
-        expect(await project.within(Effect.runPromise(sweep), "the sweep")).toEqual({
-          swept: true,
-          unsettled: [],
+        const swept = sweeping(project, budget, {
+          by: "interrupt",
+          settles: ({ closed, open }) => Exit.isSuccess(closed) && open === 0,
         });
+
+        expect(await swept).toEqual({ swept: true, unsettled: [], stalled: undefined });
       }
     );
 
@@ -724,47 +866,19 @@ describe.for(["watchCatalogs", "followConfig"])(
     // With the scheduler yielding after every operation, the close lands after each number of the start's yields in
     // turn, until the start has ended before it.
     it("settles its start and the close wherever the close lands in the start", async ({ project }) => {
-      const events = deliveredEvents();
-      const sweep = Effect.gen(function* () {
-        const unsettled: Array<number> = [];
-
-        for (let yields = 0; yields < 1_000; yields += 1) {
-          const scope = yield* Scope.make();
-          const starting = yield* Effect.forkDetach(watchIn(project, scope, events.layer));
-
-          for (let turn = 0; turn < yields; turn += 1) {
-            yield* Effect.yieldNow;
-          }
-
-          const startedFirst = starting.pollUnsafe() !== undefined;
-          const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
-          const exit = yield* Fiber.await(starting);
-          // Wherever the close lands, the start is ready (it settled before the close) or stopped, never failed, and
-          // the close and the watch's end are clean.
-          const ended = Exit.isSuccess(exit) ? yield* Effect.exit(exit.value.done) : exit;
-
-          if (
-            !Exit.isSuccess(exit) ||
-            !["Started", "Ready", "Stopped"].includes(exit.value.settled) ||
-            Exit.isFailure(closed) ||
-            Exit.isFailure(ended) ||
-            events.open().length > 0
-          ) {
-            unsettled.push(yields);
-          }
-
-          if (startedFirst) {
-            return { swept: yields > 0, unsettled };
-          }
-        }
-
-        return { swept: false, unsettled };
-      }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 1), Effect.provide(TestClock.layer()));
-
-      expect(await project.within(Effect.runPromise(sweep), "the sweep")).toEqual({
-        swept: true,
-        unsettled: [],
+      const swept = sweeping(project, 1, {
+        by: "close",
+        // Wherever the close lands, the start is ready (it settled before the close) or stopped, never failed, and the
+        // close and the watch's end are clean.
+        settles: ({ closed, exit, ended, open }) =>
+          Exit.isSuccess(exit) &&
+          ["Started", "Ready", "Stopped"].includes(exit.value.settled) &&
+          Exit.isSuccess(closed) &&
+          Exit.isSuccess(ended) &&
+          open === 0,
       });
+
+      expect(await swept).toEqual({ swept: true, unsettled: [], stalled: undefined });
     });
   }
 );
