@@ -7,9 +7,10 @@ import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { BigIntStats } from "node:fs";
 import { existsSync, readdirSync, statSync, watch } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 
 import type { Problem } from "./problem";
+import { fileIdentity, realPath } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE } from "./project-config";
 
@@ -28,33 +29,42 @@ export type TreeListener = {
 };
 
 /**
- * The platform's recursive file events for one tree: what a native watch listens to. A service so a host can feed
- * its own watcher's events, and so a test can deliver an event, or an error, at a moment it chooses.
+ * The platform's file events for one tree, its whole depth or one directory's own entries: what a native watch listens
+ * to. A service so a host can feed its own watcher's events, and so a test can deliver an event, or an error, at a
+ * moment it chooses.
  */
 export class FileEvents
   extends /* @__PURE__ */ Context.Service<
     FileEvents,
     {
       /**
-       * Listen to `dir`'s tree, from when this returns until the scope closes. A listener's calls are synchronous,
-       * from the event loop.
+       * Listen to `dir`'s tree, from when this returns until the scope closes: every depth when `recursive`, else
+       * only the entries directly in `dir`. A listener's calls are synchronous, from the event loop.
        */
-      readonly watch: (dir: string, listener: TreeListener) => Effect.Effect<void, never, Scope.Scope>;
+      readonly watch: (
+        dir: string,
+        listener: TreeListener,
+        recursive: boolean
+      ) => Effect.Effect<void, never, Scope.Scope>;
     }
   >()("elmera-intl-tools/FileEvents")
 {
   /**
-   * Node's recursive `fs.watch`, node_modules ignored.
+   * Node's `fs.watch`, node_modules ignored.
    *
    * @returns A layer whose watch opens an `fs.watch` in the scope (its start failure a defect) and closes it as the
    *   scope closes.
    */
   static layer(): Layer.Layer<FileEvents> {
     return Layer.succeed(FileEvents, {
-      watch: Effect.fn("FileEvents.watch")(function* (dir: string, listener: TreeListener) {
+      watch: Effect.fn("FileEvents.watch")(function* (
+        dir: string,
+        listener: TreeListener,
+        recursive: boolean
+      ) {
         yield* Effect.acquireRelease(
           Effect.sync(() =>
-            watch(dir, { recursive: true, ignore: NODE_MODULES }, listener.change).on("error", listener.error)
+            watch(dir, { recursive, ignore: NODE_MODULES }, listener.change).on("error", listener.error)
           ),
           (watcher) =>
             Effect.sync(() => {
@@ -78,22 +88,26 @@ export type Intake = { readonly problems: ReadonlyArray<Problem>; readonly chang
 /**
  * Listen to every tree's native file events, in the current scope: each tree's listener opens here, in order (a start
  * failure is a defect, the ones already open closing with the scope), and closes as the scope closes, so closing it
- * ends every event at once. Each event is handed to `admit` as it is delivered. A listener's error leaves its tree
- * unwatched.
+ * ends every event at once. Then each of `besides`' directories, its own entries only and best-effort: one whose watch
+ * fails as it starts (a directory that lets a file in it be opened by name but denies listing) is left unwatched, with
+ * no problem, and the trees still see what they would without it. Each event is handed to `admit` as it is delivered.
+ * A listener's error leaves its tree unwatched.
  *
- * @param dirs - The trees.
+ * @param dirs - The trees, each watched at every depth.
+ * @param besides - Directories watched for their own entries, if they can be (`catalogTargets`).
  * @param admit - Takes each delivery.
  * @returns An effect that opens the listeners in its scope.
  */
 export const listenNative = /* @__PURE__ */ Effect.fnUntraced(function* (
   dirs: ReadonlyArray<string>,
+  besides: ReadonlyArray<string>,
   admit: (item: Intake) => void
 ) {
   const fileEvents = yield* FileEvents;
-  yield* Effect.forEach(
-    dirs,
-    (dir) =>
-      fileEvents.watch(dir, {
+  const listen = (dir: string, recursive: boolean) =>
+    fileEvents.watch(
+      dir,
+      {
         change: (event, filename) => {
           admit({ problems: [], changes: [{ event, path: filename === null ? null : join(dir, filename) }] });
         },
@@ -109,9 +123,13 @@ export const listenNative = /* @__PURE__ */ Effect.fnUntraced(function* (
             changes: [],
           });
         },
-      }),
-    { discard: true }
-  );
+      },
+      recursive
+    );
+  yield* Effect.forEach(dirs, (dir) => listen(dir, true), { discard: true });
+  yield* Effect.forEach(besides, (dir) => listen(dir, false).pipe(Effect.catchDefect(() => Effect.void)), {
+    discard: true,
+  });
 });
 
 // A full turn of the event loop: two `setImmediate` turns, since one check-phase turn passes neither the timers nor the
@@ -307,11 +325,53 @@ export function includePrefixes(config: ProjectConfig): Array<string> {
 }
 
 /**
+ * A catalog's path as the trees' changes name it, for choosing and walking the trees: as spelled, unless a segment is
+ * `..`, then at its directory's real path. Both modes name a change as the tree's root joined with a name relative to
+ * it, and `join` collapses a `..` in the root lexically, while the watcher and the walk read the directory the kernel
+ * climbs to: a tree rooted at `messages/jump/..`, with `jump -> ../other/sub`, reads `other` and names its `nb.po`
+ * `messages/nb.po`, another file. A link or another case in the spelling survives the join, and the change names the
+ * catalog as spelled.
+ *
+ * @param catalog - The catalog's path, absolute, as `catalogPath` spells it.
+ * @returns The path the trees name it by.
+ */
+export function treePath(catalog: string): string {
+  return catalog.split(sep).includes("..") ? join(realPath(dirname(catalog)), basename(catalog)) : catalog;
+}
+
+/**
+ * The directories a native watch adds beside the trees, for its own entries only (`listenNative`'s `besides`): each
+ * catalog that is a file link to another directory (`messages/nb.po -> ../translations/nb.po`) has its target's, since
+ * an editor's save to the target raises its native event only there, while the link's own directory, a tree, sees a
+ * repoint of the link. Not one whose identity (`fileIdentity`) lies in a tree's, which delivers its events already. A
+ * poll needs none: it reads the target through the link.
+ *
+ * @param roots - The trees (`watchRoots`).
+ * @param catalogs - The catalogs' paths, as the trees name them (`treePath`).
+ * @returns The directories, sorted.
+ */
+export function catalogTargets(roots: ReadonlyArray<string>, catalogs: ReadonlyArray<string>): Array<string> {
+  const trees = roots.map((root) => fileIdentity(root));
+  const targets = catalogs
+    .map((catalog) => ({ link: realPath(dirname(catalog)), target: dirname(realPath(catalog)) }))
+    .filter(({ link, target }) => target !== link)
+    .map(({ target }) => target);
+
+  return [...new Set(targets)].toSorted().filter((dir) => {
+    const identity = fileIdentity(dir);
+
+    return !trees.some((tree) => identity === tree || identity.startsWith(`${tree}${sep}`));
+  });
+}
+
+/**
  * The trees to watch: each include root and each catalog's directory (the nearest existing ancestor of either), minus
- * any inside another, so one recursive watch covers each tree.
+ * any another covers, so one recursive watch covers each tree. A tree is covered by another only when it lies inside it
+ * as spelled and no link lies between them, its identity (`fileIdentity`) the other's joined with the path between: a
+ * recursive native watch does not follow a link, so `src` delivers no event for a save under `src/linked -> ../feature`.
  *
  * @param includeRoots - The include patterns' prefixes.
- * @param catalogs - The catalogs' paths.
+ * @param catalogs - The catalogs' paths, as the trees name them (`treePath`).
  * @returns The trees' roots, sorted.
  */
 export function watchRoots(
@@ -319,10 +379,15 @@ export function watchRoots(
   catalogs: ReadonlyArray<string>
 ): Array<string> {
   const dirs = [...includeRoots, ...catalogs.map((path) => dirname(path))].map((dir) => nearestExisting(dir));
+  const identities = new Map([...new Set(dirs)].map((dir) => [dir, fileIdentity(dir)]));
+  const covers = (other: string, dir: string) =>
+    other !== dir &&
+    dir.startsWith(`${other}${sep}`) &&
+    identities.get(dir) === join(identities.get(other) ?? other, relative(other, dir));
 
-  return [...new Set(dirs)]
+  return [...identities.keys()]
     .toSorted()
-    .filter((dir, _index, all) => !all.some((other) => other !== dir && dir.startsWith(`${other}${sep}`)));
+    .filter((dir, _index, all) => !all.some((other) => covers(other, dir)));
 }
 
 /**

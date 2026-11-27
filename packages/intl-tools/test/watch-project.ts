@@ -417,6 +417,13 @@ export type DeliveredEvents = {
   /** How many trees the watch has closed. */
   readonly closes: () => number;
   /**
+   * Whether the watch listens to an open tree's whole depth, or only to the entries directly in it.
+   *
+   * @param dir - The tree.
+   * @returns False for a tree the watch opened as one directory, else true.
+   */
+  readonly recursive: (dir: string) => boolean;
+  /**
    * The listener of an open tree, to deliver an event or an error to.
    *
    * @param dir - The tree.
@@ -458,12 +465,17 @@ export type DeliveredEventsOptions = {
  */
 export function deliveredEvents(options: DeliveredEventsOptions = {}): DeliveredEvents {
   const listeners = new Map<string, TreeListener>();
+  const depths = new Map<string, boolean>();
   let calls = 0;
   let closes = 0;
 
   return {
     layer: Layer.succeed(FileEvents, {
-      watch: Effect.fn("DeliveredEvents.watch")(function* (dir: string, listener: TreeListener) {
+      watch: Effect.fn("DeliveredEvents.watch")(function* (
+        dir: string,
+        listener: TreeListener,
+        recursive: boolean
+      ) {
         calls += 1;
         const opening = options.opening?.(dir);
         // Handled at once: a refusal the watch awaits a turn later (or never, a stop landing first) is not unhandled.
@@ -483,6 +495,7 @@ export function deliveredEvents(options: DeliveredEventsOptions = {}): Delivered
             Effect.andThen(
               Effect.sync(() => {
                 listeners.set(dir, listener);
+                depths.set(dir, recursive);
                 options.opened?.(dir);
               })
             )
@@ -508,6 +521,7 @@ export function deliveredEvents(options: DeliveredEventsOptions = {}): Delivered
     opening: () => calls - listeners.size,
     calls: () => calls,
     closes: () => closes,
+    recursive: (dir) => depths.get(dir) !== false,
     listener: (dir) => {
       const listener = listeners.get(dir);
 

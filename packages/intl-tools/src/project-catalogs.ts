@@ -37,16 +37,34 @@ export function catalogLocales(config: ProjectConfig, file: string): ReadonlyArr
   // collapsed: a `..` in an absolute pattern climbs where the kernel takes it, and one after a directory that does not
   // exist names no file (`extract` refuses it as `CatalogClimbsMissing`), while the imported file exists. Whether the
   // file is a catalog is a question of identity, so both sides take the kernel's answer (`identityPathSync`).
-  const { base, rest } = nearestReal(resolve(file), identityPathSync);
-  const real = join(base, ...rest);
+  const real = fileIdentity(file);
 
   return config.locales.filter((locale) => catalogIdentity(catalogPath(config, locale)) === real);
 }
 
-// A catalog's real path, as the kernel resolves it (`identityPathSync`), or none when a `..` follows its nearest
-// existing ancestor: the kernel climbs out of no missing directory, so joining that `..` onto the ancestor would name a
-// file the path never reaches.
-function catalogIdentity(path: string): string | undefined {
+/**
+ * A file's identity: its real path as the kernel resolves it (`identityPathSync`), through its nearest existing
+ * ancestor, so a file just deleted, or not written yet, still has one. Two paths name one file when their identities
+ * are equal.
+ *
+ * @param file - The file, relative paths from the working directory.
+ * @returns The identity.
+ */
+export function fileIdentity(file: string): string {
+  const { base, rest } = nearestReal(resolve(file), identityPathSync);
+
+  return join(base, ...rest);
+}
+
+/**
+ * A catalog path's identity, as `fileIdentity`, resolved as `extract` writes it, never collapsed; none when a `..`
+ * follows its nearest existing ancestor: the kernel climbs out of no missing directory, so joining that `..` onto the
+ * ancestor would name a file the path never reaches.
+ *
+ * @param path - The catalog's path, absolute, as `catalogPath` spells it.
+ * @returns The identity, or undefined when the path reaches no file.
+ */
+export function catalogIdentity(path: string): string | undefined {
   const { base, rest } = nearestReal(path, identityPathSync);
 
   return rest.includes("..") ? undefined : join(base, ...rest);
