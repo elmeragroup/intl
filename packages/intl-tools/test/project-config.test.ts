@@ -2,11 +2,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { chmodSync, mkdirSync, symlinkSync } from "node:fs";
-import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
+import type { ProjectConfig } from "../src/project-config";
 import { loadConfig, parseConfig } from "../src/project-config";
-import { decodeConfig, readConfig, readConfigSnapshot } from "../src/project-config-read";
+import { readConfig, readConfigSnapshot } from "../src/project-config-read";
 import { NodePlatform } from "../src/project-services";
 import type { Project } from "./project-fixture";
 import { openProject } from "./project-fixture";
@@ -166,13 +166,14 @@ it("reads a dangling link in the watch as not found where access reaches the lin
   );
 });
 
-// Unit under test: `decodeConfig`, the Schema decode the CLI, Vite and Vitest run. Oracles: `parseConfig`, the hand
-// parser `withIntl` runs inside next.config (for each text, the same config or the same first problem, word for word),
-// and, for each text, its first diagnostic as a literal, so each message is checked against the field it names. The
-// texts reach every problem, each field's ways to be wrong, and the precedence between them: include before exclude,
-// both before an escaping glob, which comes before the locales, then the catalogs, then the formats, and last whether
-// two locales' catalog paths could name one file. "not JSON" is pinned by its prefix: the JSON parser's own message
-// after it varies by Node version.
+// Unit under test: `parseConfig`, the one parser of the config's text, which every host runs (`withIntl` and the
+// loaders through `loadConfig`, the CLI, `check` and the watch through `readConfig` and `readConfigSnapshot`). Oracle:
+// for each text, a literal: the full config for a valid one, every path written out against the fixed root, and the
+// first diagnostic otherwise, so each message is checked against the field it names. The texts reach every problem,
+// each field's ways to be wrong, and the precedence between them: include before exclude, both before an escaping glob,
+// which comes before the locales, then the catalogs, then the formats, and last whether two locales' catalog paths
+// could name one file. "not JSON" is pinned by its prefix: the JSON parser's own message after it varies by Node
+// version.
 const INCLUDE = '"include" must be a non-empty array of glob strings';
 const EXCLUDE = '"exclude" must be an array of glob strings';
 const LOCALES = '"locales" must be a non-empty array of locale strings';
@@ -187,14 +188,31 @@ const oneTag = (first: string, second: string, tag: string) =>
   `locales ${JSON.stringify(first)} and ${JSON.stringify(second)} are one locale identifier, ${tag}: each locale needs a catalog of its own`;
 const shared = (pattern: string, locales: ReadonlyArray<string>) =>
   JSON.stringify({ include: ["src/**"], catalogs: pattern, locales });
-const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, first: string]> = [
+const ROOT = "/project";
+const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, expected: ProjectConfig | string]> = [
   [
     '{ "include": ["./src/**/*.tsx"], "exclude": ["./src/skip/**"], "catalogs": "messages/{locale}.po", "locales": ["nb", "sv"], "formats": "./src/formats.ts", "extra": 1 }',
-    "valid",
+    // Globs normalized (no `./`), `formats` resolved against the root, the unknown field dropped.
+    {
+      root: ROOT,
+      include: ["src/**/*.tsx"],
+      exclude: ["src/skip/**"],
+      catalogs: "messages/{locale}.po",
+      locales: ["nb", "sv"],
+      formats: "/project/src/formats.ts",
+    },
   ],
   [
     '{ "include": ["src/**"], "catalogs": "/abs/{locale}.po", "locales": ["nb"], "formats": "/abs/formats.mjs" }',
-    "valid",
+    // An absent exclude is none; an absolute `formats` stays as written (resolve, not join).
+    {
+      root: ROOT,
+      include: ["src/**"],
+      exclude: [],
+      catalogs: "/abs/{locale}.po",
+      locales: ["nb"],
+      formats: "/abs/formats.mjs",
+    },
   ],
   ["{ not json", "not JSON"],
   ["\uFEFF{}", "not JSON"],
@@ -239,8 +257,30 @@ const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, first: string]> = [
   [shared("/abs/messages/{locale}/../catalog.po", ["sv", "nb"]), CLIMBING],
   [shared("messages\\{locale}\\..\\catalog.po", ["nb", "sv"]), CLIMBING],
   [shared("{locale}/sub/../catalog.po", ["nb"]), CLIMBING],
-  [shared("/abs/messages/jump/../{locale}.po", ["nb", "sv"]), "valid"],
-  [shared("messages/{locale}/x..po", ["nb", "pt-BR", "zh-Hant-TW", "en-us"]), "valid"],
+  // The catalogs pattern is kept as written, its `..` before {locale} included.
+  [
+    shared("/abs/messages/jump/../{locale}.po", ["nb", "sv"]),
+    {
+      root: ROOT,
+      include: ["src/**"],
+      exclude: [],
+      catalogs: "/abs/messages/jump/../{locale}.po",
+      locales: ["nb", "sv"],
+      formats: undefined,
+    },
+  ],
+  // The locales are kept as spelled (`en-us`, not canonicalized): each names its catalog file.
+  [
+    shared("messages/{locale}/x..po", ["nb", "pt-BR", "zh-Hant-TW", "en-us"]),
+    {
+      root: ROOT,
+      include: ["src/**"],
+      exclude: [],
+      catalogs: "messages/{locale}/x..po",
+      locales: ["nb", "pt-BR", "zh-Hant-TW", "en-us"],
+      formats: undefined,
+    },
+  ],
   // A locale is an identifier Intl.getCanonicalLocales accepts, never a path (nor every BCP 47 tag: en-GB-oed): "/nb", "../messages/nb" and, under the
   // root, an absolute "<root>/nb" each name nb's catalog through another string, and a save between the two reads of
   // that one file was lost for a moment. Two spellings of one tag ("NB", "iw" for "he") are one locale.
@@ -265,15 +305,12 @@ const CONFIG_TEXTS: ReadonlyArray<readonly [text: string, first: string]> = [
   ],
 ];
 
-it("decodes every config as the hand parser withIntl runs parses it, each first diagnostic as pinned", ({
-  project,
-}) => {
-  const path = `${project.root}/./elmera-intl.json`;
-  const first = (loaded: ReturnType<typeof parseConfig>) =>
-    loaded._tag === "Config" ? "valid" : loaded.problem.message.replace(/^not JSON: .*/u, "not JSON");
+test("parses every config text to its pinned config or first diagnostic", () => {
+  const path = `${ROOT}/./elmera-intl.json`;
+  const outcome = (loaded: ReturnType<typeof parseConfig>) =>
+    loaded._tag === "Config" ? loaded.config : loaded.problem.message.replace(/^not JSON: .*/u, "not JSON");
 
-  const decoded = CONFIG_TEXTS.map(([text]) => decodeConfig(text, path, project.root, { resolve }));
-
-  expect(decoded).toEqual(CONFIG_TEXTS.map(([text]) => parseConfig(text, path, project.root)));
-  expect(decoded.map((loaded) => first(loaded))).toEqual(CONFIG_TEXTS.map(([, pinned]) => pinned));
+  expect(CONFIG_TEXTS.map(([text]) => outcome(parseConfig(text, path, ROOT)))).toStrictEqual(
+    CONFIG_TEXTS.map(([, expected]) => expected)
+  );
 });
