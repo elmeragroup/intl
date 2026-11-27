@@ -2,9 +2,9 @@
 import type { ReactElement, ReactNode } from "react";
 import { cloneElement, Fragment, isValidElement } from "react";
 
-import type { IntlInstance, MessageValue } from "./intl";
+import type { IntlInstance } from "./intl";
 import { FORMAT, REPORT, sourceMessage } from "./intl";
-import type { ArgProblem, MessageNode } from "./message";
+import type { ArgProblem, MessageNode, SelectProp } from "./message";
 import {
   describeArgProblem,
   describeInvalidCase,
@@ -40,14 +40,19 @@ export type PluralProps = PluralCategories & { readonly [exact: `_${number}`]: s
   >;
 
 /**
- * A value inside `<T>`: `<Val name={user.name} />` is the ICU argument `{name}`. Outside `<T>` it renders its value,
- * so a stray `<Val>` degrades instead of crashing.
+ * A value inside `<T>`: `<Val name={user.name} />` is the ICU argument `{name}`. Outside `<T>` (or when `<T>` falls
+ * back to its children) it renders its value prop when that is text or a number, and nothing for any other value, so
+ * a stray `<Val>` degrades instead of crashing and never shows invented text (`null`, `[object Object]`).
  *
  * @param props - One prop: the argument name and its value.
- * @returns The value as text.
+ * @returns The value as text, or nothing.
  */
 export function Val(props: ValProps): ReactNode {
-  return Object.values(props).map(String).join("");
+  return Object.entries<unknown>(props)
+    .map(([key, value]) =>
+      key !== "children" && (typeof value === "string" || typeof value === "number") ? String(value) : ""
+    )
+    .join("");
 }
 
 /**
@@ -61,38 +66,49 @@ const ENGLISH_PLURALS = new Intl.PluralRules("en");
 
 /**
  * A plural inside `<T>`: `<Plural count={n} one="# order" other="# orders" />`. Outside `<T>` (or when `<T>` falls
- * back to its children) it renders its English form for the count, so the count is never dropped.
+ * back to its children) it renders its English form for the count, so the count is never dropped; a form that is not
+ * a string counts as unwritten.
  *
  * @param props - The count and the plural forms.
- * @returns The matching English form, `#` replaced by the count.
+ * @returns The matching English form, `#` replaced by the count, or nothing when the count is not a number.
  */
 export function Plural(props: PluralProps): ReactNode {
-  const entries = Object.entries(props);
-  const forms = new Map(entries.filter(([key]) => isPluralForm(key)));
+  const entries = Object.entries<unknown>(props);
+  const forms = textsOf(entries.filter(([key]) => isPluralForm(key)));
   const count = entries.find(([key]) => key !== "children" && !isPluralForm(key))?.[1];
 
   if (typeof count !== "number") {
     return null;
   }
 
-  const form = forms.get(`_${count}`) ?? forms.get(ENGLISH_PLURALS.select(count)) ?? forms.get("other");
-
-  return typeof form === "string" ? form.replaceAll("#", String(count)) : null;
+  return (
+    forms.get(`_${count}`) ??
+    forms.get(ENGLISH_PLURALS.select(count)) ??
+    forms.get("other")
+  )?.replaceAll("#", String(count));
 }
 
 /**
  * A select inside `<T>`: `<Select subject={subject} _company="company" other="customer" />`. Outside `<T>` (or when
- * `<T>` falls back to its children) it renders its English branch for the value.
+ * `<T>` falls back to its children) it renders its English branch for the value. A branch that is not a string, or
+ * whose name is no select key (`_other`, `_a-b`), counts as unwritten.
  *
  * @param props - The value, the cases and `other`.
- * @returns The case the value names, else `other`.
+ * @returns The case the value names, else `other`, else nothing.
  */
 export function Select(props: SelectProps): ReactNode {
-  const entries = Object.entries(props);
+  const entries = Object.entries<unknown>(props);
   const value = entries.find(([key]) => key !== "children" && selectProp(key)._tag === "NotBranch")?.[1];
-  const branch = typeof value === "string" ? entries.find(([key]) => key === `_${value}`)?.[1] : undefined;
+  const texts = textsOf(entries);
+  const branch =
+    typeof value === "string" && selectProp(`_${value}`)._tag === "Case" ? texts.get(`_${value}`) : undefined;
 
-  return branch ?? props.other;
+  return branch ?? texts.get("other");
+}
+
+// The props whose value is a string: a branch or form the developer wrote as text.
+function textsOf(entries: ReadonlyArray<[string, unknown]>): Map<string, string> {
+  return new Map(entries.filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
 type ElementProps = { readonly children?: ReactNode };
@@ -104,14 +120,13 @@ type ElementProps = { readonly children?: ReactNode };
  * @param children - The `<T>` children: text, elements, fragments, `<Val>`, `<Plural>` and `<Select>`.
  * @param context - The `<T context>` prop.
  * @param self - The calling `<T>`, which its message may not contain.
- * @returns The translated content, with the children's elements around their translated text. An argument the
- *   extractor rejects (a reserved name, one name with two values) or a `<T>` at any depth inside this one is reported
- *   (to `onError`, or the default), and the children render untranslated, so every value shows as written and
- *   an inner `<T>` translates itself; so do they when the catalog lacks a structured message (not extracted yet).
- * @throws When a child is not text, an element, `<Val>`, `<Plural>` or `<Select>`, a value component lacks its one
- *   value prop, or a `<Plural>` form or `<Select>` branch is malformed: the extractor rejects each, so reaching one is
- *   a defect. Also when a value is neither text nor a number, which the extractor cannot see and only the
- *   `Val`/`Plural`/`Select` prop types rule out (#99).
+ * @returns The translated content, with the children's elements around their translated text. A `<T>` the extractor
+ *   rejects (a reserved or conflicting argument, a malformed `<Val>`, `<Plural>` or `<Select>`, a `<T>` inside it), a
+ *   value that is neither text nor a number (which only the prop types rule out), and a message that fails to format
+ *   are reported once (to `onError`, or the default), and the children render untranslated, each value as written
+ *   and an inner `<T>` translating itself; so do they when the catalog lacks a structured message (not extracted yet).
+ *   A present `null` or `undefined` `<Val>` formats as `t()` formats it.
+ * @throws When a child is not text or an element (a promise, an object), which `<T>` cannot put in a message.
  */
 export function renderT(
   intl: IntlInstance,
@@ -119,10 +134,10 @@ export function renderT(
   context: string | undefined,
   self: ReactElement["type"]
 ): ReactNode {
-  const values: Record<string, MessageValue> = {};
+  const seen: Walk["seen"] = new Map();
   const elements: Array<ReactElement<ElementProps>> = [];
   const problems: Array<Problem> = [];
-  const nodes = toNodes(children, { values, seen: new Map(), problems, self }, elements);
+  const nodes = toNodes(children, { seen, problems, self }, elements);
   const message = sourceMessage(serialize(nodes), context);
   const [problem] = problems;
 
@@ -139,9 +154,11 @@ export function renderT(
       (chunks: Array<ReactNode>) => cloneElement(element, { key: i, children: undefined }, ...chunks),
     ])
   );
-  const outcome = intl[FORMAT]<ReactNode>(message, { ...values, ...tags });
+  // Object.fromEntries, then a spread: both define own properties, so an argument named `__proto__` reaches the
+  // formatter as one. A failed format was reported by FORMAT, outside any try here, so a throwing onError propagates.
+  const outcome = intl[FORMAT]<ReactNode>(message, { ...Object.fromEntries(seen), ...tags });
 
-  return outcome._tag === "NotExtracted" ? <>{children}</> : <>{outcome.value}</>;
+  return outcome._tag === "Formatted" ? <>{outcome.value}</> : <>{children}</>;
 }
 
 /**
@@ -150,22 +167,53 @@ export function renderT(
  */
 type NestedT = { readonly _tag: "NestedT" };
 
-/** Why a `<T>` renders its children untranslated: the slot rules' argument problems, or a `<T>` inside it. */
-type Problem = ArgProblem | NestedT;
+type ValueComponent = "Val" | "Plural" | "Select";
+
+/**
+ * Why a `<T>` renders its children untranslated: the slot rules' argument problems, a `<T>` inside it, or a
+ * `<Val>`/`<Plural>`/`<Select>` the extractor rejects or whose value is not text or a number. Each names the fix.
+ */
+type Problem =
+  | ArgProblem
+  | NestedT
+  /** A `<Select>` branch name that is no select key. */
+  | Extract<SelectProp, { readonly _tag: "InvalidCase" }>
+  /** A `<Select>` without `other`. */
+  | { readonly _tag: "MissingOther" }
+  /** A `<Plural>` form or `<Select>` branch that is not a string. */
+  | { readonly _tag: "PartNotText"; readonly component: "Plural" | "Select"; readonly key: string }
+  /** Zero or several value props. */
+  | { readonly _tag: "ValueProps"; readonly component: ValueComponent; readonly names: ReadonlyArray<string> }
+  /** A value that is neither text nor a number. */
+  | { readonly _tag: "ValueNotText"; readonly component: ValueComponent; readonly name: string };
 
 function describeProblem(problem: Problem): string {
-  return problem._tag === "NestedT"
-    ? "<T> cannot contain another <T>; keep the whole text in the outer <T>"
-    : describeArgProblem(problem);
+  switch (problem._tag) {
+    case "NestedT":
+      return "<T> cannot contain another <T>; keep the whole text in the outer <T>";
+    case "InvalidCase":
+      return describeInvalidCase(problem.name);
+    case "MissingOther":
+      return "<Select> needs an `other` branch";
+    case "PartNotText":
+      return `<${problem.component} ${problem.key}> needs a string literal ${problem.component === "Plural" ? "form" : "branch"}`;
+    case "ValueProps":
+      return `<${problem.component}> needs exactly one value prop, got ${problem.names.join(", ") || "none"}`;
+    case "ValueNotText":
+      return `<${problem.component} ${problem.name}> needs a string or number value`;
+    default:
+      return describeArgProblem(problem);
+  }
 }
 
 /** What one `<T>`'s message walk carries: where it collects the arguments, and the `<T>` it may not meet again. */
 type Walk = {
-  /** Receives each `<Val>`/`<Plural>`/`<Select>` value by argument name. */
-  readonly values: Record<string, MessageValue>;
-  /** Arguments recorded so far, for the shared slot rules. */
-  readonly seen: Map<string, MessageValue>;
-  /** Receives each argument the slot rules reject, and each `<T>` inside the calling one. */
+  /**
+   * Each registered `<Val>`/`<Plural>`/`<Select>` value by argument name, for the shared slot rules and the formatter:
+   * text or a number, or a `<Val>`'s present `null`/`undefined`, which formats as `t()` formats it.
+   */
+  readonly seen: Map<string, Primitive | null | undefined>;
+  /** Receives each problem that keeps the message untranslated, in the order the walk meets them. */
   readonly problems: Array<Problem>;
   /**
    * The calling `<T>`. `/react` resolves to one `T` per environment, so a `<T>` written inside it is this function;
@@ -181,8 +229,8 @@ type Walk = {
  * @param walk - Receives the arguments and the problems that keep the message untranslated, and names the calling
  *   `<T>`.
  * @param elements - Receives each element, in tag order.
- * @returns The message parts.
- * @throws On a child `<T>` cannot represent (see `renderT`).
+ * @returns The message parts; a malformed `<Val>`, `<Plural>` or `<Select>` adds none.
+ * @throws On a child that is not text or an element (see `renderT`).
  */
 function toNodes(
   children: ReactNode,
@@ -222,63 +270,126 @@ function toNodes(
       continue;
     }
 
-    nodes.push(toElementNode(child, walk, elements));
+    const component: ValueComponent | undefined =
+      child.type === Val
+        ? "Val"
+        : child.type === Plural
+          ? "Plural"
+          : child.type === Select
+            ? "Select"
+            : undefined;
+
+    if (component === undefined) {
+      const index = elements.push(child) - 1;
+      nodes.push({ kind: "el", index, children: toNodes(child.props.children, walk, elements) });
+      continue;
+    }
+
+    const node = valueNode(child, component, walk);
+
+    if (node) {
+      nodes.push(node);
+    }
   }
 
   return nodes;
 }
 
-function toElementNode(
+/**
+ * Read a `<Val>`, `<Plural>` or `<Select>` into its message part, pushing each problem in order: the value props'
+ * count, the value's kind, then each form or branch in prop order, then a missing `other`. Only a well-formed
+ * component whose value is text or a number (or a `<Val>`'s present `null`/`undefined`) registers its argument, so a
+ * malformed one reports its own shape, never a slot rule on the name it carries.
+ *
+ * @returns The part, or `undefined` for a malformed component, which adds nothing to the message.
+ */
+function valueNode(
   element: ReactElement<ElementProps>,
-  walk: Walk,
-  elements: Array<ReactElement<ElementProps>>
-): MessageNode {
-  const { props } = element;
+  component: ValueComponent,
+  walk: Walk
+): MessageNode | undefined {
+  const entries = propEntries(element);
+  // Branch names (one, other, _0, _company…) are reserved only on <Plural>/<Select>; <Val one={1} /> is a value
+  // named "one".
+  const args = entries.filter(
+    ([key]) =>
+      key !== "children" &&
+      !(component === "Plural"
+        ? isPluralForm(key)
+        : component === "Select" && selectProp(key)._tag !== "NotBranch")
+  );
+  const [arg] = args;
 
-  if (element.type === Val) {
-    const [name, value] = singleArg(element, "Val");
-    addArg(walk, name, value);
+  if (args.length !== 1 || arg === undefined) {
+    walk.problems.push({ _tag: "ValueProps", component, names: args.map(([key]) => key) });
 
-    return { kind: "arg", name };
+    return undefined;
   }
 
-  if (element.type === Plural) {
-    const [name, value] = singleArg(element, "Plural");
-    addArg(walk, name, value);
-    const forms = Object.fromEntries(
-      propEntries(element).flatMap(([key, form]) => {
-        if (!isPluralForm(key)) {
-          return [];
-        }
+  const [name, value] = arg;
+  // The walk's Primitive, not MessageValue, which admits a bigint and a Date.
+  const isValue =
+    typeof value === "string" ||
+    typeof value === "number" ||
+    (component === "Val" && (value === null || value === undefined));
 
-        if (typeof form !== "string") {
-          throw new TypeError(`<Plural ${key}> needs a string literal form`);
-        }
-
-        return [[key, form]];
-      })
-    );
-
-    return { kind: "plural", name, forms };
+  if (!isValue) {
+    walk.problems.push({ _tag: "ValueNotText", component, name });
   }
 
-  if (element.type === Select) {
-    const [name, value] = singleArg(element, "Select");
-    addArg(walk, name, value);
+  const node: MessageNode | undefined =
+    component === "Val"
+      ? { kind: "arg", name }
+      : component === "Plural"
+        ? pluralNode(entries, name, walk)
+        : selectNode(entries, name, walk);
 
-    return selectNode(element, name);
+  if (node && isValue) {
+    const problem = recordArg(walk.seen, name, value);
+
+    if (problem) {
+      walk.problems.push(problem);
+    }
   }
 
-  const index = elements.push(element) - 1;
-
-  return { kind: "el", index, children: toNodes(props.children, walk, elements) };
+  return node;
 }
 
-// The extractor rejects each throw's case, so reaching one is a defect.
-function selectNode(element: ReactElement<ElementProps>, name: string): MessageNode {
+// A malformed form or branch adds no part (`undefined`, each problem pushed), which also keeps non-text out of
+// serialize, whose escaping would throw on it.
+function pluralNode(
+  entries: ReadonlyArray<[string, unknown]>,
+  name: string,
+  walk: Walk
+): MessageNode | undefined {
+  const before = walk.problems.length;
+  const forms: Array<[string, string]> = [];
+  for (const [key, form] of entries) {
+    if (!isPluralForm(key)) {
+      continue;
+    }
+
+    if (typeof form === "string") {
+      forms.push([key, form]);
+    } else {
+      walk.problems.push({ _tag: "PartNotText", component: "Plural", key });
+    }
+  }
+
+  return walk.problems.length > before
+    ? undefined
+    : { kind: "plural", name, forms: Object.fromEntries(forms) };
+}
+
+function selectNode(
+  entries: ReadonlyArray<[string, unknown]>,
+  name: string,
+  walk: Walk
+): MessageNode | undefined {
+  const before = walk.problems.length;
   const cases: Array<readonly [string, string]> = [];
   let other: string | undefined;
-  for (const [key, text] of propEntries(element)) {
+  for (const [key, text] of entries) {
     const prop = selectProp(key);
 
     if (prop._tag === "NotBranch") {
@@ -286,68 +397,25 @@ function selectNode(element: ReactElement<ElementProps>, name: string): MessageN
     }
 
     if (prop._tag === "InvalidCase") {
-      throw new Error(describeInvalidCase(key));
-    }
-
-    if (typeof text !== "string") {
-      throw new TypeError(`<Select ${key}> needs a string literal branch`);
-    }
-
-    if (prop._tag === "Other") {
+      walk.problems.push(prop);
+    } else if (typeof text !== "string") {
+      walk.problems.push({ _tag: "PartNotText", component: "Select", key });
+    } else if (prop._tag === "Other") {
       other = text;
     } else {
       cases.push([prop.key, text]);
     }
   }
 
-  if (other === undefined) {
-    throw new Error("<Select> needs an `other` branch");
+  // After the branches, and only when none was malformed: a malformed branch is already this component's first
+  // problem, and an `other` that is not text was reported as such.
+  if (other === undefined && walk.problems.length === before) {
+    walk.problems.push({ _tag: "MissingOther" });
   }
 
-  return { kind: "select", name, cases, other };
-}
-
-function addArg(walk: Walk, name: string, value: MessageValue): void {
-  const problem = recordArg(walk.seen, name, value);
-
-  if (problem) {
-    walk.problems.push(problem);
-  } else {
-    walk.values[name] = value;
-  }
-}
-
-// Branch names (one, other, _0, _company…) are reserved only on <Plural>/<Select>; <Val one={1} /> is a value named "one".
-function singleArg(
-  element: ReactElement<ElementProps>,
-  component: "Val" | "Plural" | "Select"
-): [string, MessageValue] {
-  const entries = propEntries(element).filter(([key]) => key !== "children" && !isBranch(component, key));
-  const [entry] = entries;
-
-  if (entries.length !== 1 || entry === undefined) {
-    const names = entries.map(([key]) => key).join(", ") || "none";
-    throw new Error(`<${component}> needs exactly one value prop, got ${names}`);
-  }
-
-  const [name, value] = entry;
-
-  if (typeof value !== "string" && typeof value !== "number") {
-    throw new TypeError(`<${component} ${name}> needs a string or number value`);
-  }
-
-  return [name, value];
-}
-
-function isBranch(component: "Val" | "Plural" | "Select", key: string): boolean {
-  switch (component) {
-    case "Val":
-      return false;
-    case "Plural":
-      return isPluralForm(key);
-    case "Select":
-      return selectProp(key)._tag !== "NotBranch";
-  }
+  return walk.problems.length > before || other === undefined
+    ? undefined
+    : { kind: "select", name, cases, other };
 }
 
 // Element props have no static type at this boundary: <Val>/<Plural>/<Select> props are read and checked here.

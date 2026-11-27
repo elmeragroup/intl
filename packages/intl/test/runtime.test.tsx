@@ -7,7 +7,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { Catalog, CreateIntlOptions, Descriptor } from "@elmeragroup/intl/core";
 import { createIntl, keyOf, msg, serialize } from "@elmeragroup/intl/core";
 import { hashKey } from "@elmeragroup/intl/internal/message";
-import { IntlProvider, Plural, Select, T, Val, useT } from "@elmeragroup/intl/react";
+import { IntlProvider, Select, T, Val, useT } from "@elmeragroup/intl/react";
 
 import { compiled, english } from "./catalogs";
 import { fixtures } from "./fixtures";
@@ -222,54 +222,32 @@ describe("components", () => {
     ).toBe("Got 1");
   });
 
-  it("rejects a child that is not text or an element", () => {
-    // A promise is a valid ReactNode elsewhere, but <T> cannot put it in a message (the extractor rejects it too).
-    const pending = Promise.resolve("Ada");
-    expect(() => render("en", en, <T>{pending}</T>)).toThrow("not text, an element");
-  });
-
-  // The extractor rejects both forms; the runtime must not render a wrong value if one ships anyway.
+  // Row 1: <T>'s walk cannot put these in a message, so <T> throws, reporting nothing (the extractor rejects both too).
   it.each([
     [
-      "a <Val> named like a positional tag",
-      <T>
-        <Val x0="Ada" /> read <a href="/t">terms</a>
-      </T>,
-      'Ada read <a href="/t">terms</a>',
+      "a promise",
+      Promise.resolve("Ada"),
+      "<T> child is not text, an element, <Val>, <Plural> or <Select>: [object Promise]",
     ],
     [
-      "one <Val> name with two values",
-      <T>
-        <Val n="1" /> of <Val n="2" />
-      </T>,
-      "1 of 2",
+      "an object",
+      { a: 1 },
+      "<T> child is not text, an element, <Val>, <Plural> or <Select>: [object Object]",
     ],
-    [
-      "a <Select> named like a positional tag",
-      <T>
-        <Select x0="a" _a="Ada" other="someone" /> read <b>terms</b>
-      </T>,
-      "Ada read <b>terms</b>",
-    ],
-    [
-      "a <Plural> named like a positional tag",
-      <T>
-        <Plural x0={2} one="# item" other="# items" /> in <b>cart</b>
-      </T>,
-      "2 items in <b>cart</b>",
-    ],
-  ] as const)("renders %s untranslated and reports it", (_label, el, html) => {
-    const errors: Array<string> = [];
-    const out = renderToStaticMarkup(
+  ] as const)("rejects a child that is not text or an element: %s", (_label, child, message) => {
+    const reports: Array<string> = [];
+    const tree = (
       <IntlProvider
         locale="nb"
         catalog={english()}
         timeZone={OSLO}
-        onError={(error) => errors.push(error.message)}>
-        {el}
+        onError={(error) => reports.push(error.message)}>
+        {/* @ts-expect-error an object is no ReactNode; a promise is one elsewhere, but <T> cannot put it in a message */}
+        <T>{child}</T>
       </IntlProvider>
     );
-    expect([out, errors.length]).toEqual([html, 1]);
+    expect(() => renderToStaticMarkup(tree)).toThrow(message);
+    expect(reports).toEqual([]);
   });
 
   // Unit under test: a <T> written inside a <T>, against a catalog holding the outer message's key, which any
@@ -351,9 +329,7 @@ describe("plain arguments take text", () => {
     catalog: english(
       "Total {n, number}",
       "{n, number} {n, plural, one {item} other {items}}",
-      "[{v}|{w}]",
       "<x>Hidden</x>",
-      "Hi {name}",
       "{gender, select, female {She} other {{name}}}",
       "{state, select, pending {Pending} other {Processed on {date, date}}}"
     ),
@@ -385,21 +361,32 @@ describe("plain arguments take text", () => {
     ]).toEqual(["Totalt 1\u00A0234\u00A0567,5", "Den 2.1.2026"]);
   });
 
-  // A widened descriptor's values are untyped, as any cast or `any` caller's are.
+  // An instance that records each report as its message and key.
+  const recording = (locale: string, catalog: Catalog) => {
+    const reports: Array<readonly [string, string]> = [];
+    const intl = createIntl({
+      locale,
+      catalog,
+      timeZone: OSLO,
+      onError: (reported, key) => reports.push([reported.message, key]),
+    });
+
+    return { intl, reports };
+  };
+
+  // A widened descriptor's values are untyped, as any cast or `any` caller's are. Each reports once under the
+  // message's key, then t throws what it reported.
   it.each([
     ["a number", 1000, 'argument "n" got a number: plain {n} takes text; use {n, number} or {n, date}'],
     ["a Date", lateUtc, 'argument "n" got a Date: plain {n} takes text; use {n, number} or {n, date}'],
+    ["an object", { a: 1 }, 'argument "n" got a object: plain {n} takes text; use {n, number} or {n, date}'],
+    ["a boolean", true, 'argument "n" got a boolean: plain {n} takes text; use {n, number} or {n, date}'],
   ] as const)("reports %s in a plain translation argument, then throws it", (_label, value, error) => {
-    const reports: Array<string> = [];
-    const translatedIntl = createIntl({
-      locale: "nb",
-      catalog: compiled("nb", { "Total {n}": "Totalt {n}" }),
-      timeZone: OSLO,
-      onError: (reported, key) => reports.push(`${key}: ${reported.message}`),
-    });
+    const { intl, reports } = recording("nb", compiled("nb", { "Total {n}": "Totalt {n}" }));
     const untyped: Descriptor = msg("Total {n}");
-    expect(() => translatedIntl.t.from(untyped, { n: value })).toThrow(error);
-    expect(reports).toEqual([`Total {n}: ${error}`]);
+    // @ts-expect-error an object and a boolean are no message values; an untyped caller passes them anyway
+    expect(() => intl.t.from(untyped, { n: value })).toThrow(error);
+    expect(reports).toEqual([[error, "Total {n}"]]);
   });
 
   // check rejects this translation (ArgumentKindMismatch); with no English catalog to fall back to, a shipped one
@@ -417,27 +404,14 @@ describe("plain arguments take text", () => {
     expect(reports).toEqual([error]);
   });
 
-  it("throws a number <Val> from <T>'s source", () => {
-    expect(() =>
-      render(
-        "en",
-        english("Got{n}"),
-        <T>
-          Got
-          {/* @ts-expect-error <Val> takes text; an untyped caller's number must not render */}
-          <Val n={1234} />
-        </T>
-      )
-    ).toThrow('argument "n" got a number');
-  });
-
-  it("renders a present null or undefined from an untyped caller as nothing", () => {
+  it("renders a present null or undefined from an untyped caller as nothing, unreported", () => {
+    const { intl, reports } = recording("en", english("[{v}|{w}]"));
     const values = Object.fromEntries([
       ["v", null],
       ["w", undefined],
     ]);
     // @ts-expect-error null and undefined are not message values; an untyped caller still gets text
-    expect(enIntl.t.from(msg("[{v}|{w}]"), values)).toBe("[|]");
+    expect([intl.t.from(msg("[{v}|{w}]"), values), reports]).toEqual(["[|]", []]);
   });
 
   it("never calls a function value (tag renderers are <T>'s alone)", () => {
@@ -452,9 +426,14 @@ describe("plain arguments take text", () => {
     expect(seen).toEqual([]);
   });
 
-  it("names a missing plain argument by its own name", () => {
+  // The report is intl-messageformat's MissingValueError, which the plain argument's getter builds with no message.
+  it("names a missing plain argument by its own name, and reports it", () => {
+    const { intl, reports } = recording("en", english("Hi {name}"));
     // @ts-expect-error the value is missing on purpose
-    expect(() => enIntl.t("Hi {name}", {})).toThrow('"name"');
+    expect(() => intl.t("Hi {name}", {})).toThrow('"name"');
+    expect(reports).toEqual([
+      ['The intl string context variable "name" was not provided to the string "undefined"', "Hi {name}"],
+    ]);
   });
 
   it("does not require an argument in an unselected ICU branch", () => {
@@ -653,6 +632,43 @@ describe("reports with no onError", () => {
     });
     expect(thrown).toBe(consoleError.mock.calls[2]?.[2]);
     expect(consoleError).toHaveBeenCalledTimes(3);
+  });
+
+  // Unit under test: t() on a formatter that throws a value that is not an Error. Oracle: origin/main, where t()
+  // throws the caught value itself and the default reporter logs an Error with its text.
+  it("throws a value that is not an Error as itself, and reports it as an Error", () => {
+    const consoleError = spyConsoleError(() => undefined);
+    const sentinel = "the date's value could not be read";
+    // A Date whose value cannot be read: formatting it throws what it was given.
+    class ThrowingDate extends Date {
+      readonly #thrown: unknown;
+
+      constructor(thrown: string) {
+        super(0);
+        this.#thrown = thrown;
+      }
+
+      override valueOf(): number {
+        throw this.#thrown;
+      }
+    }
+    const intl = createIntl({
+      locale: "en",
+      catalog: english("On {when, date} with a thrown string"),
+      timeZone: OSLO,
+    });
+    let thrown: unknown;
+
+    try {
+      intl.t("On {when, date} with a thrown string", { when: new ThrowingDate(sentinel) });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(sentinel);
+    expect(consoleError.mock.calls.map((call: ReadonlyArray<unknown>) => call.slice(0, 2))).toEqual([
+      ["@elmeragroup/intl:", '"On {when, date} with a thrown string"'],
+    ]);
+    expect(consoleError.mock.calls[0]?.[2]).toMatchObject({ name: "Error", message: sentinel });
   });
 
   it("throws the formatting error itself when reading its message throws", () => {
