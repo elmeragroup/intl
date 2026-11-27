@@ -624,15 +624,15 @@ describe("a watch's end, the caller's scope closing before `done` is taken", () 
 // default scheduler each yield is a macrotask (a `setImmediate`): the event loop's turns, not the steps, were most of
 // it, so that a loaded machine took the sweeps up to the deadline. On the synchronous scheduler a yield is a microtask,
 // and a sweep has the offsets it has on the default one, at each of which the interruption or the close lands where it
-// does there (measured: the start's operations, file system calls and watcher opens), 3.5-13.7× faster idle and
-// 3.9× to at least 20× under load (50-100, where the slowest reached the deadline), row by row.
+// does there (measured: the start's operations, file system calls and watcher opens; for the interruptions, also the
+// step of the start's fiber each lands after).
 // The suite's timeout is a hang guard only, never a budget a sweep's run time must fit. A sweep is one chain of
 // microtasks, during which no timer fires, so the project's deadline (`project.within`, 18 s, inside the 20 s timeout)
 // cannot end it: `sweeping` ends a sweep that would not end by counting steps, never time, and reports the offset it
 // stalled at, parked (the sweep's chain waits anywhere, on nothing that can come, reported at the offset it was on) or
 // spinning (an offset dispatching more than `DISPATCH_BOUND` tasks, a fiber that yields in a loop it never leaves).
-// Measured on a 12-core Mac, three runs each: the slowest sweep (followConfig's) took at most 153 ms idle (load 4) and
-// 1,307 ms at load 60-71, 117× and 13× inside the deadline.
+// Measured on a 12-core Mac, three runs each: the slowest sweep (followConfig's) took at most 373 ms idle (load 4-8) and
+// 2,626 ms at load 40-64, 48× and 6.9× inside the deadline (once 5,254 ms at load 91-101).
 describe.for(["watchCatalogs", "followConfig"])(
   "a caller scope that closes before or during %s's start",
   { timeout: 20_000 },
@@ -709,7 +709,12 @@ describe.for(["watchCatalogs", "followConfig"])(
     /**
      * Runs a sweep with the scheduler yielding every `budget` operations, on a synchronous scheduler and the test clock:
      * for each number of yields in turn, it starts a watch, yields that many times and settles the start as `settling`
-     * says, until the start has ended before it is settled.
+     * says, until the start has ended before it is settled. The sweep's own steps while it yields never count toward the
+     * budget, so each of its yields is one turn of every other fiber: a fiber that yields waits behind the sweep for its
+     * next turn, and from one offset to the next the interruption or the close moves on by one of the start's turns
+     * (after a wait, a fiber woken in another's turn may run on within that turn). The sweep's steps between the fork
+     * and its yields, and before it settles, still yield on the budget, so the first few of the start's steps (setting
+     * up its layers, at offset 0) are passed in one; the 1,000 offsets bound how many turns it reaches.
      *
      * On that scheduler every step of every fiber is a microtask, so the event loop's next turn comes only once all of
      * them wait, and no timer fires while a sweep runs. Two checks end a sweep that would otherwise not end, each with
@@ -772,9 +777,12 @@ describe.for(["watchCatalogs", "followConfig"])(
           const scope = yield* Scope.make();
           const starting = yield* Effect.forkDetach(watchIn(project, scope, events.layer));
 
-          for (let turn = 0; turn < yields; turn += 1) {
-            yield* Effect.yieldNow;
-          }
+          // Never yielding but where it says, so each yield is one turn of every other fiber.
+          yield* Effect.gen(function* () {
+            for (let turn = 0; turn < yields; turn += 1) {
+              yield* Effect.yieldNow;
+            }
+          }).pipe(Effect.provideService(References.PreventSchedulerYield, true));
 
           const startedFirst = starting.pollUnsafe() !== undefined;
           let settles: boolean;
@@ -825,10 +833,12 @@ describe.for(["watchCatalogs", "followConfig"])(
 
     // With the scheduler yielding after each number of operations a budget allows, the start is interrupted after each
     // number of its yields in turn, until it has ended before that, and then the scope closes: an interrupted start
-    // takes nothing, so wherever the interruption lands the close settles, clean, with every watcher closed. Each budget
-    // lines the interruptions up with the start's steps differently: in `followConfig`'s start, measured, only 4 lands one
-    // between a claim on the follow's end and its release (`handOff` in watch.ts), which, left interruptible, leaves the
-    // close waiting for ever. That is the start's steps as they are now; covering the window whatever their count is #127.
+    // takes nothing, so wherever the interruption lands the close settles, clean, with every watcher closed. An
+    // interruption lands only where the start's fiber yields or waits. At budget 1 it yields after every operation, and
+    // the sweep moves on by one of its turns per offset (`sweeping`), past its first setup steps and within the offset
+    // cap, however many operations come first: that reaches the yield between a claim on the follow's end and its
+    // release (`handOff` in watch.ts), which, left interruptible, leaves the close waiting for ever. Budgets 4 and 6 run
+    // each fiber several operations a turn, an interleaving of the start's fibers budget 1 never makes.
     it.for([1, 4, 6])(
       "settles the close wherever an interruption lands in the start, yielding every %i operations",
       async (budget, { project }) => {
