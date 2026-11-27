@@ -12,6 +12,7 @@ import { dirname, join, relative, sep } from "node:path";
 import type { Problem } from "./problem";
 import type { ProjectConfig } from "./project-config";
 import { CONFIG_FILE } from "./project-config";
+import { identityPathSync } from "./real-path";
 
 const GLOB_CHARS = /[*?[{]/u;
 const NODE_MODULES = "**/node_modules/**";
@@ -75,11 +76,30 @@ export type Change = { readonly event: ChangeEvent; readonly path: string | null
  */
 export type Intake = { readonly problems: ReadonlyArray<Problem>; readonly changes: ReadonlyArray<Change> };
 
+// The directory a tree's changes are named under. A tree spelled with a `..` segment (a catalog's directory an absolute
+// pattern climbs to, `messages/jump/..`) is opened as spelled, and the kernel watches, and lists, where that climbs to
+// through any link (`jump`'s target's parent), so a name relative to the tree is relative to that real directory:
+// joining it onto the spelling would collapse the `..` lexically and name another file. Such a tree is named by its
+// real path as the kernel resolves it (`identityPathSync`), the identity classification compares; every other tree by
+// its spelling, so a change under an include root behind a link still matches the include globs as spelled. A root
+// that no longer resolves keeps its spelling: its watch fails to open, or its walk reports it unreadable, as before.
+function namedRoot(dir: string): string {
+  if (!dir.split(sep).includes("..")) {
+    return dir;
+  }
+
+  try {
+    return identityPathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
 /**
  * Listen to every tree's native file events, in the current scope: each tree's listener opens here, in order (a start
  * failure is a defect, the ones already open closing with the scope), and closes as the scope closes, so closing it
- * ends every event at once. Each event is handed to `admit` as it is delivered. A listener's error leaves its tree
- * unwatched.
+ * ends every event at once. Each event is handed to `admit` as it is delivered, its path under the tree's named root
+ * (`namedRoot`), resolved as the tree opens. A listener's error leaves its tree unwatched.
  *
  * @param dirs - The trees.
  * @param admit - Takes each delivery.
@@ -93,22 +113,29 @@ export const listenNative = /* @__PURE__ */ Effect.fnUntraced(function* (
   yield* Effect.forEach(
     dirs,
     (dir) =>
-      fileEvents.watch(dir, {
-        change: (event, filename) => {
-          admit({ problems: [], changes: [{ event, path: filename === null ? null : join(dir, filename) }] });
-        },
-        error: (error) => {
-          admit({
-            problems: [
-              {
-                code: "WatchFailed",
-                message: `stopped watching ${dir}: ${error.message}`,
-                fix: "restart `elmera-intl extract --watch`",
-              },
-            ],
-            changes: [],
-          });
-        },
+      Effect.suspend(() => {
+        const root = namedRoot(dir);
+
+        return fileEvents.watch(dir, {
+          change: (event, filename) => {
+            admit({
+              problems: [],
+              changes: [{ event, path: filename === null ? null : join(root, filename) }],
+            });
+          },
+          error: (error) => {
+            admit({
+              problems: [
+                {
+                  code: "WatchFailed",
+                  message: `stopped watching ${dir}: ${error.message}`,
+                  fix: "restart `elmera-intl extract --watch`",
+                },
+              ],
+              changes: [],
+            });
+          },
+        });
       }),
     { discard: true }
   );
@@ -162,7 +189,7 @@ export const BetweenWalks = /* @__PURE__ */ Context.Reference<Effect.Effect<void
  * the first sync's completion included), so within one interval plus two rounds of the change, as far as the event
  * loop is free to wake the poll. Each walk's changes and the directories it newly cannot read are one item, handed to
  * `admit` as that tree's walk ends. Closing the scope ends every walk; a walk's defect is the `supervised` wrapper's to
- * handle.
+ * handle. A tree is walked, and its changes named, from its named root (`namedRoot`), resolved before its first walk.
  *
  * @param dirs - The trees.
  * @param intervalMs - Milliseconds from the end of a round of walks (or of the first sync) to the start of the next.
@@ -181,7 +208,11 @@ export const startPolling = /* @__PURE__ */ Effect.fnUntraced(function* (
   firstSynced: Effect.Effect<void>
 ) {
   const betweenWalks = yield* BetweenWalks;
-  const trees = dirs.map((dir) => ({ dir, previous: snapshot(dir, prune) }));
+  const trees = dirs.map((dir) => {
+    const root = namedRoot(dir);
+
+    return { root, previous: snapshot(root, prune) };
+  });
   admit({ problems: trees.flatMap(({ previous }) => newlyUnreadable(previous, undefined)), changes: [] });
   // Every tree in order, an event-loop turn between two walks; each walk's changes handed over as it ends.
   const round = Effect.gen(function* () {
@@ -190,10 +221,10 @@ export const startPolling = /* @__PURE__ */ Effect.fnUntraced(function* (
         yield* betweenWalks;
       }
 
-      const current = snapshot(tree.dir, prune);
+      const current = snapshot(tree.root, prune);
       const before = tree.previous;
       tree.previous = current;
-      admit({ problems: newlyUnreadable(current, before), changes: changes(tree.dir, before, current) });
+      admit({ problems: newlyUnreadable(current, before), changes: changes(tree.root, before, current) });
     }
   });
   // The sleep follows the round's last hand-over, so the time the walks and their changes take never comes out of it.

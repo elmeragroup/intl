@@ -18,14 +18,14 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { sep } from "node:path";
+import { basename, sep } from "node:path";
 
 import { CatalogFiles, ioFailureReason } from "./catalog-files";
 import type { CatalogRecord, CatalogSyncResult } from "./catalog-sync";
 import { NO_RECORD, syncCatalogs } from "./catalog-sync";
 import type { Problem } from "./problem";
 import { isExcludedDirectory, isProjectSource, SourceCaches, SourceDiscovery } from "./project";
-import { catalogPath } from "./project-catalogs";
+import { catalogIdentity, catalogPath, fileIdentity } from "./project-catalogs";
 import type { ProjectConfig } from "./project-config";
 import type { ProjectFormats } from "./project-formats-service";
 import type { ProjectServices } from "./project-services";
@@ -220,6 +220,67 @@ function syncResult(result: CatalogSyncResult): SyncResult {
         : { _tag: "Unchanged" };
 }
 
+// The configured catalogs by identity (`fileIdentity`): which catalog, or catalogs (several locales' paths that name
+// one file through a link), a changed file is, each by the path `catalogPath` spells, which the sync wrote and keyed its
+// record by; and by the names those files go by (`nameKey`), which a change's name must have before its identity is
+// looked up.
+type CatalogIdentities = {
+  readonly byName: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly byIdentity: ReadonlyMap<string, ReadonlyArray<string>>;
+};
+
+const NO_IDENTITIES: CatalogIdentities = { byName: new Map(), byIdentity: new Map() };
+
+// A name as the prefilter compares it: in one Unicode form and lowercased, so a volume that folds case or
+// normalisation still passes a catalog its config spells otherwise than the disk; the identity decides.
+const nameKey = (path: string) => basename(path).normalize("NFC").toLowerCase();
+
+// Each catalog's identity, as the kernel resolves its spelled path now. A catalog whose `..` follows a directory that
+// does not exist reaches no file (`CatalogClimbsMissing`) and has none; a change to it is still matched as spelled.
+function identifyCatalogs(catalogs: ReadonlySet<string>): CatalogIdentities {
+  const byName = new Map<string, Set<string>>();
+  const byIdentity = new Map<string, Array<string>>();
+  const name = (path: string, catalog: string) => {
+    byName.set(nameKey(path), (byName.get(nameKey(path)) ?? new Set()).add(catalog));
+  };
+
+  for (const catalog of catalogs) {
+    name(catalog, catalog);
+    const identity = catalogIdentity(catalog);
+
+    if (identity !== undefined) {
+      name(identity, catalog);
+      byIdentity.set(identity, [...(byIdentity.get(identity) ?? []), catalog]);
+    }
+  }
+
+  return { byName, byIdentity };
+}
+
+// The configured catalogs a changed path is, by their spelled paths: the one it spells, and every one whose file it
+// names by identity. Only a path whose name a catalog goes by is looked up, so a source's change costs no system call.
+// The last sync's identities answer the common case. One they miss is asked of each catalog by that name as the kernel
+// resolves it now (`catalogIdentity`): a file renamed over a catalog's file link since (an editor's atomic save) is
+// the catalog now, while the identities still name the link's old target. The lookups are synchronous, as the record's
+// read of the catalog that follows them (`readRegularText`) and `movesTree`'s stat are: they read the catalog's own
+// tree, so a mount that stalls them stalls those reads alike. A deleted file, or one renamed away, is resolved through
+// its nearest existing ancestor, so it is still the catalog it was.
+function catalogsAt(pipeline: Pipeline, identities: CatalogIdentities, path: string): ReadonlySet<string> {
+  const spelled = pipeline.catalogs.has(path) ? [path] : [];
+  const named = identities.byName.get(nameKey(path));
+
+  if (named === undefined) {
+    return new Set(spelled);
+  }
+
+  const identity = fileIdentity(path);
+  const known =
+    identities.byIdentity.get(identity) ??
+    [...named].filter((catalog) => catalogIdentity(catalog) === identity);
+
+  return new Set([...spelled, ...known]);
+}
+
 // What every stage of one watch shares.
 type Pipeline = {
   readonly config: ProjectConfig;
@@ -228,6 +289,9 @@ type Pipeline = {
   // The last sync's record of what it left in the catalogs (`CatalogRecord`), opaque to the watch: classification asks
   // it, under the permit, whether a changed catalog is `untouched`, and only then takes the change for our own write.
   readonly record: Ref.Ref<CatalogRecord>;
+  // The catalogs' identities as each sync left them, resolved again under its permit, so classification matches a
+  // change to the files that sync wrote: a link repointed since is followed from the next sync on.
+  readonly identities: Ref.Ref<CatalogIdentities>;
   // Each admitted change, for classification.
   readonly intake: Queue.Queue<Change>;
   // Every output, in order, for the writer.
@@ -259,6 +323,7 @@ const makePipeline = /* @__PURE__ */ Effect.fnUntraced(function* (
     catalogs: new Set(config.locales.map((locale) => catalogPath(config, locale))),
     includeRoots: includePrefixes(config),
     record: yield* Ref.make<CatalogRecord>(NO_RECORD),
+    identities: yield* Ref.make(NO_IDENTITIES),
     intake: yield* Queue.unbounded<Change>(),
     results: yield* Queue.unbounded<Output, Cause.Done>(),
     triggers: yield* Queue.dropping<void>(1),
@@ -328,21 +393,30 @@ function syncStep(pipeline: Pipeline, catalogSync: CatalogSync["Service"]) {
     Effect.catchTag("SyncFailed", (failure) =>
       Ref.set(pipeline.record, NO_RECORD).pipe(Effect.as(syncFailed(failure.message)))
     ),
+    // Once its writes are made, a catalog the sync created exists, so it has the identity the next save names.
+    Effect.tap(() => Ref.set(pipeline.identities, identifyCatalogs(pipeline.catalogs))),
     Semaphore.withPermit(pipeline.syncing),
     Effect.flatMap((result) => Queue.offer(pipeline.results, { _tag: "Result", result })),
     Effect.uninterruptible
   );
 }
 
-// Whether a change can alter a catalog, against the record as it stood when its batch was taken: a catalog the last
-// sync did not leave untouched, a project source, or a rename that moved a tree under an include root.
-function alters(pipeline: Pipeline, record: CatalogRecord, change: Change): boolean {
+// What classification judges a batch against: the record and the catalogs' identities as the last sync left them.
+type Judged = { readonly record: CatalogRecord; readonly identities: CatalogIdentities };
+
+// Whether a change can alter a catalog, against the last sync's record and identities as they stood when its batch was
+// taken: a file that is a catalog the last sync did not leave untouched, however the config spells its path (each
+// catalog it is asked by the path the sync wrote), a project source, or a rename that moved a tree under an include
+// root.
+function alters(pipeline: Pipeline, judged: Judged, change: Change): boolean {
   if (change.path === null) {
     return true;
   }
 
-  if (pipeline.catalogs.has(change.path)) {
-    if (!record.untouched(change.path)) {
+  const catalogs = catalogsAt(pipeline, judged.identities, change.path);
+
+  if (catalogs.size > 0) {
+    if ([...catalogs].some((catalog) => !judged.record.untouched(catalog))) {
       return true;
     }
   } else if (isProjectSource(pipeline.config, change.path)) {
@@ -360,8 +434,11 @@ const classifier = /* @__PURE__ */ Effect.fnUntraced(function* (pipeline: Pipeli
 
   for (;;) {
     const changes = yield* Queue.takeAll(pipeline.intake);
-    const fires = yield* Ref.get(pipeline.record).pipe(
-      Effect.map((record) => changes.some((change) => alters(pipeline, record, change))),
+    const fires = yield* Effect.all({
+      record: Ref.get(pipeline.record),
+      identities: Ref.get(pipeline.identities),
+    }).pipe(
+      Effect.map((judged) => changes.some((change) => alters(pipeline, judged, change))),
       Semaphore.withPermit(pipeline.syncing)
     );
 
