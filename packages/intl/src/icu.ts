@@ -43,6 +43,40 @@ export class PlainArgumentNotText extends Error {
 }
 
 /**
+ * A number, plural or selectordinal argument got a value that is not a number, or a date or time argument one that is
+ * not a `Date` or a timestamp, from a caller the types did not check (a cast or `any`). The formatter would render a
+ * number or date nobody gave (`null` as 0, `undefined` as NaN or as the current date), so it is reported like a missing
+ * argument: `onError`, then `t` throws it and `<T>` renders its children. A `NaN` is a number the caller gave, so it
+ * renders as given.
+ */
+export class ArgumentNotOfKind extends Error {
+  /** The error's tag. */
+  readonly _tag = "ArgumentNotOfKind" as const;
+  /** The argument's name. */
+  readonly argument: string;
+  /** How the message reads it: `number`, `plural`, `selectordinal`, `date` or `time`. */
+  readonly slot: string;
+  /** What the value is: `null`, `Date`, or its `typeof`. */
+  readonly received: string;
+
+  /**
+   * Name the argument, how the message reads it and what it got.
+   *
+   * @param argument - The argument's name.
+   * @param slot - How the message reads it.
+   * @param received - What the value is.
+   */
+  constructor(argument: string, slot: string, received: string) {
+    super(
+      `argument "${argument}" got ${received}: {${argument}, ${slot}} takes ${slot === "date" || slot === "time" ? "a Date" : "a number"}`
+    );
+    this.argument = argument;
+    this.slot = slot;
+    this.received = received;
+  }
+}
+
+/**
  * Rich values `<T>` passes: ICU arguments plus positional tag renderers (`x0`). An argument may be a present `null`
  * or `undefined` (an untyped `<Val>`'s), which formats as `t()` formats it from an untyped caller.
  */
@@ -146,25 +180,39 @@ export type FormatSettings = {
 /** One node of a parsed ICU message, as intl-messageformat's parser returns it. */
 export type MessageFormatElement = ReturnType<IntlMessageFormat["getAst"]>[number];
 
+/** How a message reads an argument the formatter checks: as text (`{x}`), a number, or a date. */
+type Slot = "plain" | "number" | "plural" | "selectordinal" | "date" | "time";
+
 /** A message prepared for `formatAst`. */
 export type CompiledAst = {
-  /** The parsed message with every plain `{x}` renamed to a reserved argument the formatter fills with x as text. */
+  /**
+   * The parsed message with every plain `{x}`, and every number or date argument inside a branch, renamed to a
+   * reserved argument per slot, which the formatter fills with the caller's value once it is of the slot's kind.
+   */
   readonly ast: ReadonlyArray<MessageFormatElement>;
-  /** Argument names the message uses as plain `{x}`, each once. */
-  readonly plain: ReadonlyArray<string>;
+  /**
+   * Each slot and argument name the message reads, each pair once, and whether it is a number or date argument outside
+   * every branch: always read, so checked before formatting and left under its own name.
+   */
+  readonly args: ReadonlyArray<Arg>;
 };
 
+/** A slot and argument name a message reads, read always (checked eagerly) or through its reserved argument. */
+type Arg =
+  | readonly [slot: Exclude<Slot, "plain">, name: string, isRead: true]
+  | readonly [slot: Slot, name: string, isRead: false];
+
 /**
- * Prepare a parsed (or decoded) AST for `formatAst`: rename its plain arguments. No parser involved.
+ * Prepare a parsed (or decoded) AST for `formatAst`: rename its arguments. No parser involved.
  *
  * @param ast - The message's AST.
  * @returns The compiled message.
  */
 export function fromAst(ast: ReadonlyArray<MessageFormatElement>): CompiledAst {
-  const plain = new Set<string>();
-  const renamed = renamePlain(ast, plain);
+  const args = new Map<string, Arg>();
+  const renamed = renameArgs(ast, args, false);
 
-  return { ast: renamed, plain: [...plain] };
+  return { ast: renamed, args: [...args.values()] };
 }
 
 /**
@@ -175,8 +223,8 @@ export function fromAst(ast: ReadonlyArray<MessageFormatElement>): CompiledAst {
  * @param settings - The locale it is written in, the zone and the named styles.
  * @param values - Argument values and tag renderers.
  * @returns The formatted message: text, or parts when a tag renderer returned a non-string.
- * @throws When an argument of the selected branch is missing, a plain one is not text (`PlainArgumentNotText`), or
- *   the formatter rejects a value.
+ * @throws When an argument of the selected branch is missing, a plain one is not text (`PlainArgumentNotText`), a
+ *   number or date one is not of its kind (`ArgumentNotOfKind`), or the formatter rejects a value.
  */
 export function formatAst<R>(
   compiled: CompiledAst,
@@ -184,23 +232,35 @@ export function formatAst<R>(
   values: RichValues<R>
 ): string | R | Array<string | R> {
   const formatValues = { ...values };
-  // The formatter reads an argument only when the selected branch uses it, so an unselected branch's value is never
-  // formatted and may be left out, and a missing selected one fails naming the caller's argument, not the reserved one.
-  for (const name of compiled.plain) {
+  // The formatter reads an argument in a branch only when the branch is selected, so an unselected branch's value is
+  // never checked or formatted and may be left out, and a missing selected one fails naming the caller's argument, not
+  // the reserved one.
+  for (const [slot, name, isRead] of compiled.args) {
     const isSupplied = Object.hasOwn(values, name);
     const value = isSupplied ? values[name] : undefined;
 
+    // A tag renderer is <T>'s own, under a name the walk reserves (x0), never a message argument's.
     if (typeof value === "function") {
       continue;
     }
 
-    Object.defineProperty(formatValues, PLAIN + name, {
+    // An argument outside every branch is always read: check it here, and let the formatter read it as given (a
+    // missing one fails in the formatter, naming it).
+    if (isRead) {
+      if (isSupplied) {
+        ofKind(slot, name, value);
+      }
+
+      continue;
+    }
+
+    Object.defineProperty(formatValues, reserved(slot, name), {
       get: () => {
         if (!isSupplied) {
           throw new MissingValueError(name);
         }
 
-        return asText(name, value);
+        return slot === "plain" ? asText(name, value) : ofKind(slot, name, value);
       },
     });
   }
@@ -208,46 +268,73 @@ export function formatAst<R>(
   return messageFormat(compiled, settings).format<R>(formatValues);
 }
 
-// Reserved argument a plain `{x}` is renamed to; formatAst fills it with x as text. The NUL cannot occur in a parsed
-// ICU argument name.
-const PLAIN = "\u0000plain\u0000";
-// TYPE.argument in @formatjs/icu-messageformat-parser, which intl-messageformat does not re-export.
-const ARGUMENT_TYPE = 1;
+// The reserved argument a slot's `{x}` is renamed to; formatAst fills it with x once it is of the slot's kind. The NUL
+// cannot occur in a parsed ICU argument name, so it never meets a caller's argument.
+function reserved(slot: Slot, name: string): string {
+  return `\u0000${slot}\u0000${name}`;
+}
 
-// The AST with every plain `{x}` renamed to PLAIN + x, per occurrence: `{n} {n, plural, …}` keeps the plural's n.
-function renamePlain(
+// The slot each ICU element type reads, by TYPE in @formatjs/icu-messageformat-parser (which intl-messageformat does
+// not re-export): argument 1, number 2, date 3, time 4, plural 6. A select (5) reads any value as written text.
+const SLOTS: ReadonlyArray<Slot | undefined> = [
+  undefined,
+  "plain",
+  "number",
+  "date",
+  "time",
+  undefined,
+  "plural",
+];
+
+// The AST with every plain `{x}`, and every number or date argument in a branch, renamed to its reserved argument, per
+// occurrence: `{n} {n, plural, …}` checks n as text in one and as a number in the other. A number or date argument
+// outside every branch keeps its name, marked as always read.
+function renameArgs(
   elements: ReadonlyArray<MessageFormatElement>,
-  plain: Set<string>
+  args: Map<string, Arg>,
+  isInBranch: boolean
 ): Array<MessageFormatElement> {
   return elements.map((element): MessageFormatElement => {
     if ("children" in element) {
-      return { ...element, children: renamePlain(element.children, plain) };
+      return { ...element, children: renameArgs(element.children, args, isInBranch) };
     }
 
-    if ("options" in element) {
+    const slot =
+      "pluralType" in element && element.pluralType === "ordinal" ? "selectordinal" : SLOTS[element.type];
+    let renamed = element;
+
+    if (slot !== undefined && "value" in element) {
+      const name = reserved(slot, element.value);
+
+      if (slot !== "plain" && !isInBranch) {
+        args.set(`${name}\u0000`, [slot, element.value, true]);
+      } else {
+        args.set(name, [slot, element.value, false]);
+        renamed = { ...element, value: name };
+      }
+    }
+
+    if ("options" in renamed) {
       const options = Object.fromEntries(
-        Object.entries(element.options).map(([key, option]) => [
+        Object.entries(renamed.options).map(([key, option]) => [
           key,
-          { ...option, value: renamePlain(option.value, plain) },
+          { ...option, value: renameArgs(option.value, args, true) },
         ])
       );
 
-      return { ...element, options };
+      return { ...renamed, options };
     }
 
-    if (element.type === ARGUMENT_TYPE && "value" in element) {
-      plain.add(element.value);
-
-      return { ...element, value: PLAIN + element.value };
-    }
-
-    return element;
+    return renamed;
   });
 }
 
+// An argument's value as a caller passed it: typed callers pass a MessageValue, untyped ones anything.
+type ArgumentValue = MessageValue | null | undefined;
+
 // A present `undefined` or `null` (untyped callers pass them) renders as nothing, as intl-messageformat renders it
 // for next-intl.
-function asText(name: string, value: MessageValue | undefined | null): string {
+function asText(name: string, value: ArgumentValue): string {
   if (typeof value === "string") {
     return value;
   }
@@ -257,6 +344,30 @@ function asText(name: string, value: MessageValue | undefined | null): string {
   }
 
   throw new PlainArgumentNotText(name, value instanceof Date ? "Date" : typeof value);
+}
+
+// A number slot takes a number (NaN too: the caller's own, which renders as NaN) or bigint, or a string Intl reads as
+// one ("3", which the formatter renders as given); a date slot takes a Date or a timestamp. Anything else the formatter
+// would turn into a number or date nobody gave: null as 0, an empty string as 0, undefined and other text as NaN, a
+// boolean as 0 or 1, and in a date undefined as the current instant. An invalid Date or a NaN timestamp still fails in
+// Intl, as before. A Date is told by its brand, not `instanceof`, so another realm's (an iframe's, `node:vm`'s) passes.
+function ofKind(slot: Exclude<Slot, "plain">, name: string, value: ArgumentValue): ArgumentValue {
+  const isOfKind =
+    typeof value === "number" ||
+    (slot === "date" || slot === "time"
+      ? isDate(value)
+      : typeof value === "bigint" ||
+        (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))));
+
+  if (isOfKind) {
+    return value;
+  }
+
+  throw new ArgumentNotOfKind(name, slot, value === null ? "null" : isDate(value) ? "Date" : typeof value);
+}
+
+function isDate(value: ArgumentValue): boolean {
+  return Object.prototype.toString.call(value) === "[object Date]";
 }
 
 // A formatter per compiled message, locale, zone and formats (a named style resolves at construction). Keyed by the

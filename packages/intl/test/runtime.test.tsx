@@ -1,13 +1,14 @@
 import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 
+import { runInNewContext } from "node:vm";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import type { Catalog, CreateIntlOptions, Descriptor } from "@elmeragroup/intl/core";
 import { createIntl, keyOf, msg, serialize } from "@elmeragroup/intl/core";
 import { hashKey } from "@elmeragroup/intl/internal/message";
-import { IntlProvider, Select, T, Val, useT } from "@elmeragroup/intl/react";
+import { IntlProvider, Plural, Select, T, Val, useT } from "@elmeragroup/intl/react";
 
 import { compiled, english } from "./catalogs";
 import { fixtures } from "./fixtures";
@@ -320,9 +321,10 @@ describe("time zone", () => {
   });
 });
 
-// Unit under test: what t, t.from and <T> do with each value a plain `{x}` can get. Oracle: hand-written text and
-// errors (nb groups with U+00A0 and writes dates d.M.yyyy).
-describe("plain arguments take text", () => {
+// Unit under test: what t, t.from and <T> do with each value a plain `{x}` can get, and t.from with each value a number,
+// plural, selectordinal, date or time argument can get. Oracle: hand-written text and errors (nb groups with U+00A0 and
+// writes dates d.M.yyyy).
+describe("arguments take their kind", () => {
   const lateUtc = new Date("2026-01-01T23:30:00Z");
   const enIntl = createIntl({
     locale: "en",
@@ -374,19 +376,210 @@ describe("plain arguments take text", () => {
     return { intl, reports };
   };
 
-  // A widened descriptor's values are untyped, as any cast or `any` caller's are. Each reports once under the
-  // message's key, then t throws what it reported.
+  const kinds = compiled("nb", {
+    "Total {n}": "Totalt {n}",
+    "Got {n, plural, one {# x} other {# xs}}": "Fikk {n, plural, one {# x} other {# xer}}",
+    "Got {n, selectordinal, one {#st} two {#nd} few {#rd} other {#th}}":
+      "Fikk {n, selectordinal, other {#.}}",
+    "Got {n, number}": "Fikk {n, number}",
+    "On {d, date}": "Den {d, date}",
+    "At {d, time}": "Kl {d, time}",
+    "Got {k, select, a {A} other {O}}": "Fikk {k, select, a {A} other {O}}",
+    "{state, select, pending {Pending} other {{n, number}}}":
+      "{state, select, pending {Venter} other {{n, number}}}",
+  });
+  const plural = "Got {n, plural, one {# x} other {# xs}}";
+  const ordinal = "Got {n, selectordinal, one {#st} two {#nd} few {#rd} other {#th}}";
+
+  // A widened descriptor's values are untyped, as any cast or `any` caller's are. Each
+  // reports once under the message's key, then t throws what it reported. On origin/main every row from "a null
+  // plural count" on rendered a number or date nobody gave, unreported (0, NaN, 1, a Date's milliseconds, the epoch, the
+  // current date), or threw an unnamed RangeError ("abc" and an object in a date) or TypeError (a bigint date): #121.
   it.each([
-    ["a number", 1000, 'argument "n" got a number: plain {n} takes text; use {n, number} or {n, date}'],
-    ["a Date", lateUtc, 'argument "n" got a Date: plain {n} takes text; use {n, number} or {n, date}'],
-    ["an object", { a: 1 }, 'argument "n" got a object: plain {n} takes text; use {n, number} or {n, date}'],
-    ["a boolean", true, 'argument "n" got a boolean: plain {n} takes text; use {n, number} or {n, date}'],
-  ] as const)("reports %s in a plain translation argument, then throws it", (_label, value, error) => {
-    const { intl, reports } = recording("nb", compiled("nb", { "Total {n}": "Totalt {n}" }));
-    const untyped: Descriptor = msg("Total {n}");
-    // @ts-expect-error an object and a boolean are no message values; an untyped caller passes them anyway
-    expect(() => intl.t.from(untyped, { n: value })).toThrow(error);
-    expect(reports).toEqual([[error, "Total {n}"]]);
+    [
+      "a number",
+      "Total {n}",
+      1000,
+      'argument "n" got a number: plain {n} takes text; use {n, number} or {n, date}',
+    ],
+    [
+      "a Date",
+      "Total {n}",
+      lateUtc,
+      'argument "n" got a Date: plain {n} takes text; use {n, number} or {n, date}',
+    ],
+    [
+      "an object",
+      "Total {n}",
+      { a: 1 },
+      'argument "n" got a object: plain {n} takes text; use {n, number} or {n, date}',
+    ],
+    [
+      "a boolean",
+      "Total {n}",
+      true,
+      'argument "n" got a boolean: plain {n} takes text; use {n, number} or {n, date}',
+    ],
+    ["a null plural count", plural, null, 'argument "n" got null: {n, plural} takes a number'],
+    [
+      "an undefined plural count",
+      plural,
+      undefined,
+      'argument "n" got undefined: {n, plural} takes a number',
+    ],
+    [
+      "a plural count that is not a number",
+      plural,
+      "abc",
+      'argument "n" got string: {n, plural} takes a number',
+    ],
+    ["an empty plural count", plural, "", 'argument "n" got string: {n, plural} takes a number'],
+    ["an object plural count", plural, { a: 1 }, 'argument "n" got object: {n, plural} takes a number'],
+    ["a boolean plural count", plural, true, 'argument "n" got boolean: {n, plural} takes a number'],
+    ["a Date plural count", plural, lateUtc, 'argument "n" got Date: {n, plural} takes a number'],
+    ["a null ordinal", ordinal, null, 'argument "n" got null: {n, selectordinal} takes a number'],
+    [
+      "an undefined ordinal",
+      ordinal,
+      undefined,
+      'argument "n" got undefined: {n, selectordinal} takes a number',
+    ],
+    [
+      "an ordinal that is not a number",
+      ordinal,
+      "abc",
+      'argument "n" got string: {n, selectordinal} takes a number',
+    ],
+    ["an object ordinal", ordinal, { a: 1 }, 'argument "n" got object: {n, selectordinal} takes a number'],
+    ["a boolean ordinal", ordinal, true, 'argument "n" got boolean: {n, selectordinal} takes a number'],
+    ["a null number", "Got {n, number}", null, 'argument "n" got null: {n, number} takes a number'],
+    [
+      "an undefined number",
+      "Got {n, number}",
+      undefined,
+      'argument "n" got undefined: {n, number} takes a number',
+    ],
+    [
+      "a number that is not one",
+      "Got {n, number}",
+      "abc",
+      'argument "n" got string: {n, number} takes a number',
+    ],
+    ["an object number", "Got {n, number}", { a: 1 }, 'argument "n" got object: {n, number} takes a number'],
+    ["a boolean number", "Got {n, number}", true, 'argument "n" got boolean: {n, number} takes a number'],
+    ["an empty number", "Got {n, number}", "", 'argument "n" got string: {n, number} takes a number'],
+    ["a Date number", "Got {n, number}", lateUtc, 'argument "n" got Date: {n, number} takes a number'],
+    ["a null date", "On {d, date}", null, 'argument "d" got null: {d, date} takes a Date'],
+    ["an undefined date", "On {d, date}", undefined, 'argument "d" got undefined: {d, date} takes a Date'],
+    ["a date that is text", "On {d, date}", "abc", 'argument "d" got string: {d, date} takes a Date'],
+    [
+      "a date that is a numeric string",
+      "On {d, date}",
+      "3",
+      'argument "d" got string: {d, date} takes a Date',
+    ],
+    ["an object date", "On {d, date}", { a: 1 }, 'argument "d" got object: {d, date} takes a Date'],
+    ["a boolean date", "On {d, date}", true, 'argument "d" got boolean: {d, date} takes a Date'],
+    ["an empty date", "On {d, date}", "", 'argument "d" got string: {d, date} takes a Date'],
+    ["a bigint date", "On {d, date}", 12n, 'argument "d" got bigint: {d, date} takes a Date'],
+    ["a null time", "At {d, time}", null, 'argument "d" got null: {d, time} takes a Date'],
+    ["an undefined time", "At {d, time}", undefined, 'argument "d" got undefined: {d, time} takes a Date'],
+    ["an empty time", "At {d, time}", "", 'argument "d" got string: {d, time} takes a Date'],
+  ] as const)("reports %s, then throws it", (_label, source, value, error) => {
+    const { intl, reports } = recording("nb", kinds);
+    const untyped: Descriptor = msg(source);
+    const name = source.includes("{d") ? "d" : "n";
+    // @ts-expect-error null, undefined, an object and a boolean are no message values; an untyped caller passes them
+    expect(() => intl.t.from(untyped, { [name]: value })).toThrow(error);
+    expect(reports).toEqual([[error, source]]);
+  });
+
+  // The cells #121 left as they were: a NaN (typed: `x / 0`) and a numeric string are the caller's own number, a
+  // timestamp the caller's instant, a select picks `other` for a value no case names, and a value only an unselected
+  // branch reads is never checked.
+  it.each([
+    ["a NaN plural count", plural, { n: Number.NaN }, "Fikk NaN xer"],
+    ["a NaN ordinal", ordinal, { n: Number.NaN }, "Fikk NaN."],
+    ["a NaN number", "Got {n, number}", { n: Number.NaN }, "Fikk NaN"],
+    ["a numeric string plural count", plural, { n: "3" }, "Fikk 3 xer"],
+    ["a numeric string number", "Got {n, number}", { n: "3" }, "Fikk 3"],
+    ["a timestamp date", "On {d, date}", { d: 0 }, "Den 1.1.1970"],
+    ["a null select value", "Got {k, select, a {A} other {O}}", { k: null }, "Fikk O"],
+    [
+      "a null number only an unselected branch reads",
+      "{state, select, pending {Pending} other {{n, number}}}",
+      { state: "pending", n: null },
+      "Venter",
+    ],
+  ] as const)("renders %s as given, unreported", (_label, source, values, expected) => {
+    const { intl, reports } = recording("nb", kinds);
+    const untyped: Descriptor = msg(source);
+    // @ts-expect-error a string count, a number date and a null are no message values of their kind
+    expect([intl.t.from(untyped, values), reports]).toEqual([expected, []]);
+  });
+
+  // A Date from another realm (a same-origin iframe's, node:vm's) fails `instanceof Date`; origin/main rendered it, so
+  // it still renders: the epoch in Oslo (the host zone is Los Angeles, where it is 31.12.1969 16:00).
+  it.each([
+    ["date", "On {d, date}", "Den 1.1.1970"],
+    ["time", "At {d, time}", "Kl 01:00:00"],
+  ] as const)("renders another realm's Date in a %s, unreported", (_label, source, expected) => {
+    const { intl, reports } = recording("nb", kinds);
+    const foreign: unknown = runInNewContext("new Date(0)");
+    // SAFETY: node:vm returns a Date of its own realm, which `instanceof Date` here does not see.
+    const d = foreign as Date;
+    expect([d instanceof Date, intl.t.from(msg(source), { d }), reports]).toEqual([false, expected, []]);
+  });
+
+  // What t.from throws is what onError received, with the argument, the slot and the value's kind as fields, so a
+  // handler can tell the failure without parsing its message.
+  it("reports and throws one ArgumentNotOfKind naming the argument, slot and kind", () => {
+    const received: Array<unknown> = [];
+    const intl = createIntl({
+      locale: "nb",
+      catalog: kinds,
+      timeZone: OSLO,
+      onError: (reported) => received.push(reported),
+    });
+    const untyped: Descriptor = msg(plural);
+    let thrown: unknown;
+    try {
+      // @ts-expect-error null is no message value; an untyped caller passes it
+      intl.t.from(untyped, { n: null });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(received).toHaveLength(1);
+    expect(thrown).toBe(received[0]);
+    expect(thrown).toMatchObject({
+      _tag: "ArgumentNotOfKind",
+      argument: "n",
+      slot: "plural",
+      received: "null",
+      message: 'argument "n" got null: {n, plural} takes a number',
+    });
+  });
+
+  // Inside <T> the same failure ends as #124's format failures end: one report under the message's key, then the
+  // children as written (a <Plural> whose count selects no form it can read renders none). On origin/main the walk
+  // passes the string and the translation rendered `Fikk NaN xer`.
+  it("reports a <Plural> count that is not a number inside <T>, then renders its children", () => {
+    const reports: Array<readonly [string, string]> = [];
+    const html = renderToStaticMarkup(
+      <IntlProvider
+        locale="nb"
+        catalog={kinds}
+        timeZone={OSLO}
+        onError={(reported, key) => reports.push([reported.message, key])}>
+        <T>
+          Got <Plural n="abc" one="# x" other="# xs" />
+        </T>
+      </IntlProvider>
+    );
+    expect([html, reports]).toEqual([
+      "Got ",
+      [['argument "n" got string: {n, plural} takes a number', plural]],
+    ]);
   });
 
   // check rejects this translation (ArgumentKindMismatch); with no English catalog to fall back to, a shipped one
