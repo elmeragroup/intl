@@ -67,7 +67,8 @@ export type Project = {
   readonly lock: (relative: string) => void;
   /**
    * Opens the FIFO at `relative` to write, once a reader has it open: the open never blocks (it retries a non-blocking
-   * open until the deadline), so no thread waits on a reader that never comes.
+   * open until the deadline), so no thread waits on a reader that never comes. Any reader lets it open, one that opens
+   * without blocking and closes at once included: a caller that waits for one particular reader makes it the only one.
    *
    * @param relative - The FIFO's path under the root.
    * @returns A writer, closed when the test ends unless the test closes it first.
