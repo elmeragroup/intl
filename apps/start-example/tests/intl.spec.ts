@@ -30,9 +30,28 @@ const PAGES = [
   { path: "/settings", label: "settings" },
 ] as const;
 
-// What each page's own client code does once the page has hydrated, and what the page shows: every case below runs it
-// after hydration and reads the browser's errors only after its update, so a mismatch React reports late, or an error
-// the update itself raises, fails the case.
+// The hydration cases whose work under a load spike (CPU throttled 4× to 128× from the moment the search button
+// enabled) measured past the configured 30 s test timeout, or within a fifth of it, and what was measured. Each gets
+// three times that timeout (`test.slow()`); the others keep it, so a hang costs them 30 s, not 90.
+const SLOW_TO_HYDRATE: ReadonlyMap<(typeof PAGES)[number]["path"], string> = new Map([
+  // Some 23 s of expectations, then a click whose pointerdown hydrated the page's boundary first (React hydrates a
+  // dehydrated boundary on a discrete event): up to 24 s to dispatch.
+  ["/", "42 to 68 s under a load spike"],
+  // The page's own hydration, then the search's deferred render.
+  ["/metering-points", "45 to 54 s under a load spike"],
+  ["/invoices", "21 to 27 s under a load spike"],
+  // Settings: 16 to 17 s.
+]);
+
+// What each page's own client code does in the browser, and what the page shows. Every case below runs it once the
+// shell has hydrated, which is all the search button says: the page is its own boundary inside the root's Suspense and
+// may hydrate later. A field the page keeps disabled until then is waited on itself. On a first click into the page,
+// React attempts to hydrate its boundary synchronously; that can still be blocked (a boundary that suspends) or the
+// clicked node replaced (a mismatch makes React render the boundary on the client). Observed here: the overview's chart
+// toggle flipped on 20 of 20 clicks sent at the shell's hydration, the router loads a page's code before hydrating, so
+// none suspends on a chunk, and each case fails on any hydration mismatch the browser reports. A control in a boundary
+// that can still suspend needs a readiness check of its own. Each case reads the browser's errors only after its
+// update, so a mismatch React reports late, or an error the update itself raises, fails the case.
 const EXERCISES = {
   // The overview: its loader's notice, its messages and figures in Europe/Oslo, then a chart series toggled in the browser.
   "/": async (page, locale) => {
@@ -201,9 +220,10 @@ for (const locale of LOCALES) {
 
     for (const { path, label } of PAGES) {
       test(`hydrates ${path} and updates it in the browser without an error`, async ({ page }) => {
+        test.slow(SLOW_TO_HYDRATE.has(path), SLOW_TO_HYDRATE.get(path));
         const errors = collectErrors(page);
         await page.goto(path);
-        // Enabled only once React has hydrated the shell.
+        // Enabled only once React has hydrated the shell, which is not yet the page.
         await expect(page.getByRole("button", { name: expected.search, exact: true })).toBeEnabled();
         await expect(page.locator("h1")).toHaveText(expected[label]);
 
@@ -532,7 +552,9 @@ test("waits for the held save before sending the remounted switcher's choice", a
   await page.getByRole("button", { name: EXPECTED.fi.language }).click();
   releaseSwedish.settle();
 
-  await expect.poll(() => saves).toEqual(["sv sent", "sv answered", "fi sent", "fi answered"]);
+  // All four events, however long the page takes; then their order, once, so a wrong order fails at once and shows it.
+  await expect.poll(() => saves.length).toBeGreaterThanOrEqual(4);
+  expect(saves).toEqual(["sv sent", "sv answered", "fi sent", "fi answered"]);
   await expect
     .poll(async () => (await context.cookies()).find(({ name }) => name === COOKIE)?.value)
     .toBe("fi");
