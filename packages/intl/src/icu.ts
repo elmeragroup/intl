@@ -17,7 +17,7 @@ export type MessageValue = string | number | bigint | Date;
 
 /**
  * A plain `{x}` got a value that is not text, from a caller the types did not check (a cast or `any`). Reported
- * like a missing argument: `onError`, then the format throws it.
+ * like a missing argument: `onError`, then `t` throws it and `<T>` renders its children.
  */
 export class PlainArgumentNotText extends Error {
   /** The error's tag. */
@@ -42,9 +42,12 @@ export class PlainArgumentNotText extends Error {
   }
 }
 
-/** Rich values `<T>` passes: ICU arguments plus positional tag renderers (`x0`). */
+/**
+ * Rich values `<T>` passes: ICU arguments plus positional tag renderers (`x0`). An argument may be a present `null`
+ * or `undefined` (an untyped `<Val>`'s), which formats as `t()` formats it from an untyped caller.
+ */
 export type RichValues<R> = Readonly<
-  Record<string, MessageValue | FormatXMLElementFn<R, R | string | Array<R | string>>>
+  Record<string, MessageValue | null | undefined | FormatXMLElementFn<R, R | string | Array<R | string>>>
 >;
 
 /**

@@ -101,7 +101,12 @@ export function sourceMessage(source: string, context: string | undefined): Mess
 export type FormatOutcome<R> =
   | { readonly _tag: "Formatted"; readonly value: string | R | Array<string | R> }
   /** The catalog has no entry for a structured source. Already reported; the caller renders the raw source or its children. */
-  | { readonly _tag: "NotExtracted"; readonly source: string };
+  | { readonly _tag: "NotExtracted"; readonly source: string }
+  /**
+   * The message failed to format (a missing or wrongly typed value). Already reported; `t` throws `thrown`, the value
+   * the formatter threw, and `<T>` renders its children.
+   */
+  | { readonly _tag: "FormatFailed"; readonly thrown: unknown };
 
 /** Rich formatting for `<T>`. Not part of the app API, so every app call site stays an extractable `t("literal")`. */
 export type RichFormat = <R>(message: MessageRef, values: RichValues<R>) => FormatOutcome<R>;
@@ -125,8 +130,9 @@ export type IntlInstance = IntlConfig & {
 /** Options of `createIntl`. */
 export type CreateIntlOptions = IntlConfig & {
   /**
-   * Called with the message's key when a message fails to format (the call then throws: a caller bug the types and
-   * `check` rule out) or is missing from the catalog though it has ICU syntax (it renders raw: not extracted yet), and
+   * Called with the message's key when a message fails to format (a caller bug the types and `check` rule out: `t`
+   * then throws, and `<T>` renders its children), when a `<T>` cannot render translated (it renders its children), or
+   * when a message is missing from the catalog though it has ICU syntax (it renders raw: not extracted yet), and
    * with the method (`format.dateTime`) when a `format` call fails (next-intl's fallback renders instead). It receives
    * every report and replaces the default, which writes each distinct problem once to `console.error`, in every
    * environment.
@@ -299,7 +305,9 @@ export function createIntl(options: CreateIntlOptions): IntlInstance {
       return { _tag: "NotExtracted", source };
     }
 
-    // A missing or wrongly typed value is the caller's bug, which the types and check rule out: report, then throw.
+    // A missing or wrongly typed value is the caller's bug, which the types and check rule out: report it, then `t`
+    // throws and `<T>` renders its children. The report runs in the catch clause, inside no try, so a throwing
+    // onError propagates out of both.
     try {
       return {
         _tag: "Formatted",
@@ -307,7 +315,8 @@ export function createIntl(options: CreateIntlOptions): IntlInstance {
       };
     } catch (error) {
       report(error instanceof Error ? error : new Error(String(error)), message.key);
-      throw error;
+
+      return { _tag: "FormatFailed", thrown: error };
     }
   };
   const text = (message: MessageRef, values: Readonly<Record<string, MessageValue>>) => {
@@ -319,6 +328,11 @@ export function createIntl(options: CreateIntlOptions): IntlInstance {
 
     if (outcome._tag === "NotExtracted") {
       return outcome.source;
+    }
+
+    // The formatter's own value, as it threw it: what `t` has always thrown.
+    if (outcome._tag === "FormatFailed") {
+      throw outcome.thrown;
     }
 
     return Array.isArray(outcome.value) ? outcome.value.join("") : outcome.value;
