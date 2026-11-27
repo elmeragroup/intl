@@ -38,10 +38,10 @@ const CONFIG_EXAMPLE =
   '{ "include": ["src/**/*.{ts,tsx}"], "catalogs": "messages/{locale}.po", "locales": ["nb"], "formats": "src/intl-formats.ts" }';
 
 /** What a `formats` path must end in: a module Node loads. */
-export const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/u;
+const FORMATS_MODULE = /\.(?:ts|mts|js|mjs)$/u;
 
 /** What each config field must be, as its problem says it. */
-export const FIELD_PROBLEMS = {
+const FIELD_PROBLEMS = {
   include: '"include" must be a non-empty array of glob strings',
   exclude: '"exclude" must be an array of glob strings',
   locales: '"locales" must be a non-empty array of locale strings',
@@ -74,7 +74,7 @@ const CLIMBING_CATALOGS = `"catalogs" must not hold a ".." segment anywhere afte
  * @param locales - The configured locales.
  * @returns What the problem says, or undefined when every locale's path is its own.
  */
-export function sharedCatalogPath(catalogs: string, locales: ReadonlyArray<string>): string | undefined {
+function sharedCatalogPath(catalogs: string, locales: ReadonlyArray<string>): string | undefined {
   const tags = new Map<string, string>();
   for (const locale of locales) {
     const tag = canonicalTag(locale);
@@ -116,7 +116,7 @@ function canonicalTag(locale: string): string | undefined {
  * @param pattern - The glob, normalized.
  * @returns What the problem says.
  */
-export function escapingGlob(pattern: string): string {
+function escapingGlob(pattern: string): string {
   return `glob ${JSON.stringify(pattern)} reaches outside the project root`;
 }
 
@@ -126,7 +126,7 @@ export function escapingGlob(pattern: string): string {
  * @param patterns - The globs, normalized.
  * @returns The first escaping glob, or undefined when none escapes.
  */
-export function firstEscaping(patterns: ReadonlyArray<string>): string | undefined {
+function firstEscaping(patterns: ReadonlyArray<string>): string | undefined {
   return patterns.find((pattern) => isAbsolute(pattern) || pattern.startsWith("../"));
 }
 
